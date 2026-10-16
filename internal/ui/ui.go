@@ -301,6 +301,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Attach failed: " + msg.err.Error())
 		}
 		m.snap = m.eng.Snapshot()
+		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
+		if !m.prefs.NoMouse {
+			return m, tea.EnableMouseCellMotion
+		}
 		return m, nil
 	case tea.KeyMsg:
 		switch m.mode {
