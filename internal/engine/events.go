@@ -229,6 +229,8 @@ func (e *Engine) dequeue() []func() {
 func (e *Engine) startQueued(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
+	e.setBusy(taskID, "starting agent")
+	defer e.setBusy(taskID, "")
 	e.mu.Lock()
 	t := e.find(taskID)
 	if t == nil || t.Sessions[key] == nil {
@@ -238,8 +240,7 @@ func (e *Engine) startQueued(taskID, key string) {
 	s := t.Sessions[key]
 	col, _, _ := e.board.Column(t.ColumnID)
 	// The task may have moved or been stopped while waiting for its lock.
-	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting ||
-		!col.AutoSpawn || sessionKey(col) != key {
+	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting || sessionKey(col) != key {
 		e.mu.Unlock()
 		return
 	}

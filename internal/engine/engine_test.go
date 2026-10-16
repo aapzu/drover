@@ -308,3 +308,73 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 		t.Errorf("moves = %v, want %v", moves, want)
 	}
 }
+
+// A manual start in a column without autoSpawn can still be queued, and must
+// start once a slot frees up instead of being dropped.
+func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"Review"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.MaxConcurrent = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	first := e.CreateTask("First", "")
+	if err := e.Move(first.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	second := e.CreateTask("Second", "")
+	if err := e.Move(second.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	session := func() (*store.Session, string) {
+		snap := e.Snapshot()
+		for _, task := range snap.Tasks {
+			if task.ID == second.ID {
+				return task.Sessions[store.MainSession], snap.Busy[task.ID]
+			}
+		}
+		return nil, ""
+	}
+	if s, _ := session(); s == nil || s.Status != store.StatusQueued {
+		t.Fatalf("second agent should be queued, got %+v", s)
+	}
+	select {
+	case notice := <-e.Notices():
+		if !strings.Contains(notice, "limit 1") {
+			t.Errorf("queued notice = %q", notice)
+		}
+	case <-time.After(time.Second):
+		t.Error("no notice when the agent was queued")
+	}
+
+	// Starting from the queue has to recreate a missing worktree.
+	worktree := e.Snapshot().Tasks[1].WorktreePath
+	if out, err := exec.Command("git", "-C", root, "worktree", "remove", "--force", worktree).CombinedOutput(); err != nil {
+		t.Fatalf("remove worktree: %s", out)
+	}
+
+	e.Suspend(first.ID)
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		s, busy := session()
+		if s.Status == store.StatusRunning && s.Activity != store.ActivityStarting && tmux.Has(s.Tmux) && busy == "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued agent never started: status=%s activity=%s busy=%q", s.Status, s.Activity, busy)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
