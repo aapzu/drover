@@ -36,6 +36,7 @@ turn() {
   sleep 0.2
   case "$1" in
     *PLAN*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}'; sleep 1;;
+    *SLOW*) sleep 3;;
   esac
   case "$1" in
     /code-review*) reply='Looks fine.\nVerdict: Ready';;
@@ -170,6 +171,50 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 	}
 	if !strings.Contains(second, "/code-review main") || !strings.Contains(second, "--session-id") {
 		t.Errorf("review launch should start fresh with the enter message:\n%s", second)
+	}
+}
+
+func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"auto"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("SLOW work", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning turn to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityThinking
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; !s.RespawnPending || s.PermissionMode != "plan" {
+		t.Fatalf("a mid-turn move should defer the respawn: pending=%v mode=%s", s.RespawnPending, s.PermissionMode)
+	}
+	waitFor(t, e, "respawn in auto mode", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.PermissionMode == "auto" && !s.RespawnPending && s.Status == store.StatusRunning
+	})
+
+	argv, _ := os.ReadFile(log)
+	launches := strings.Split(strings.TrimSuffix(strings.TrimSpace(string(argv)), "---"), "---")
+	if len(launches) != 2 {
+		t.Fatalf("want 2 launches, got %d:\n%s", len(launches), argv)
+	}
+	if !strings.Contains(launches[1], "--permission-mode\nauto") || !strings.Contains(launches[1], "--resume") {
+		t.Errorf("respawn should resume in auto mode:\n%s", launches[1])
 	}
 }
 

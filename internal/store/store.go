@@ -71,10 +71,13 @@ type Session struct {
 	EventsOffset   int64         `json:"eventsOffset"`
 	// Started is set once the agent has recorded a conversation, so a later
 	// spawn can resume it instead of starting over.
-	Started     bool      `json:"started"`
-	TurnInVisit bool      `json:"turnInVisit"`
-	Pending     []Pending `json:"pending,omitempty"`
-	LastReply   string    `json:"lastReply,omitempty"`
+	Started     bool `json:"started"`
+	TurnInVisit bool `json:"turnInVisit"`
+	// RespawnPending restarts the agent with its column's settings once the
+	// current turn ends; set when the card moves mid-turn.
+	RespawnPending bool      `json:"respawnPending,omitempty"`
+	Pending        []Pending `json:"pending,omitempty"`
+	LastReply      string    `json:"lastReply,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported       bool      `json:"imported,omitempty"`

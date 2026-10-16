@@ -50,6 +50,7 @@ type Engine struct {
 	taskLocks sync.Map
 	typing    sync.Map // tmux session name -> *sync.Mutex
 	launching sync.Map // tmux session names dequeued but not yet started
+	busy      sync.Map // task id -> what a move is doing, shown on the card
 	notices   chan string
 }
 
@@ -107,16 +108,31 @@ type Snapshot struct {
 	Board      *config.Board
 	BoardFound bool
 	Tasks      []*store.Task
+	// Busy maps task ids to the step a move is on, such as "creating worktree".
+	Busy map[string]string
 }
 
 func (e *Engine) Snapshot() Snapshot {
+	busy := map[string]string{}
+	e.busy.Range(func(id, what any) bool {
+		busy[id.(string)] = what.(string)
+		return true
+	})
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	tasks := make([]*store.Task, len(e.state.Tasks))
 	for i, t := range e.state.Tasks {
 		tasks[i] = t.Clone()
 	}
-	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks}
+	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy}
+}
+
+func (e *Engine) setBusy(id, what string) {
+	if what == "" {
+		e.busy.Delete(id)
+		return
+	}
+	e.busy.Store(id, what)
 }
 
 // with runs fn under mu and persists the state afterwards.
@@ -434,7 +450,9 @@ func (e *Engine) ensureWorktree(t *store.Task) (string, error) {
 	if branch == "" {
 		branch = gitx.BranchName(title, id)
 	}
+	e.setBusy(id, "creating worktree")
 	path, err = gitx.CreateWorktree(e.Root, fmt.Sprint(number), branch, resolved)
+	e.setBusy(id, "starting agent")
 	if err != nil {
 		return "", err
 	}
@@ -493,6 +511,8 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 // an existing session is kept (or respawned when the model changes), a missing
 // one is resumed or started, then the enter group runs.
 func (e *Engine) activate(t *store.Task, col, from config.Column, message string, runEnter bool) error {
+	e.setBusy(t.ID, "starting agent")
+	defer e.setBusy(t.ID, "")
 	worktree, err := e.ensureWorktree(t)
 	if err != nil {
 		e.logf(t, "Worktree failed: %v", err)
@@ -507,11 +527,17 @@ func (e *Engine) activate(t *store.Task, col, from config.Column, message string
 	live := sess != nil && sess.Status == store.StatusRunning && tmux.Has(sess.Tmux)
 	queued := sess != nil && sess.Status == store.StatusQueued
 	started := sess != nil && sess.Started
-	// A permission change only respawns an idle agent, so a manual move out of
-	// a plan column never kills a turn in progress.
+	// A permission change never kills a turn in progress: a busy agent is
+	// respawned when its turn ends.
+	permissionChanged := live && sess.PermissionMode != col.PermissionMode
 	modelChanged := live && (sess.Model != col.ModelOverride || sess.Effort != col.EffortOverride ||
-		(sess.PermissionMode != col.PermissionMode && sess.Activity == store.ActivityIdle))
+		(permissionChanged && sess.Activity == store.ActivityIdle))
+	deferRespawn := permissionChanged && !modelChanged
 	e.mu.Unlock()
+	if deferRespawn {
+		e.with(func() { sess.RespawnPending = true })
+		e.logf(t, "Agent switches to %s mode when its current turn ends", col.PermissionMode)
+	}
 
 	enter := col.Automations.OnEnter
 	if !runEnter {
@@ -626,6 +652,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			s.EventsOffset = info.Size()
 		}
 		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, col.PermissionMode
+		s.RespawnPending = false
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
 )
@@ -105,6 +106,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true
+			if s.RespawnPending {
+				out = append(out, func() { e.respawnPending(taskID, key) })
+			}
 			reply := ev.Reply()
 			s.LastReply = reply
 			if s.TurnInVisit {
@@ -155,8 +159,42 @@ func (e *Engine) planExit(taskID string, visit int) {
 		if s := t.Sessions[sessionKey(target)]; s != nil && s.Status == store.StatusRunning {
 			s.TurnInVisit = true
 			s.PermissionMode = target.PermissionMode
+			s.RespawnPending = false
 		}
 	})
+}
+
+// respawnPending restarts an agent whose card moved mid-turn into a column
+// with another permission mode, resuming its conversation.
+func (e *Engine) respawnPending(taskID, key string) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	var s *store.Session
+	var col config.Column
+	if t != nil {
+		s = t.Sessions[key]
+		col, _, _ = e.board.Column(t.ColumnID)
+	}
+	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
+		sessionKey(col) == key && s.PermissionMode != col.PermissionMode
+	if s != nil {
+		s.RespawnPending = false
+	}
+	worktree := ""
+	if t != nil {
+		worktree = t.WorktreePath
+	}
+	e.mu.Unlock()
+	if !due {
+		return
+	}
+	e.logf(t, "Turn ended, respawning agent in %s mode", col.PermissionMode)
+	tmux.Stop(s.Tmux)
+	if err := e.spawn(t, col, key, worktree, false, ""); err != nil {
+		e.logf(t, "Respawn failed: %v", err)
+	}
 }
 
 // dequeue starts queued sessions while there are free slots. Called with mu held.

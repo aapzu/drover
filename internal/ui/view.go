@@ -230,6 +230,9 @@ func (m Model) sessionFor(t *store.Task) *store.Session {
 }
 
 func (m Model) status(t *store.Task) string {
+	if what := m.snap.Busy[t.ID]; what != "" {
+		return thinking.Render(spinner[m.frame%len(spinner)] + " " + what + "…")
+	}
 	s := m.sessionFor(t)
 	if s == nil {
 		return ""
@@ -250,6 +253,9 @@ func (m Model) status(t *store.Task) string {
 	pending := ""
 	if len(s.Pending) > 0 {
 		pending = dim.Render(fmt.Sprintf(" +%d queued", len(s.Pending)))
+	}
+	if col, _, ok := m.snap.Board.Column(t.ColumnID); ok && s.RespawnPending {
+		pending += dim.Render(" → " + col.PermissionMode + " next turn")
 	}
 	if stuckStarting(s) {
 		return needsYou.Render("◆ waiting to start") + pending
