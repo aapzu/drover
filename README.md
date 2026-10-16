@@ -47,10 +47,25 @@ kangentic-tui
 | `n`, `e`, `x` | new, edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
+| `tab` | type into the agent from the preview (`Ctrl-q` returns) |
 | `s` | send the agent a message |
 | `r` / `S` | start or resume / suspend the agent |
+| `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
+| `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
 | `p`, `i`, `?` | toggle preview, task details and log, help |
+| `M` | toggle mouse capture (off lets the terminal select text) |
 | `q` | quit (agents keep running) |
+
+With the mouse on, drag a card onto another column to move it, double-click
+a card to attach, drag a column's right edge or the preview's top border to
+resize, and click the preview to type into the agent. Layout is saved in
+`.kangentic/tui/ui.json`.
+
+In live mode (`tab` or a click on the preview) every key goes to the agent,
+`esc` and `ctrl+c` included. `ctrl+q` returns to the board. `alt+←→↑↓`
+switches card without leaving live mode, `alt+shift+←→` moves the card and
+`alt+a` attaches full screen. On macOS the terminal must send Option as Meta
+(Esc+) for these.
 
 ## How it maps to Kangentic
 

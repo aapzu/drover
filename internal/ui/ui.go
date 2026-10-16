@@ -32,11 +32,13 @@ const (
 	modeDetail
 	modeHelp
 	modeImport
+	modeLive
 )
 
 type tickMsg time.Time
 type previewMsg struct {
 	taskID, content string
+	at              time.Time
 }
 type noticeMsg string
 type actionDoneMsg struct {
@@ -56,9 +58,14 @@ type Model struct {
 
 	col        int
 	selected   map[string]string // column id -> selected task id
-	preview    bool
 	previewFor string
 	previewTxt string
+	previewAt  time.Time
+
+	prefs   prefs
+	drag    dragState
+	keys    *keySender
+	liveGen int
 
 	flash   string
 	flashAt time.Time
@@ -96,7 +103,8 @@ func New(eng *engine.Engine) Model {
 		snap:        eng.Snapshot(),
 		branch:      gitx.CurrentBranch(eng.Root),
 		selected:    map[string]string{},
-		preview:     true,
+		prefs:       loadPrefs(eng.Root),
+		keys:        newKeySender(),
 		titleInput:  ti,
 		promptInput: ta,
 		sendInput:   si,
@@ -110,7 +118,17 @@ func New(eng *engine.Engine) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(tick(), m.waitNotice())
+	cmds := []tea.Cmd{tick(), m.waitNotice()}
+	if !m.prefs.NoMouse {
+		cmds = append(cmds, tea.EnableMouseCellMotion)
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) savePrefs() {
+	if err := m.prefs.save(m.eng.Root); err != nil {
+		m.setFlash("Could not save layout: " + err.Error())
+	}
 }
 
 func tick() tea.Cmd {
@@ -221,14 +239,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.flash != "" && time.Since(m.flashAt) > 6*time.Second {
 			m.flash = ""
 		}
+		select {
+		case err := <-m.keys.errs:
+			m.setFlash("Typing into the agent failed: " + err.Error())
+		default:
+		}
 		cmds := []tea.Cmd{tick()}
-		if m.preview && m.frame%2 == 0 {
+		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
 		}
 		return m, tea.Batch(cmds...)
 	case previewMsg:
-		m.previewFor, m.previewTxt = msg.taskID, msg.content
+		if msg.at.Before(m.previewAt) {
+			return m, nil
+		}
+		m.previewFor, m.previewTxt, m.previewAt = msg.taskID, msg.content, msg.at
 		return m, nil
+	case liveTickMsg:
+		if m.mode != modeLive || msg.gen != m.liveGen {
+			return m, nil
+		}
+		if t := m.current(); t == nil || !m.hasLiveSession(t.ID) {
+			m.mode = modeBoard
+			m.setFlash("The agent is no longer running; back on the board.")
+			return m, nil
+		}
+		return m, tea.Batch(liveTick(m.liveGen), m.capturePreview())
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
 	case noticeMsg:
@@ -269,6 +307,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case modeImport:
 			return m.updateImport(msg)
+		case modeLive:
+			return m.updateLive(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -282,16 +322,26 @@ func (m Model) capturePreview() tea.Cmd {
 	}
 	id := t.ID
 	name, ok := m.eng.LiveSession(id)
+	l := m.layout()
+	w, h := m.width-2, l.previewH-2
 	return func() tea.Msg {
-		if !ok {
-			return previewMsg{taskID: id}
+		msg := previewMsg{taskID: id}
+		if ok {
+			if l.previewH > 0 {
+				tmux.Resize(name, w, h)
+			}
+			if out, err := tmux.Capture(name, 0); err == nil {
+				msg.content = out
+			}
 		}
-		out, err := tmux.Capture(name, 0)
-		if err != nil {
-			return previewMsg{taskID: id}
-		}
-		return previewMsg{taskID: id, content: out}
+		msg.at = time.Now()
+		return msg
 	}
+}
+
+func (m Model) hasLiveSession(id string) bool {
+	_, ok := m.eng.LiveSession(id)
+	return ok
 }
 
 func (m Model) action(fn func() error) tea.Cmd {
@@ -421,7 +471,48 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.action(func() error { m.eng.Suspend(id); return nil })
 		}
 	case "p":
-		m.preview = !m.preview
+		m.prefs.HidePreview = !m.prefs.HidePreview
+		m.savePrefs()
+	case "tab":
+		return m.startLive()
+	case "+", "=", "-", "_":
+		l := m.layout()
+		if l.previewH == 0 {
+			break
+		}
+		step := 2
+		if s := msg.String(); s == "-" || s == "_" {
+			step = -2
+		}
+		m.prefs.PreviewHeight = clamp(l.previewH+step, minPreviewHeight, l.bodyH-minBoardHeight)
+		m.savePrefs()
+	case "<", ">":
+		for _, c := range m.layout().cols {
+			if c.index != m.col {
+				continue
+			}
+			step := 4
+			if msg.String() == "<" {
+				step = -4
+			}
+			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.width)
+			m.savePrefs()
+		}
+	case "0":
+		m.prefs.PreviewHeight, m.prefs.ColumnWidths, m.prefs.Density = 0, map[string]int{}, densityNormal
+		m.savePrefs()
+	case "z":
+		m.prefs.Density = (m.prefs.Density + 1) % 3
+		m.savePrefs()
+	case "M":
+		m.prefs.NoMouse = !m.prefs.NoMouse
+		m.savePrefs()
+		if m.prefs.NoMouse {
+			m.setFlash("Mouse off: the terminal selects text again. M turns it back on.")
+			return m, tea.DisableMouse
+		}
+		m.setFlash("Mouse on: drag cards, column edges and the preview border.")
+		return m, tea.EnableMouseCellMotion
 	case "i":
 		if t != nil {
 			m.mode = modeDetail

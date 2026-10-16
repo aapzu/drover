@@ -28,11 +28,6 @@ var (
 	spinner    = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 )
 
-const (
-	minColumnWidth = 28
-	cardHeight     = 5
-)
-
 func (m Model) View() string {
 	if m.width == 0 {
 		return ""
@@ -52,7 +47,15 @@ func (m Model) View() string {
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
-		body = m.renderMain(bodyHeight)
+		l := m.layout()
+		body = m.renderMain(l)
+		if m.drag.kind == dragCard {
+			if t := m.task(m.drag.task); t != nil {
+				w := min(36, m.width)
+				ghost := m.renderCard(t, w, true, false)
+				body = overlay(body, ghost, clamp(m.drag.x-w/2, 0, m.width-w), clamp(m.drag.y-l.bodyY-1, 0, max(0, l.bodyH-1)))
+			}
+		}
 		switch m.mode {
 		case modeMove:
 			body = m.place(bodyHeight, m.renderMovePicker())
@@ -100,7 +103,8 @@ func (m Model) renderHeader() string {
 	}
 	right := strings.Join(stats, "  ") + " "
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
-	return headerBar.Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
+	// layout assumes a one-row header.
+	return headerBar.Width(m.width).Render(ansi.Truncate(left+strings.Repeat(" ", gap)+right, m.width, "…"))
 }
 
 func (m Model) renderFooter() string {
@@ -111,7 +115,8 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  m move to…  n new  I import  enter attach  s send  r start  S suspend  p preview  i info  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  H/L move  n new  enter attach  tab type into agent  s send  r start  S suspend  +/- </> resize  z density  ? help  q quit",
+		modeLive:    "LIVE: keys go to the agent  ctrl+q back to board  alt+←→↑↓ switch card  alt+shift+←→ move card  alt+a full screen",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
 		modeConfirm: "y confirm  any other key cancels",
@@ -121,38 +126,22 @@ func (m Model) renderFooter() string {
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
 
-func (m Model) renderMain(height int) string {
-	previewHeight := 0
-	if m.preview && height > 24 {
-		previewHeight = height * 2 / 5
-	}
-	board := m.renderBoard(height - previewHeight)
-	if previewHeight == 0 {
+func (m Model) renderMain(l layout) string {
+	board := m.renderBoard(l)
+	if l.previewH == 0 {
 		return board
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, board, m.renderPreview(previewHeight))
+	return lipgloss.JoinVertical(lipgloss.Left, board, m.renderPreview(l.previewH))
 }
 
-// visibleColumns returns the window of columns that fits the width, keeping
-// the selected one in view.
-func (m Model) visibleColumns() (start, end, width int) {
-	n := len(m.columns())
-	fit := max(1, m.width/minColumnWidth)
-	if fit >= n {
-		return 0, n, m.width / n
-	}
-	start = max(0, min(m.col-fit/2, n-fit))
-	return start, start + fit, m.width / fit
-}
-
-func (m Model) renderBoard(height int) string {
-	start, end, width := m.visibleColumns()
+func (m Model) renderBoard(l layout) string {
+	drop := m.dropTarget(l)
 	var cols []string
-	for i := start; i < end; i++ {
-		cols = append(cols, m.renderColumn(i, width, height))
+	for _, c := range l.cols {
+		cols = append(cols, m.renderColumn(c, l.boardH, c.index == drop))
 	}
 	board := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-	if start > 0 || end < len(m.columns()) {
+	if l.hiddenColumns {
 		board = lipgloss.PlaceHorizontal(m.width, lipgloss.Left, board)
 	}
 	return board
@@ -185,7 +174,8 @@ func columnSummary(c config.Column) string {
 	return strings.Join(parts, " · ")
 }
 
-func (m Model) renderColumn(i, width, height int) string {
+func (m Model) renderColumn(box colBox, height int, dropping bool) string {
+	i, width := box.index, box.width
 	col := m.columns()[i]
 	tasks := m.tasksForColumn(i)
 	selected := i == m.col
@@ -198,24 +188,25 @@ func (m Model) renderColumn(i, width, height int) string {
 	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Underline(selected)
 	count := fmt.Sprintf(" %d", len(tasks))
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
+	summary := dim.Render(ansi.Truncate(columnSummary(col), inner-1, "…"))
+	if dropping {
+		nameStyle = nameStyle.Reverse(true)
+		summary = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(ansi.Truncate("⤓ drop to move here", inner-1, "…"))
+	}
 	lines := []string{
 		" " + nameStyle.Render(name) + dim.Render(count),
-		" " + dim.Render(ansi.Truncate(columnSummary(col), inner-1, "…")),
+		" " + summary,
 	}
 
-	slots := max(1, (height-len(lines))/cardHeight)
 	sel := -1
 	if selected {
 		sel = m.selectedIndex()
 	}
-	first := 0
-	if sel >= slots {
-		first = sel - slots + 1
+	for j := box.first; j < len(tasks) && j < box.first+box.slots; j++ {
+		dragged := m.drag.kind == dragCard && tasks[j].ID == m.drag.task
+		lines = append(lines, m.renderCard(tasks[j], inner, selected && j == sel, dragged))
 	}
-	for j := first; j < len(tasks) && j < first+slots; j++ {
-		lines = append(lines, m.renderCard(tasks[j], inner, selected && j == sel))
-	}
-	if hidden := len(tasks) - (first + slots); hidden > 0 {
+	if hidden := len(tasks) - (box.first + box.slots); hidden > 0 {
 		lines = append(lines, dim.Render(fmt.Sprintf("  +%d more", hidden)))
 	}
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Padding(0, 1, 0, 0).Render(strings.Join(lines, "\n"))
@@ -281,11 +272,31 @@ func stuckStarting(s *store.Session) bool {
 	return s.Status == store.StatusRunning && s.Activity == store.ActivityStarting && time.Since(s.UpdatedAt) > 10*time.Second
 }
 
-func (m Model) renderCard(t *store.Task, width int, active bool) string {
+// renderCard draws a card exactly Density.cardHeight() rows tall. A dragged
+// card is drawn faint where it came from.
+func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string {
 	content := width - 4
 	title := fmt.Sprintf("#%d %s", t.Number, t.Title)
 	if t.Issue != nil {
 		title = fmt.Sprintf("#%d %s %s", t.Number, t.Issue.Key, t.Title)
+	}
+	style := cardStyle
+	if active {
+		style = cardActive
+	}
+	if dragged {
+		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
+	}
+	if m.prefs.Density == densityCompact {
+		status := m.status(t)
+		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
+		if active {
+			line = bold.Render(line)
+		}
+		if status != "" {
+			line += strings.Repeat(" ", max(1, content-lipgloss.Width(line)-lipgloss.Width(status))) + status
+		}
+		return style.Width(width - 2).Render(ansi.Truncate(line, content, "…"))
 	}
 	wrapped := strings.Split(ansi.Wordwrap(title, content, " -"), "\n")
 	line1 := ansi.Truncate(wrapped[0], content, "…")
@@ -304,12 +315,28 @@ func (m Model) renderCard(t *store.Task, width int, active bool) string {
 		}
 		meta = ansi.Truncate(meta+branch, content, "…")
 	}
-	style := cardStyle
-	if active {
-		style = cardActive
+	lines := []string{line1, line2, meta}
+	if m.prefs.Density == densityTall {
+		lines = append(lines, replyLines(m.sessionFor(t), content, 3)...)
 	}
 	// Width excludes the border, which adds one cell on each side.
-	return style.Width(width - 2).Render(line1 + "\n" + line2 + "\n" + meta)
+	return style.Width(width - 2).Render(strings.Join(lines, "\n"))
+}
+
+// replyLines is the start of the agent's last reply, padded to n lines.
+func replyLines(s *store.Session, width, n int) []string {
+	var lines []string
+	if s != nil && s.LastReply != "" {
+		flat := strings.Join(strings.Fields(ansi.Strip(s.LastReply)), " ")
+		lines = strings.Split(ansi.Wordwrap(flat, width, " -"), "\n")
+	}
+	out := make([]string, n)
+	for i := range out {
+		if i < len(lines) {
+			out[i] = muted.Render(ansi.Truncate(lines[i], width, "…"))
+		}
+	}
+	return out
 }
 
 func (m Model) renderPreview(height int) string {
@@ -327,8 +354,17 @@ func (m Model) renderPreview(height int) string {
 			}
 		} else if m.previewFor == t.ID {
 			body = lastLines(m.previewTxt, height-2)
-			title += dim.Render("· enter to attach, Ctrl-q inside to return ")
+			if m.mode != modeLive {
+				title += dim.Render("· tab to type here, enter for full screen ")
+			}
 		}
+	}
+	style := panelStyle
+	if m.mode == modeLive {
+		style = style.BorderForeground(accent)
+		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● LIVE") + title + dim.Render("· ctrl+q back to board ")
+	} else if m.drag.kind == dragPreview {
+		style = style.BorderForeground(accent)
 	}
 	inner := m.width - 2
 	lines := strings.Split(body, "\n")
@@ -338,7 +374,7 @@ func (m Model) renderPreview(height int) string {
 	if len(lines) > height-2 {
 		lines = lines[len(lines)-(height-2):]
 	}
-	box := panelStyle.Width(inner).Height(height - 2).Render(strings.Join(lines, "\n"))
+	box := style.Width(inner).Height(height - 2).Render(strings.Join(lines, "\n"))
 	// Draw the title into the top border.
 	top, rest, _ := strings.Cut(box, "\n")
 	label := ansi.Truncate(title, inner-2, "…")
@@ -405,23 +441,48 @@ func (m Model) renderHelp() string {
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal (Ctrl-q returns)"},
+		{"tab", "type into the agent from the preview (Ctrl-q returns)"},
 		{"s", "send a message to the agent"},
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"p", "toggle live preview"},
+		{"+ / -", "taller / shorter preview"},
+		{"< / >", "narrower / wider column"},
+		{"z", "card size: normal, compact, tall with last reply"},
+		{"0", "reset layout"},
+		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"W", "write the default board to kangentic.json"},
 		{"q", "quit (agents keep running in tmux)"},
 	}
-	var lines []string
-	lines = append(lines, bold.Render("Keys"), "")
-	for _, r := range rows {
-		lines = append(lines, fmt.Sprintf("%-18s %s", r[0], muted.Render(r[1])))
+	section := func(title string, rows [][2]string) string {
+		lines := []string{bold.Render(title), ""}
+		for _, r := range rows {
+			lines = append(lines, fmt.Sprintf("%-18s %s", r[0], muted.Render(r[1])))
+		}
+		return strings.Join(lines, "\n")
 	}
-	lines = append(lines, "", dim.Render("Moving a card into an agent column creates its worktree and starts Claude"),
-		dim.Render("with that column's permission mode, model and effort, then runs its automations."))
-	return modalStyle.Render(strings.Join(lines, "\n"))
+	right := section("Mouse", [][2]string{
+		{"drag a card", "move it to another column"},
+		{"double-click", "attach"},
+		{"drag column edge", "resize the column"},
+		{"drag preview top", "resize the preview"},
+		{"click preview", "type into the agent"},
+	}) + "\n\n" + section("Live mode", [][2]string{
+		{"ctrl+q", "back to board"},
+		{"alt+←→↑↓", "switch card, keep typing"},
+		{"alt+shift+←→", "move card"},
+		{"alt+a", "full screen"},
+		{"anything else", "goes to the agent"},
+	})
+	body := lipgloss.JoinHorizontal(lipgloss.Top, section("Keys", rows), "    ", right)
+	if lipgloss.Width(body)+8 > m.width {
+		body = section("Keys", rows) + "\n\n" + right
+	}
+	footer := dim.Render("Moving a card into an agent column creates its worktree and starts Claude\n" +
+		"with that column's permission mode, model and effort, then runs its automations.")
+	return modalStyle.Render(body + "\n\n" + footer)
 }
 
 func (m Model) renderDetail(t *store.Task) string {

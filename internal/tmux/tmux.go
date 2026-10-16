@@ -162,27 +162,56 @@ func Interrupt(name string) error {
 // SendText types a message into the agent and submits it. Multi-line text is
 // pasted as one bracketed paste so newlines do not submit early.
 func SendText(name, text string) error {
-	target := "=" + name + ":"
 	if strings.Contains(text, "\n") || len(text) > 200 {
-		buf := "kt-" + name
-		load := command("load-buffer", "-b", buf, "-")
-		load.Stdin = strings.NewReader(text)
-		if out, err := load.CombinedOutput(); err != nil {
-			return fmt.Errorf("tmux load-buffer: %s", strings.TrimSpace(string(out)))
-		}
-		if _, err := run("paste-buffer", "-p", "-d", "-b", buf, "-t", target); err != nil {
+		if err := Paste(name, text); err != nil {
 			return err
 		}
-	} else if _, err := run("send-keys", "-t", target, "-l", "--", text); err != nil {
+	} else if err := SendLiteral(name, text); err != nil {
 		return err
 	}
 	time.Sleep(300 * time.Millisecond)
-	_, err := run("send-keys", "-t", target, "Enter")
+	return SendKey(name, "Enter")
+}
+
+// SendLiteral types text without interpreting key names.
+func SendLiteral(name, text string) error {
+	_, err := run("send-keys", "-t", "="+name+":", "-l", "--", text)
+	return err
+}
+
+// SendKey sends one tmux key name such as Enter, C-c or M-Left.
+func SendKey(name, key string) error {
+	_, err := run("send-keys", "-t", "="+name+":", key)
+	return err
+}
+
+// Paste inserts text as one bracketed paste.
+func Paste(name, text string) error {
+	buf := "kt-" + name
+	load := command("load-buffer", "-b", buf, "-")
+	load.Stdin = strings.NewReader(text)
+	if out, err := load.CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux load-buffer: %s", strings.TrimSpace(string(out)))
+	}
+	_, err := run("paste-buffer", "-p", "-d", "-b", buf, "-t", "="+name+":")
+	return err
+}
+
+// Resize pins the window to the board's preview size so the preview shows the
+// agent's whole screen. It does nothing when the size already matches.
+func Resize(name string, width, height int) error {
+	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
+	if err == nil && strings.TrimSpace(size) == fmt.Sprintf("%dx%d", width, height) {
+		return nil
+	}
+	_, err = run("resize-window", "-t", "="+name+":", "-x", fmt.Sprint(width), "-y", fmt.Sprint(height))
 	return err
 }
 
 // AttachCommand returns a command that attaches the terminal to the session;
 // DetachKey hands control back.
 func AttachCommand(name string) *exec.Cmd {
+	// Undo Resize so the window follows the attached terminal.
+	run("set-option", "-w", "-t", "="+name+":", "window-size", "latest")
 	return command("attach-session", "-t", "="+name)
 }
