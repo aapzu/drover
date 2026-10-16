@@ -1,0 +1,763 @@
+// Package engine owns the board state and implements Kangentic's transition
+// rules: moving a card creates its worktree, starts or resumes its agent, and
+// runs the column's automations.
+//
+// Locking: mu guards state and board and is only held briefly. Each task also
+// has its own lock, held for a whole transition, so slow work (git, tmux,
+// scripts) on one task never blocks the UI or other tasks.
+package engine
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
+)
+
+const DefaultMaxConcurrent = 8
+
+// ErrDirty is returned when a move to Done would delete uncommitted work.
+var ErrDirty = errors.New("worktree has uncommitted changes")
+
+type Engine struct {
+	Root          string
+	ProjectName   string
+	MaxConcurrent int
+	exe           string
+	isRepo        bool
+
+	mu         sync.Mutex
+	state      *store.State
+	board      *config.Board
+	boardFound bool
+	boardMod   time.Time
+
+	taskLocks sync.Map
+	typing    sync.Map // tmux session name -> *sync.Mutex
+	launching sync.Map // tmux session names dequeued but not yet started
+	notices   chan string
+}
+
+func New(root string) (*Engine, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	board, found, err := config.Load(root)
+	if err != nil {
+		return nil, err
+	}
+	state, err := store.Load(root)
+	if err != nil {
+		return nil, fmt.Errorf("load task state: %w", err)
+	}
+	e := &Engine{
+		Root:          root,
+		ProjectName:   filepath.Base(root),
+		MaxConcurrent: DefaultMaxConcurrent,
+		exe:           exe,
+		isRepo:        gitx.HasCommits(root),
+		state:         state,
+		board:         board,
+		boardFound:    found,
+		notices:       make(chan string, 64),
+	}
+	if info, err := os.Stat(filepath.Join(root, config.FileName)); err == nil {
+		e.boardMod = info.ModTime()
+	}
+	if e.isRepo {
+		gitx.EnsureExcluded(root)
+	}
+	e.reconcile()
+	return e, nil
+}
+
+// Notices delivers short messages the UI should flash.
+func (e *Engine) Notices() <-chan string { return e.notices }
+
+func (e *Engine) notify(format string, args ...any) {
+	select {
+	case e.notices <- fmt.Sprintf(format, args...):
+	default:
+	}
+}
+
+type Snapshot struct {
+	Board      *config.Board
+	BoardFound bool
+	Tasks      []*store.Task
+}
+
+func (e *Engine) Snapshot() Snapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	tasks := make([]*store.Task, len(e.state.Tasks))
+	for i, t := range e.state.Tasks {
+		tasks[i] = t.Clone()
+	}
+	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks}
+}
+
+// with runs fn under mu and persists the state afterwards.
+func (e *Engine) with(fn func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	fn()
+	if err := e.state.Save(e.Root); err != nil {
+		e.notify("save failed: %v", err)
+	}
+}
+
+func (e *Engine) find(id string) *store.Task {
+	for _, t := range e.state.Tasks {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
+
+func (e *Engine) lockTask(id string) func() {
+	l, _ := e.taskLocks.LoadOrStore(id, &sync.Mutex{})
+	mu := l.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (e *Engine) logf(t *store.Task, format string, args ...any) {
+	e.with(func() { t.AddLog(fmt.Sprintf(format, args...)) })
+}
+
+func (e *Engine) WriteDefaultBoard() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.boardFound {
+		return nil
+	}
+	if err := e.board.Save(e.Root); err != nil {
+		return err
+	}
+	e.boardFound = true
+	return nil
+}
+
+// reloadBoard picks up edits to kangentic.json made while the TUI runs.
+func (e *Engine) reloadBoard() {
+	info, err := os.Stat(filepath.Join(e.Root, config.FileName))
+	if err != nil {
+		return
+	}
+	e.mu.Lock()
+	unchanged := info.ModTime().Equal(e.boardMod)
+	e.mu.Unlock()
+	if unchanged {
+		return
+	}
+	board, found, err := config.Load(e.Root)
+	e.mu.Lock()
+	e.boardMod = info.ModTime()
+	if err == nil {
+		e.board, e.boardFound = board, found
+	}
+	e.mu.Unlock()
+	if err != nil {
+		e.notify("kangentic.json: %v", err)
+	} else {
+		e.notify("Reloaded kangentic.json")
+	}
+}
+
+// reconcile marks sessions whose tmux session vanished while the TUI was
+// closed (reboot, manual kill) as exited, so they can be resumed.
+func (e *Engine) reconcile() {
+	live := tmux.List()
+	e.with(func() {
+		for _, t := range e.state.Tasks {
+			for _, s := range t.Sessions {
+				if s.Status == store.StatusRunning && !live[s.Tmux] {
+					s.Status = store.StatusExited
+					s.Activity = store.ActivityIdle
+				}
+			}
+		}
+	})
+}
+
+func (e *Engine) CreateTask(title, prompt string) *store.Task {
+	var task *store.Task
+	e.with(func() {
+		now := time.Now()
+		task = &store.Task{
+			ID:        uuid.NewString(),
+			Number:    e.state.NextNumber,
+			Title:     title,
+			Prompt:    prompt,
+			ColumnID:  e.board.TodoColumn().ID,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		e.state.NextNumber++
+		task.AddLog("Created")
+		e.state.Tasks = append(e.state.Tasks, task)
+	})
+	return task
+}
+
+func (e *Engine) EditTask(id, title, prompt string) {
+	e.with(func() {
+		if t := e.find(id); t != nil {
+			t.Title, t.Prompt = title, prompt
+		}
+	})
+}
+
+// DeleteTask stops the agent and removes the worktree. The branch is kept so
+// no committed work is lost.
+func (e *Engine) DeleteTask(id string) error {
+	unlock := e.lockTask(id)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(id)
+	e.mu.Unlock()
+	if t == nil {
+		return nil
+	}
+	e.stopSessions(t, "", store.StatusExited)
+	if err := e.removeWorktree(t); err != nil {
+		return err
+	}
+	e.with(func() {
+		for i, x := range e.state.Tasks {
+			if x.ID == id {
+				e.state.Tasks = append(e.state.Tasks[:i], e.state.Tasks[i+1:]...)
+				break
+			}
+		}
+	})
+	return nil
+}
+
+func (e *Engine) WorktreeDirty(id string) bool {
+	e.mu.Lock()
+	t := e.find(id)
+	path := ""
+	if t != nil {
+		path = t.WorktreePath
+	}
+	e.mu.Unlock()
+	return gitx.Dirty(path)
+}
+
+type MoveOptions struct {
+	// Message is sent to the agent after the move (move_to_column rows).
+	Message string
+	// Force removes a dirty worktree when moving to Done.
+	Force bool
+}
+
+// Move transitions a task into the column with id targetID.
+func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
+	unlock := e.lockTask(id)
+	defer unlock()
+	return e.moveLocked(id, targetID, opts)
+}
+
+func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
+	e.mu.Lock()
+	t := e.find(id)
+	board := e.board
+	e.mu.Unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	target, _, ok := board.Column(targetID)
+	if !ok {
+		return fmt.Errorf("unknown column %s", targetID)
+	}
+	e.mu.Lock()
+	from, _, _ := board.Column(t.ColumnID)
+	worktree := t.WorktreePath
+	e.mu.Unlock()
+	if from.ID == target.ID {
+		return nil
+	}
+	if target.IsDone() && !opts.Force && gitx.Dirty(worktree) {
+		return ErrDirty
+	}
+
+	e.with(func() {
+		t.ColumnID = target.ID
+		t.Visit++
+		t.UpdatedAt = time.Now()
+		for _, s := range t.Sessions {
+			s.TurnInVisit = false
+		}
+		if from.IsDone() {
+			t.AutomationRuns = nil
+		}
+		t.AddLog(fmt.Sprintf("Moved %s → %s", from.Name, target.Name))
+	})
+
+	e.runGroup(t, from, "exit", from.Automations.OnExit, groupContext{from: from, to: target})
+
+	switch {
+	case target.IsTodo():
+		e.stopSessions(t, "", store.StatusExited)
+		e.with(func() { t.Sessions = nil })
+		return e.removeWorktree(t)
+	case target.IsDone():
+		e.stopSessions(t, "", store.StatusSuspended)
+		return e.removeWorktree(t)
+	case !target.AutoSpawn:
+		e.stopSessions(t, "", store.StatusSuspended)
+		return nil
+	default:
+		return e.activate(t, target, from, opts.Message, true)
+	}
+}
+
+// Start resumes or starts the agent for a task in place, without re-running
+// the column's enter automations.
+func (e *Engine) Start(id string) error {
+	unlock := e.lockTask(id)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(id)
+	board := e.board
+	e.mu.Unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	col, _, _ := board.Column(t.ColumnID)
+	if col.IsTodo() || col.IsDone() {
+		return fmt.Errorf("move the task out of %s to start an agent", col.Name)
+	}
+	return e.activate(t, col, col, "", false)
+}
+
+// Suspend stops the task's agents but keeps their conversations to resume.
+func (e *Engine) Suspend(id string) {
+	unlock := e.lockTask(id)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(id)
+	e.mu.Unlock()
+	if t != nil {
+		e.stopSessions(t, "", store.StatusSuspended)
+		e.logf(t, "Agent suspended")
+	}
+}
+
+func sessionKey(col config.Column) string {
+	if col.Isolated() {
+		return col.ID
+	}
+	return store.MainSession
+}
+
+var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+func (e *Engine) tmuxName(t *store.Task, key string) string {
+	project := nonName.ReplaceAllString(e.ProjectName, "-")
+	name := fmt.Sprintf("%s-%d-%s", project, t.Number, t.ID[:6])
+	if key != store.MainSession {
+		suffix := nonName.ReplaceAllString(key, "")
+		name += "-" + suffix[:min(6, len(suffix))]
+	}
+	return name
+}
+
+func (e *Engine) sessionDir(t *store.Task, key string) string {
+	return filepath.Join(store.Dir(e.Root), "sessions", t.ID, key)
+}
+
+func (e *Engine) ensureWorktree(t *store.Task) (string, error) {
+	e.mu.Lock()
+	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
+	title, id, number := t.Title, t.ID, t.Number
+	defaultBase := e.board.DefaultBaseBranch
+	e.mu.Unlock()
+	if !e.isRepo {
+		return e.Root, nil
+	}
+	if path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	resolved, err := gitx.ResolveBase(e.Root, base, defaultBase)
+	if err != nil {
+		return "", err
+	}
+	if branch == "" {
+		branch = gitx.BranchName(title, id)
+	}
+	path, err = gitx.CreateWorktree(e.Root, fmt.Sprint(number), branch, resolved)
+	if err != nil {
+		return "", err
+	}
+	e.with(func() {
+		t.WorktreePath, t.Branch = path, branch
+		if t.BaseBranch == "" {
+			t.BaseBranch = resolved
+		}
+		t.AddLog(fmt.Sprintf("Worktree ready on %s (from %s)", branch, resolved))
+	})
+	return path, nil
+}
+
+func (e *Engine) removeWorktree(t *store.Task) error {
+	e.mu.Lock()
+	path := t.WorktreePath
+	e.mu.Unlock()
+	if path == "" || !e.isRepo {
+		return nil
+	}
+	if err := gitx.RemoveWorktree(e.Root, path); err != nil {
+		e.logf(t, "Removing worktree failed: %v", err)
+		return err
+	}
+	e.with(func() {
+		t.WorktreePath = ""
+		t.AddLog("Worktree removed (branch kept)")
+	})
+	return nil
+}
+
+// stopSessions stops every live session except keep and marks it status.
+func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionStatus) {
+	var names []string
+	e.with(func() {
+		for key, s := range t.Sessions {
+			if key == keep || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+				continue
+			}
+			s.Status = status
+			s.Activity = store.ActivityIdle
+			s.Pending = nil
+			if s.Tmux != "" {
+				names = append(names, s.Tmux)
+			}
+		}
+	})
+	for _, name := range names {
+		tmux.Stop(name)
+	}
+}
+
+// activate makes sure the agent for col is running in the task's worktree:
+// an existing session is kept (or respawned when the model changes), a missing
+// one is resumed or started, then the enter group runs.
+func (e *Engine) activate(t *store.Task, col, from config.Column, message string, runEnter bool) error {
+	worktree, err := e.ensureWorktree(t)
+	if err != nil {
+		e.logf(t, "Worktree failed: %v", err)
+		e.notify("#%d: %v", t.Number, err)
+		return err
+	}
+	key := sessionKey(col)
+	e.stopSessions(t, key, store.StatusSuspended)
+
+	e.mu.Lock()
+	sess := t.Sessions[key]
+	live := sess != nil && sess.Status == store.StatusRunning && tmux.Has(sess.Tmux)
+	queued := sess != nil && sess.Status == store.StatusQueued
+	started := sess != nil && sess.Started
+	// A permission change only respawns an idle agent, so a manual move out of
+	// a plan column never kills a turn in progress.
+	modelChanged := live && (sess.Model != col.ModelOverride || sess.Effort != col.EffortOverride ||
+		(sess.PermissionMode != col.PermissionMode && sess.Activity == store.ActivityIdle))
+	e.mu.Unlock()
+
+	enter := col.Automations.OnEnter
+	if !runEnter {
+		enter = nil
+	}
+	gc := groupContext{from: from, to: col}
+
+	if runEnter && col.AlwaysSpawnNew() && (live || queued) {
+		e.stopSessions(t, "", store.StatusSuspended)
+		live, queued = false, false
+	}
+
+	switch {
+	case live && modelChanged:
+		e.logf(t, "Agent settings changed, respawning agent")
+		tmux.Stop(sess.Tmux)
+		if err := e.spawn(t, col, key, worktree, false, ""); err != nil {
+			return err
+		}
+		if message != "" {
+			e.sendMessage(t, key, message, false)
+		}
+	case live || queued:
+		if message != "" {
+			e.sendMessage(t, key, message, false)
+		}
+	default:
+		fresh := !started || (runEnter && col.AlwaysSpawnNew())
+		prompt := ""
+		if fresh {
+			prompt, enter = e.initialPrompt(t, col, enter, gc)
+			if message != "" {
+				prompt += "\n\n" + message
+			}
+		}
+		if err := e.spawn(t, col, key, worktree, fresh, prompt); err != nil {
+			return err
+		}
+		if !fresh && message != "" {
+			e.sendMessage(t, key, message, false)
+		}
+	}
+	e.runGroup(t, col, "enter", enter, gc)
+	return nil
+}
+
+// initialPrompt is the first message of a fresh session. A column whose enter
+// group opens with a message (like `/code-review`) starts with that message
+// instead of the task prompt; the row is consumed.
+func (e *Engine) initialPrompt(t *store.Task, col config.Column, enter []config.Automation, gc groupContext) (string, []config.Automation) {
+	e.mu.Lock()
+	firstRuns := t.AutomationRuns[runKey(col.ID, "enter", 0)]
+	e.mu.Unlock()
+	if len(enter) > 0 && isSendMessage(enter[0].Type) && enter[0].Condition == "" &&
+		(enter[0].MaxRuns == 0 || firstRuns < enter[0].MaxRuns) {
+		row := enter[0]
+		e.with(func() {
+			t.AutomationRuns = bump(t.AutomationRuns, runKey(col.ID, "enter", 0))
+			t.AddLog(fmt.Sprintf("Automation %q: started agent with message", rowName(row)))
+		})
+		return e.render(t, row.Message, gc, ""), enter[1:]
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if strings.TrimSpace(t.Prompt) == "" {
+		return t.Title, enter
+	}
+	return t.Title + "\n\n" + t.Prompt, enter
+}
+
+func (e *Engine) runningCount() int {
+	n := 0
+	for _, t := range e.state.Tasks {
+		for _, s := range t.Sessions {
+			if s.Status == store.StatusRunning {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// spawn starts the agent in tmux, or queues it when the concurrency limit is
+// reached. The caller holds the task lock.
+func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, fresh bool, prompt string) error {
+	dir := e.sessionDir(t, key)
+	events := filepath.Join(dir, "events.jsonl")
+	settings := filepath.Join(dir, "settings.json")
+	if err := claude.WriteSettings(settings, e.exe, events); err != nil {
+		return err
+	}
+
+	var launch claude.Launch
+	queue := false
+	e.with(func() {
+		if t.Sessions == nil {
+			t.Sessions = map[string]*store.Session{}
+		}
+		s := t.Sessions[key]
+		if s == nil {
+			s = &store.Session{Key: key, Tmux: e.tmuxName(t, key)}
+			t.Sessions[key] = s
+		}
+		if fresh {
+			s.AgentSessionID = uuid.NewString()
+			s.Started = false
+			s.LastReply = ""
+			s.EventsOffset = 0
+			os.Remove(events)
+		} else if info, err := os.Stat(events); err == nil {
+			// Skip events the previous process wrote while shutting down.
+			s.EventsOffset = info.Size()
+		}
+		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, col.PermissionMode
+		s.UpdatedAt = time.Now()
+		launch = claude.Launch{
+			SettingsPath:   settings,
+			SessionID:      s.AgentSessionID,
+			Resume:         !fresh,
+			PermissionMode: col.PermissionMode,
+			Model:          col.ModelOverride,
+			Effort:         col.EffortOverride,
+			Prompt:         prompt,
+		}
+		if e.runningCount() >= e.MaxConcurrent {
+			queue = true
+			s.Status = store.StatusQueued
+			s.Activity = store.ActivityIdle
+			if prompt != "" {
+				// The prompt waits with the queued session and is typed in
+				// once a slot frees up and the agent is ready.
+				s.Pending = append([]store.Pending{{Text: prompt}}, s.Pending...)
+			}
+			t.AddLog("Agent queued: concurrency limit reached")
+			return
+		}
+		s.Status = store.StatusRunning
+		s.Activity = store.ActivityStarting
+		if prompt != "" {
+			s.Activity = store.ActivityThinking
+			s.TurnInVisit = true
+		}
+	})
+	if queue {
+		return nil
+	}
+	return e.startTmux(t, key, worktree, launch)
+}
+
+func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.Launch) error {
+	e.mu.Lock()
+	s := t.Sessions[key]
+	name := s.Tmux
+	env := map[string]string{
+		"KANGENTIC_TASK_ID":     t.ID,
+		"KANGENTIC_TASK_NUMBER": fmt.Sprint(t.Number),
+		"KANGENTIC_TASK_TITLE":  t.Title,
+	}
+	e.mu.Unlock()
+	tmux.Kill(name)
+	if err := tmux.NewSession(name, worktree, launch.Argv(), env); err != nil {
+		e.with(func() {
+			s.Status = store.StatusExited
+			s.Activity = store.ActivityIdle
+			t.AddLog(fmt.Sprintf("Starting agent failed: %v", err))
+		})
+		e.notify("#%d: starting agent failed: %v", t.Number, err)
+		return err
+	}
+	verb := "Started"
+	if launch.Resume {
+		verb = "Resumed"
+	}
+	e.logf(t, "%s agent (%s)", verb, describeLaunch(launch))
+	return nil
+}
+
+func describeLaunch(l claude.Launch) string {
+	parts := []string{"claude"}
+	for _, p := range []string{l.PermissionMode, l.Model, l.Effort} {
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// sendMessage delivers text to the agent now if it is idle; otherwise it is
+// queued until the turn ends. immediate interrupts a running turn first.
+func (e *Engine) sendMessage(t *store.Task, key, text string, immediate bool) {
+	e.mu.Lock()
+	s := t.Sessions[key]
+	if s == nil {
+		e.mu.Unlock()
+		return
+	}
+	ready := s.Status == store.StatusRunning && s.Activity == store.ActivityIdle
+	interrupt := immediate && s.Status == store.StatusRunning &&
+		(s.Activity == store.ActivityThinking || s.Activity == store.ActivityPermission)
+	name := s.Tmux
+	if !ready && !interrupt {
+		s.Pending = append(s.Pending, store.Pending{Text: text})
+		e.mu.Unlock()
+		return
+	}
+	// Claim the turn before typing so a concurrent sender queues instead.
+	s.Activity = store.ActivityThinking
+	s.TurnInVisit = true
+	e.mu.Unlock()
+
+	typing, _ := e.typing.LoadOrStore(name, &sync.Mutex{})
+	typing.(*sync.Mutex).Lock()
+	defer typing.(*sync.Mutex).Unlock()
+	if interrupt {
+		tmux.Interrupt(name)
+		time.Sleep(700 * time.Millisecond)
+	}
+	if err := tmux.SendText(name, text); err != nil {
+		e.with(func() {
+			s.Activity = store.ActivityIdle
+			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
+		})
+	}
+}
+
+// Send is the user typing a message for the task's current agent.
+func (e *Engine) Send(id, text string) error {
+	unlock := e.lockTask(id)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(id)
+	var key string
+	if t != nil {
+		col, _, _ := e.board.Column(t.ColumnID)
+		key = sessionKey(col)
+		if s := t.Sessions[key]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+			t = nil
+		}
+	}
+	e.mu.Unlock()
+	if t == nil {
+		return errors.New("no running agent for this task")
+	}
+	e.sendMessage(t, key, text, false)
+	return nil
+}
+
+// LiveSession returns the tmux session of the task's current agent.
+func (e *Engine) LiveSession(id string) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t := e.find(id)
+	if t == nil {
+		return "", false
+	}
+	col, _, _ := e.board.Column(t.ColumnID)
+	if s := t.Sessions[sessionKey(col)]; s != nil && s.Status == store.StatusRunning {
+		return s.Tmux, true
+	}
+	for _, s := range t.Sessions {
+		if s.Status == store.StatusRunning {
+			return s.Tmux, true
+		}
+	}
+	return "", false
+}
+
+func bump(m map[string]int, key string) map[string]int {
+	if m == nil {
+		m = map[string]int{}
+	}
+	m[key]++
+	return m
+}
+
+func runKey(colID, trigger string, index int) string {
+	return fmt.Sprintf("%s:%s:%d", colID, trigger, index)
+}
