@@ -53,3 +53,25 @@ func TestArgv(t *testing.T) {
 		t.Errorf("resume argv = %v", resume)
 	}
 }
+
+func TestCreatedPRs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	created := `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --draft --title x"},` +
+		`"tool_response":{"stdout":"https://github.com/o/r/pull/12\nhttps://github.com/o/r/pull/12\n","stderr":""}}`
+	viewed := `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr view 7"},` +
+		`"tool_response":{"stdout":"https://github.com/o/r/pull/7"}}`
+	stacked := `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh stack submit"},` +
+		`"tool_response":{"stdout":"https://github.com/o/r/pull/13 https://github.com/o/r.js/pull/14"}}`
+	for _, line := range []string{created, viewed, stacked} {
+		RecordHook(path, strings.NewReader(line))
+	}
+	events, _, _ := ReadEvents(path, 0)
+	var got []string
+	for _, ev := range events {
+		got = append(got, ev.CreatedPRs()...)
+	}
+	want := []string{"https://github.com/o/r/pull/12", "https://github.com/o/r/pull/13", "https://github.com/o/r.js/pull/14"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}

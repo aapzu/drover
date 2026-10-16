@@ -96,6 +96,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if ev.ToolName == "ExitPlanMode" {
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
+			if urls := ev.CreatedPRs(); len(urls) > 0 {
+				out = append(out, e.addPRs(t, urls)...)
+			}
 		case "PermissionRequest":
 			s.Activity = store.ActivityPermission
 			e.notify("#%d needs you: permission requested", number)
@@ -131,8 +134,8 @@ func (e *Engine) taskByID(id string) *store.Task {
 	return &store.Task{}
 }
 
-// planExit moves a task out of a plan-mode column once the agent leaves plan
-// mode, to the column's planExitTarget.
+// planExit moves the card the agent works for out of a plan-mode column once
+// the agent leaves plan mode, to the column's planExitTarget.
 func (e *Engine) planExit(taskID string, visit int) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -142,16 +145,17 @@ func (e *Engine) planExit(taskID string, visit int) {
 		e.mu.Unlock()
 		return
 	}
-	col, _, _ := e.board.Column(t.ColumnID)
+	card := store.Driver(e.state.Tasks, t)
+	col, _, _ := e.board.Column(card.ColumnID)
 	target, ok := e.board.Find(col.PlanExitTarget)
 	planning := e.board.PermissionMode(col) == "plan"
 	e.mu.Unlock()
 	if !planning || col.PlanExitTarget == "" || !ok {
 		return
 	}
-	e.logf(t, "Plan approved, moving to %s", target.Name)
-	if err := e.moveLocked(taskID, target.ID, MoveOptions{}); err != nil {
-		e.logf(t, "Plan-exit move failed: %v", err)
+	e.logf(card, "Plan approved, moving to %s", target.Name)
+	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
+		e.logf(card, "Plan-exit move failed: %v", err)
 		return
 	}
 	// The agent keeps working in the same turn after leaving plan mode, now
@@ -176,7 +180,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	var col config.Column
 	if t != nil {
 		s = t.Sessions[key]
-		col, _, _ = e.board.Column(t.ColumnID)
+		col = e.sessionColumn(t)
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
@@ -238,7 +242,7 @@ func (e *Engine) startQueued(taskID, key string) {
 		return
 	}
 	s := t.Sessions[key]
-	col, _, _ := e.board.Column(t.ColumnID)
+	col := e.sessionColumn(t)
 	// The task may have moved or been stopped while waiting for its lock.
 	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting || sessionKey(col) != key {
 		e.mu.Unlock()
@@ -254,7 +258,7 @@ func (e *Engine) startQueued(taskID, key string) {
 		Effort:         col.EffortOverride,
 	}
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t)
+	worktree, err := e.ensureWorktree(t, t.ID)
 	if err != nil {
 		e.with(func() {
 			s.Status = store.StatusExited

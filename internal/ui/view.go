@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"hash/crc32"
+	"slices"
 	"strings"
 	"time"
 
@@ -212,16 +214,19 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Padding(0, 1, 0, 0).Render(strings.Join(lines, "\n"))
 }
 
+// sessionFor returns the session a card shows: its own, or for a card split
+// off a session that opened several PRs, the one its group shares.
 func (m Model) sessionFor(t *store.Task) *store.Session {
-	col, _, _ := m.snap.Board.Column(t.ColumnID)
+	owner := store.Owner(m.snap.Tasks, t)
+	col, _, _ := m.snap.Board.Column(store.Driver(m.snap.Tasks, owner).ColumnID)
 	key := store.MainSession
 	if col.Isolated() {
 		key = col.ID
 	}
-	if s := t.Sessions[key]; s != nil {
+	if s := owner.Sessions[key]; s != nil {
 		return s
 	}
-	for _, s := range t.Sessions {
+	for _, s := range owner.Sessions {
 		if s.Status == store.StatusRunning {
 			return s
 		}
@@ -235,6 +240,12 @@ func (m Model) status(t *store.Task) string {
 	}
 	s := m.sessionFor(t)
 	if s == nil {
+		return ""
+	}
+	// A group card the agent isn't working for doesn't show the agent's
+	// activity unless it sits in an agent column itself.
+	driver := store.Driver(m.snap.Tasks, store.Owner(m.snap.Tasks, t))
+	if col, _, _ := m.snap.Board.Column(t.ColumnID); driver != t && !col.AutoSpawn {
 		return ""
 	}
 	switch s.Status {
@@ -254,7 +265,7 @@ func (m Model) status(t *store.Task) string {
 	if len(s.Pending) > 0 {
 		pending = dim.Render(fmt.Sprintf(" +%d queued", len(s.Pending)))
 	}
-	if col, _, ok := m.snap.Board.Column(t.ColumnID); ok && s.RespawnPending {
+	if col, _, ok := m.snap.Board.Column(driver.ColumnID); ok && s.RespawnPending {
 		pending += dim.Render(" → " + col.PermissionMode + " next turn")
 	}
 	if stuckStarting(s) {
@@ -293,8 +304,9 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	if dragged {
 		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
 	}
+	group := m.groupMarker(t)
 	if m.prefs.Density == densityCompact {
-		status := m.status(t)
+		status := strings.TrimSpace(group + " " + m.status(t))
 		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
 		if active {
 			line = bold.Render(line)
@@ -313,20 +325,51 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	if active {
 		line1, line2 = bold.Render(line1), bold.Render(line2)
 	}
-	meta := m.status(t)
-	if t.Branch != "" {
-		branch := dim.Render(" " + t.Branch)
-		if meta == "" {
-			branch = dim.Render(t.Branch)
+	var meta []string
+	for _, part := range []string{group, m.status(t), m.cardRef(t)} {
+		if part != "" {
+			meta = append(meta, part)
 		}
-		meta = ansi.Truncate(meta+branch, content, "…")
 	}
-	lines := []string{line1, line2, meta}
+	lines := []string{line1, line2, ansi.Truncate(strings.Join(meta, " "), content, "…")}
 	if m.prefs.Density == densityTall {
 		lines = append(lines, replyLines(m.sessionFor(t), content, 3)...)
 	}
 	// Width excludes the border, which adds one cell on each side.
 	return style.Width(width - 2).Render(strings.Join(lines, "\n"))
+}
+
+var groupColors = []lipgloss.Color{"#22d3ee", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#facc15"}
+
+// groupMarker shows "⧉ 2/3" on cards that share one agent session, colored
+// per group so the cards of a group are easy to spot across columns.
+func (m Model) groupMarker(t *store.Task) string {
+	owner := store.Owner(m.snap.Tasks, t)
+	members := store.Members(m.snap.Tasks, owner)
+	if len(members) < 2 {
+		return ""
+	}
+	pos := slices.Index(members, t) + 1
+	color := groupColors[int(crc32.ChecksumIEEE([]byte(owner.ID)))%len(groupColors)]
+	return lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("⧉ %d/%d", pos, len(members)))
+}
+
+// cardRef is the card's PR, or the branch its agent works on.
+func (m Model) cardRef(t *store.Task) string {
+	if t.PR != nil {
+		ref := fmt.Sprintf("PR #%d", t.PR.Number)
+		if t.PR.State != "" && t.PR.State != "OPEN" {
+			ref += " " + strings.ToLower(t.PR.State)
+		}
+		if t.PR.Branch != "" {
+			ref += " " + t.PR.Branch
+		}
+		return dim.Render(ref)
+	}
+	if branch := store.Owner(m.snap.Tasks, t).Branch; branch != "" {
+		return dim.Render(branch)
+	}
+	return ""
 }
 
 // replyLines is the start of the agent's last reply, padded to n lines.
@@ -515,16 +558,29 @@ func (m Model) renderDetail(t *store.Task) string {
 	if t.Issue != nil {
 		field("Issue", fmt.Sprintf("%s  %s  %s", t.Issue.Key, t.Issue.State, t.Issue.URL))
 	}
-	field("Branch", t.Branch)
-	field("Base", t.BaseBranch)
-	field("Worktree", t.WorktreePath)
+	if t.PR != nil {
+		field("PR", strings.TrimSpace(fmt.Sprintf("#%d  %s  %s  %s", t.PR.Number, t.PR.State, t.PR.Branch, t.PR.URL)))
+	}
+	owner := store.Owner(m.snap.Tasks, t)
+	field("Branch", owner.Branch)
+	field("Base", owner.BaseBranch)
+	field("Worktree", owner.WorktreePath)
 	field("Created", t.CreatedAt.Format(time.DateTime))
 	if t.Prompt != "" {
 		fmt.Fprintf(&b, "\n%s\n%s\n", muted.Render("Prompt"), t.Prompt)
 	}
-	if len(t.Sessions) > 0 {
+	if members := store.Members(m.snap.Tasks, owner); len(members) > 1 {
+		fmt.Fprintf(&b, "\n%s\n", muted.Render("Shares its agent with"))
+		for _, other := range members {
+			if other != t {
+				c, _, _ := m.snap.Board.Column(other.ColumnID)
+				fmt.Fprintf(&b, "  #%d %s  %s\n", other.Number, other.Title, dim.Render(c.Name))
+			}
+		}
+	}
+	if len(owner.Sessions) > 0 {
 		fmt.Fprintf(&b, "\n%s\n", muted.Render("Sessions"))
-		for key, s := range t.Sessions {
+		for key, s := range owner.Sessions {
 			name := "main"
 			if key != store.MainSession {
 				if c, _, ok := m.snap.Board.Column(key); ok {

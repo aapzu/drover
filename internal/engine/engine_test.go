@@ -37,6 +37,9 @@ turn() {
   case "$1" in
     *PLAN*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}'; sleep 1;;
     *SLOW*) sleep 3;;
+    *PRS*)
+      emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
+      emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/2\\n"}}';;
   esac
   case "$1" in
     /code-review*) reply='Looks fine.\nVerdict: Ready';;
@@ -377,4 +380,126 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+const prBoard = `{
+  "version": 1,
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true,
+     "automations": {"onTurnEnd": [{"name": "Ship", "type": "move_to_column", "targetColumn": "Review", "maxRuns": 1}]}},
+    {"id": "review", "name": "Review"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ]
+}`
+
+const fakeGh = `#!/bin/sh
+case "$3" in
+  */2) echo '{"title":"PR two","headRefName":"two","state":"OPEN"}';;
+  *) echo '{"title":"PR one","headRefName":"one","state":"OPEN"}';;
+esac
+`
+
+func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(prBoard), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Refactor auth", "PRS")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The turn opened two PRs, then its turn-end automation moved only the
+	// card the agent was working for.
+	var owner, split *store.Task
+	waitForAll(t, e, "split card titled by gh, owner shipped to review", func(tasks []*store.Task) bool {
+		if len(tasks) != 2 {
+			return false
+		}
+		owner, split = tasks[0], tasks[1]
+		return owner.ColumnID == "review" && split.Title == "PR two"
+	})
+	if owner.PR == nil || owner.PR.Number != 1 || split.PR == nil || split.PR.Number != 2 || split.PR.Branch != "two" {
+		t.Fatalf("PRs: owner %+v, split %+v", owner.PR, split.PR)
+	}
+	if split.GroupID != owner.ID || split.ColumnID != "exec" || len(split.Sessions) != 0 {
+		t.Fatalf("split card: group %q column %q sessions %d", split.GroupID, split.ColumnID, len(split.Sessions))
+	}
+	if owner.ActiveCard != split.ID {
+		t.Errorf("active card = %q, want the split card", owner.ActiveCard)
+	}
+	ownerTmux, ok1 := e.LiveSession(owner.ID)
+	splitTmux, ok2 := e.LiveSession(split.ID)
+	if !ok1 || !ok2 || ownerTmux != splitTmux {
+		t.Fatalf("cards don't share a live session: %q %v, %q %v", ownerTmux, ok1, splitTmux, ok2)
+	}
+
+	// A message from either card reaches the shared agent. Its turn end now
+	// runs for the split card, which has its own automation counter.
+	waitForAll(t, e, "agent idle", func(tasks []*store.Task) bool {
+		return tasks[0].Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+	if err := e.Send(split.ID, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "split card shipped too, agent suspended", func(tasks []*store.Task) bool {
+		return tasks[1].ColumnID == "review" && tasks[0].Sessions[store.MainSession].Status == store.StatusSuspended
+	})
+	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "typed:hello") {
+		t.Errorf("message not delivered:\n%s", data)
+	}
+
+	// The worktree stays until every card is done.
+	worktree := e.Snapshot().Tasks[0].WorktreePath
+	if err := e.Move(owner.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(worktree); err != nil {
+		t.Fatalf("worktree removed while a card is still in review: %v", err)
+	}
+	if err := e.Move(split.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("worktree kept after every card is done: %v", err)
+	}
+
+	// Deleting the owner hands the session to the remaining card.
+	if err := e.DeleteTask(owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].ID != split.ID || tasks[0].GroupID != "" || tasks[0].Sessions[store.MainSession] == nil {
+		t.Fatalf("after deleting the owner: %+v", tasks)
+	}
+	if dir := tasks[0].Sessions[store.MainSession].Dir; !strings.Contains(dir, owner.ID) {
+		t.Errorf("session dir = %q, want the original owner's", dir)
+	}
+}
+
+func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) bool) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond(e.Snapshot().Tasks) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	var logs []string
+	for _, task := range e.Snapshot().Tasks {
+		for _, l := range task.Log {
+			logs = append(logs, fmt.Sprintf("#%d %s: %s", task.Number, task.ColumnID, l.Text))
+		}
+	}
+	t.Fatalf("timed out waiting for %s; log:\n%s", what, strings.Join(logs, "\n"))
 }

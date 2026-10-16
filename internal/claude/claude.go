@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -107,6 +109,31 @@ type Event struct {
 	Message              string `json:"message"`
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	ToolInput            struct {
+		Command string `json:"command"`
+	} `json:"tool_input"`
+	ToolResponse json.RawMessage `json:"tool_response"`
+}
+
+var (
+	prCommand = regexp.MustCompile(`\bgh\s+(pr\s+create|stack)\b`)
+	prURL     = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+)
+
+// CreatedPRs returns the pull request URLs a Bash `gh pr create` or
+// `gh stack` call printed. Other commands are ignored so PRs the agent only
+// looked at never count as its own.
+func (e Event) CreatedPRs() []string {
+	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.ToolInput.Command) {
+		return nil
+	}
+	var urls []string
+	for _, u := range prURL.FindAllString(string(e.ToolResponse), -1) {
+		if !slices.Contains(urls, u) {
+			urls = append(urls, u)
+		}
+	}
+	return urls
 }
 
 // ReadEvents returns complete event lines after offset and the new offset.

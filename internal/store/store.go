@@ -42,12 +42,20 @@ type State struct {
 }
 
 type Task struct {
-	ID             string              `json:"id"`
-	Number         int                 `json:"number"`
-	Title          string              `json:"title"`
-	Prompt         string              `json:"prompt"`
-	ColumnID       string              `json:"columnId"`
-	Issue          *Issue              `json:"issue,omitempty"`
+	ID       string `json:"id"`
+	Number   int    `json:"number"`
+	Title    string `json:"title"`
+	Prompt   string `json:"prompt"`
+	ColumnID string `json:"columnId"`
+	Issue    *Issue `json:"issue,omitempty"`
+	PR       *PR    `json:"pr,omitempty"`
+	// GroupID is set on cards split off when one session opens several PRs.
+	// It names the owner task, which holds the sessions and the worktree
+	// that every card in the group shares.
+	GroupID string `json:"groupId,omitempty"`
+	// ActiveCard is the group card whose move last drove the shared session;
+	// its column decides the session's settings and turn-end automations.
+	ActiveCard     string              `json:"activeCard,omitempty"`
 	BaseBranch     string              `json:"baseBranch,omitempty"`
 	Branch         string              `json:"branch,omitempty"`
 	WorktreePath   string              `json:"worktreePath,omitempty"`
@@ -60,7 +68,10 @@ type Task struct {
 }
 
 type Session struct {
-	Key            string        `json:"key"`
+	Key string `json:"key"`
+	// Dir holds the session's settings and events. It is fixed at spawn so
+	// the session keeps it when another task takes over the group.
+	Dir            string        `json:"dir,omitempty"`
 	AgentSessionID string        `json:"agentSessionId"`
 	Tmux           string        `json:"tmux"`
 	Status         SessionStatus `json:"status"`
@@ -94,6 +105,15 @@ type Issue struct {
 	URL      string `json:"url"`
 	TeamID   string `json:"teamId,omitempty"`
 	State    string `json:"state,omitempty"`
+}
+
+// PR is a GitHub pull request the task's agent opened.
+type PR struct {
+	URL    string `json:"url"`
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	State  string `json:"state,omitempty"`
 }
 
 // Pending is a message waiting for the session to become idle.
@@ -132,7 +152,52 @@ func (t *Task) Clone() *Task {
 		issue := *t.Issue
 		c.Issue = &issue
 	}
+	if t.PR != nil {
+		pr := *t.PR
+		c.PR = &pr
+	}
 	return &c
+}
+
+func find(tasks []*Task, id string) *Task {
+	for _, t := range tasks {
+		if t.ID == id {
+			return t
+		}
+	}
+	return nil
+}
+
+// Owner returns the task that holds t's sessions and worktree.
+func Owner(tasks []*Task, t *Task) *Task {
+	if t.GroupID == "" {
+		return t
+	}
+	if o := find(tasks, t.GroupID); o != nil {
+		return o
+	}
+	return t
+}
+
+// Members returns the owner followed by the cards split off from it.
+func Members(tasks []*Task, owner *Task) []*Task {
+	out := []*Task{owner}
+	for _, t := range tasks {
+		if t.GroupID == owner.ID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Driver returns the group card whose column the owner's session follows.
+func Driver(tasks []*Task, owner *Task) *Task {
+	if owner.ActiveCard != "" {
+		if d := find(tasks, owner.ActiveCard); d != nil && (d == owner || d.GroupID == owner.ID) {
+			return d
+		}
+	}
+	return owner
 }
 
 func Dir(root string) string { return filepath.Join(root, ".kangentic", "tui") }

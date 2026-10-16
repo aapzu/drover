@@ -46,7 +46,7 @@ func (e *Engine) runGroup(t *store.Task, col config.Column, trigger string, rows
 	gc.trigger = trigger
 	e.mu.Lock()
 	gc.reply = ""
-	if s := t.Sessions[sessionKey(col)]; s != nil {
+	if s := e.owner(t).Sessions[sessionKey(col)]; s != nil {
 		gc.reply = s.LastReply
 	}
 	e.mu.Unlock()
@@ -73,16 +73,19 @@ func (e *Engine) runGroup(t *store.Task, col config.Column, trigger string, rows
 }
 
 // runTurnEnd runs the column's turn-end group after the agent finishes a turn
-// that started during the current visit, then delivers queued messages.
+// that started during the current visit, then delivers queued messages. The
+// group is that of the card the agent works for, so a move_to_column moves
+// only that card.
 func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
 	e.mu.Lock()
-	t := e.find(taskID)
-	if t == nil || t.Visit != visit {
+	owner := e.find(taskID)
+	if owner == nil || owner.Visit != visit {
 		e.mu.Unlock()
 		return
 	}
+	t := store.Driver(e.state.Tasks, owner)
 	col, idx, _ := e.board.Column(t.ColumnID)
 	board := e.board
 	e.mu.Unlock()
@@ -106,7 +109,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			gc.to = target
 			message := e.render(t, row.Message, gc, "")
 			e.logf(t, "Automation %q: moving to %s", rowName(row), target.Name)
-			err := e.moveLocked(taskID, target.ID, MoveOptions{Message: message})
+			err := e.moveLocked(t.ID, target.ID, MoveOptions{Message: message})
 			if err == nil {
 				e.with(func() { t.AutomationRuns = bump(t.AutomationRuns, key) })
 				return
@@ -120,7 +123,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			break
 		}
 	}
-	e.flushPending(t, sessKey)
+	e.flushPending(owner, sessKey)
 }
 
 func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column, bool) {
@@ -138,7 +141,7 @@ func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column,
 func (e *Engine) shouldRun(t *store.Task, col config.Column, row config.Automation, key, reply string, turnEnd bool) bool {
 	e.mu.Lock()
 	runs := t.AutomationRuns[key]
-	worktree := t.WorktreePath
+	worktree := e.owner(t).WorktreePath
 	e.mu.Unlock()
 	if row.MaxRuns > 0 && runs >= row.MaxRuns {
 		return false
@@ -168,7 +171,10 @@ func (e *Engine) execute(t *store.Task, col config.Column, row config.Automation
 	var err error
 	switch {
 	case isSendMessage(row.Type):
-		e.sendMessage(t, sessionKey(col), e.render(t, row.Message, gc, ""), row.Mode == "immediate")
+		e.mu.Lock()
+		owner := e.owner(t)
+		e.mu.Unlock()
+		e.sendMessage(owner, sessionKey(col), e.render(t, row.Message, gc, ""), row.Mode == "immediate")
 	case row.Type == "run_script":
 		err = e.runScript(t, row, gc)
 	case row.Type == "webhook":
@@ -212,11 +218,20 @@ func (e *Engine) flushPending(t *store.Task, key string) {
 func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	worktree := t.WorktreePath
+	owner := e.owner(t)
+	worktree := owner.WorktreePath
 	if worktree == "" {
 		worktree = e.Root
 	}
-	base := t.BaseBranch
+	branch := owner.Branch
+	var prURL, prNumber, prTitle, prBranch string
+	if t.PR != nil {
+		prURL, prNumber, prTitle, prBranch = t.PR.URL, fmt.Sprint(t.PR.Number), t.PR.Title, t.PR.Branch
+		if prBranch != "" {
+			branch = prBranch
+		}
+	}
+	base := owner.BaseBranch
 	if base == "" {
 		base = e.board.DefaultBaseBranch
 	}
@@ -237,7 +252,11 @@ func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 		"projectPath":  e.Root,
 		"projectName":  e.ProjectName,
 		"worktreePath": worktree,
-		"branchName":   t.Branch,
+		"branchName":   branch,
+		"prUrl":        prURL,
+		"prNumber":     prNumber,
+		"prTitle":      prTitle,
+		"prBranch":     prBranch,
 		"baseBranch":   base,
 		"column":       gc.to.Name,
 		"fromColumn":   gc.from.Name,

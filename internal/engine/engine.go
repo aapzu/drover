@@ -249,21 +249,27 @@ func (e *Engine) EditTask(id, title, prompt string) {
 }
 
 // DeleteTask stops the agent and removes the worktree. The branch is kept so
-// no committed work is lost.
+// no committed work is lost. A card that shares its session with other cards
+// is removed alone, and the agent keeps working for the rest.
 func (e *Engine) DeleteTask(id string) error {
-	unlock := e.lockTask(id)
+	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
-	e.mu.Lock()
-	t := e.find(id)
-	e.mu.Unlock()
 	if t == nil {
 		return nil
 	}
-	e.stopSessions(t, "", store.StatusExited)
-	if err := e.removeWorktree(t); err != nil {
-		return err
+	e.mu.Lock()
+	members := store.Members(e.state.Tasks, owner)
+	e.mu.Unlock()
+	if len(members) == 1 {
+		e.stopSessions(t, "", store.StatusExited)
+		if err := e.removeWorktree(t); err != nil {
+			return err
+		}
 	}
 	e.with(func() {
+		if len(members) > 1 && t == owner {
+			e.handOver(owner, members[1])
+		}
 		for i, x := range e.state.Tasks {
 			if x.ID == id {
 				e.state.Tasks = append(e.state.Tasks[:i], e.state.Tasks[i+1:]...)
@@ -279,7 +285,7 @@ func (e *Engine) WorktreeDirty(id string) bool {
 	t := e.find(id)
 	path := ""
 	if t != nil {
-		path = t.WorktreePath
+		path = e.owner(t).WorktreePath
 	}
 	e.mu.Unlock()
 	return gitx.Dirty(path)
@@ -294,15 +300,38 @@ type MoveOptions struct {
 
 // Move transitions a task into the column with id targetID.
 func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
-	unlock := e.lockTask(id)
+	_, _, unlock := e.lockGroup(id)
 	defer unlock()
 	return e.moveLocked(id, targetID, opts)
 }
 
+// moveLocked moves one card. The caller holds its group's lock. A card that
+// shares its session with other cards only stops the agent, removes the
+// worktree or resets the conversation once no card in the group needs them.
 func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	t := e.find(id)
 	board := e.board
+	var owner *store.Task
+	var from config.Column
+	othersActive, othersEnded, othersTodo := false, true, true
+	var nextDriver string
+	if t != nil {
+		owner = e.owner(t)
+		from, _, _ = board.Column(t.ColumnID)
+		for _, m := range store.Members(e.state.Tasks, owner) {
+			if m == t {
+				continue
+			}
+			col, _, _ := board.Column(m.ColumnID)
+			if isAgentColumn(col) {
+				othersActive = true
+				nextDriver = m.ID
+			}
+			othersEnded = othersEnded && (col.IsTodo() || col.IsDone())
+			othersTodo = othersTodo && col.IsTodo()
+		}
+	}
 	e.mu.Unlock()
 	if t == nil {
 		return errors.New("task not found")
@@ -311,27 +340,31 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	if !ok {
 		return fmt.Errorf("unknown column %s", targetID)
 	}
-	e.mu.Lock()
-	from, _, _ := board.Column(t.ColumnID)
-	worktree := t.WorktreePath
-	e.mu.Unlock()
 	if from.ID == target.ID {
 		return nil
 	}
-	external := e.externalCheck(t)
-	if external != nil && (target.IsTodo() || target.IsDone()) {
+	ending := (target.IsTodo() || target.IsDone()) && othersEnded
+	external := e.externalCheck(owner)
+	if external != nil && ending {
 		return external
 	}
-	if target.IsDone() && !opts.Force && gitx.Dirty(worktree) {
+	e.mu.Lock()
+	worktree := owner.WorktreePath
+	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
+	e.mu.Unlock()
+	if target.IsDone() && ending && !opts.Force && gitx.Dirty(worktree) {
 		return ErrDirty
 	}
 
 	e.with(func() {
 		t.ColumnID = target.ID
-		t.Visit++
 		t.UpdatedAt = time.Now()
-		for _, s := range t.Sessions {
-			s.TurnInVisit = false
+		if drives {
+			// Turn-end automations of the previous visit no longer apply.
+			owner.Visit++
+			for _, s := range owner.Sessions {
+				s.TurnInVisit = false
+			}
 		}
 		if from.IsDone() {
 			t.AutomationRuns = nil
@@ -342,15 +375,20 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.runGroup(t, from, "exit", from.Automations.OnExit, groupContext{from: from, to: target})
 
 	switch {
-	case target.IsTodo():
-		e.stopSessions(t, "", store.StatusExited)
-		e.with(func() { t.Sessions = nil })
-		return e.removeWorktree(t)
-	case target.IsDone():
-		e.stopSessions(t, "", store.StatusSuspended)
-		return e.removeWorktree(t)
-	case !target.AutoSpawn:
-		e.stopSessions(t, "", store.StatusSuspended)
+	case !isAgentColumn(target) && othersActive:
+		if drives {
+			e.with(func() { owner.ActiveCard = nextDriver })
+		}
+		return nil
+	case target.IsTodo() && othersTodo:
+		e.stopSessions(owner, "", store.StatusExited)
+		e.with(func() { owner.Sessions = nil })
+		return e.removeWorktree(owner)
+	case ending:
+		e.stopSessions(owner, "", store.StatusSuspended)
+		return e.removeWorktree(owner)
+	case !isAgentColumn(target):
+		e.stopSessions(owner, "", store.StatusSuspended)
 		return nil
 	case external != nil:
 		e.logf(t, "Not starting an agent: the imported one is still running in its own terminal")
@@ -363,17 +401,15 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 // Start resumes or starts the agent for a task in place, without re-running
 // the column's enter automations.
 func (e *Engine) Start(id string) error {
-	unlock := e.lockTask(id)
+	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
-	e.mu.Lock()
-	t := e.find(id)
-	board := e.board
-	e.mu.Unlock()
 	if t == nil {
 		return errors.New("task not found")
 	}
-	col, _, _ := board.Column(t.ColumnID)
-	if err := e.externalCheck(t); err != nil {
+	e.mu.Lock()
+	col, _, _ := e.board.Column(t.ColumnID)
+	e.mu.Unlock()
+	if err := e.externalCheck(owner); err != nil {
 		return err
 	}
 	if col.IsTodo() || col.IsDone() {
@@ -384,13 +420,10 @@ func (e *Engine) Start(id string) error {
 
 // Suspend stops the task's agents but keeps their conversations to resume.
 func (e *Engine) Suspend(id string) {
-	unlock := e.lockTask(id)
+	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
-	e.mu.Lock()
-	t := e.find(id)
-	e.mu.Unlock()
 	if t != nil {
-		e.stopSessions(t, "", store.StatusSuspended)
+		e.stopSessions(owner, "", store.StatusSuspended)
 		e.logf(t, "Agent suspended")
 	}
 }
@@ -415,10 +448,15 @@ func (e *Engine) tmuxName(t *store.Task, key string) string {
 }
 
 func (e *Engine) sessionDir(t *store.Task, key string) string {
+	if s := t.Sessions[key]; s != nil && s.Dir != "" {
+		return s.Dir
+	}
 	return filepath.Join(store.Dir(e.Root), "sessions", t.ID, key)
 }
 
-func (e *Engine) ensureWorktree(t *store.Task) (string, error) {
+// ensureWorktree returns the owner t's worktree, creating it if needed.
+// busyID is the card that shows the progress.
+func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 	e.mu.Lock()
 	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
 	title, id, number := t.Title, t.ID, t.Number
@@ -450,9 +488,9 @@ func (e *Engine) ensureWorktree(t *store.Task) (string, error) {
 	if branch == "" {
 		branch = gitx.BranchName(title, id)
 	}
-	e.setBusy(id, "creating worktree")
+	e.setBusy(busyID, "creating worktree")
 	path, err = gitx.CreateWorktree(e.Root, fmt.Sprint(number), branch, resolved)
-	e.setBusy(id, "starting agent")
+	e.setBusy(busyID, "starting agent")
 	if err != nil {
 		return "", err
 	}
@@ -509,16 +547,21 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 
 // activate makes sure the agent for col is running in the task's worktree:
 // an existing session is kept (or respawned when the model changes), a missing
-// one is resumed or started, then the enter group runs.
-func (e *Engine) activate(t *store.Task, col, from config.Column, message string, runEnter bool) error {
-	e.setBusy(t.ID, "starting agent")
-	defer e.setBusy(t.ID, "")
-	worktree, err := e.ensureWorktree(t)
+// one is resumed or started, then the enter group runs. card is the card being
+// moved; the session belongs to its group's owner and now follows card.
+func (e *Engine) activate(card *store.Task, col, from config.Column, message string, runEnter bool) error {
+	e.setBusy(card.ID, "starting agent")
+	defer e.setBusy(card.ID, "")
+	e.mu.Lock()
+	t := e.owner(card)
+	e.mu.Unlock()
+	worktree, err := e.ensureWorktree(t, card.ID)
 	if err != nil {
-		e.logf(t, "Worktree failed: %v", err)
-		e.notify("#%d: %v", t.Number, err)
+		e.logf(card, "Worktree failed: %v", err)
+		e.notify("#%d: %v", card.Number, err)
 		return err
 	}
+	e.with(func() { t.ActiveCard = card.ID })
 	key := sessionKey(col)
 	e.stopSessions(t, key, store.StatusSuspended)
 
@@ -569,7 +612,7 @@ func (e *Engine) activate(t *store.Task, col, from config.Column, message string
 		fresh := !started || (runEnter && col.AlwaysSpawnNew())
 		prompt := ""
 		if fresh {
-			prompt, enter = e.initialPrompt(t, col, enter, gc)
+			prompt, enter = e.initialPrompt(card, col, enter, gc)
 			if message != "" {
 				prompt += "\n\n" + message
 			}
@@ -581,7 +624,7 @@ func (e *Engine) activate(t *store.Task, col, from config.Column, message string
 			e.sendMessage(t, key, message, false)
 		}
 	}
-	e.runGroup(t, col, "enter", enter, gc)
+	e.runGroup(card, col, "enter", enter, gc)
 	return nil
 }
 
@@ -639,7 +682,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		}
 		s := t.Sessions[key]
 		if s == nil {
-			s = &store.Session{Key: key, Tmux: e.tmuxName(t, key)}
+			s = &store.Session{Key: key, Tmux: e.tmuxName(t, key), Dir: dir}
 			t.Sessions[key] = s
 		}
 		if fresh {
@@ -769,14 +812,12 @@ func (e *Engine) sendMessage(t *store.Task, key, text string, immediate bool) {
 
 // Send is the user typing a message for the task's current agent.
 func (e *Engine) Send(id, text string) error {
-	unlock := e.lockTask(id)
+	card, t, unlock := e.lockGroup(id)
 	defer unlock()
-	e.mu.Lock()
-	t := e.find(id)
 	var key string
-	if t != nil {
-		col, _, _ := e.board.Column(t.ColumnID)
-		key = sessionKey(col)
+	e.mu.Lock()
+	if card != nil {
+		key = sessionKey(e.sessionColumn(t))
 		if s := t.Sessions[key]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
 			t = nil
 		}
@@ -789,16 +830,17 @@ func (e *Engine) Send(id, text string) error {
 	return nil
 }
 
-// LiveSession returns the tmux session of the task's current agent.
+// LiveSession returns the tmux session of the task's current agent, which
+// every card of a group shares.
 func (e *Engine) LiveSession(id string) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	t := e.find(id)
-	if t == nil {
+	card := e.find(id)
+	if card == nil {
 		return "", false
 	}
-	col, _, _ := e.board.Column(t.ColumnID)
-	if s := t.Sessions[sessionKey(col)]; s != nil && s.Status == store.StatusRunning {
+	t := e.owner(card)
+	if s := t.Sessions[sessionKey(e.sessionColumn(t))]; s != nil && s.Status == store.StatusRunning {
 		return s.Tmux, true
 	}
 	for _, s := range t.Sessions {

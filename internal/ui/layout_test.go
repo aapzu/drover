@@ -195,3 +195,36 @@ func TestTmuxKey(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
+	m := testModel(120, 40, 2, 0)
+	m.snap.Board.Columns[0].AutoSpawn = true
+	owner := &store.Task{ID: "owner", Number: 1, Title: "Refactor", ColumnID: "c1", ActiveCard: "split",
+		Branch: "refactor-1", PR: &store.PR{Number: 10},
+		Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle}}}
+	split := &store.Task{ID: "split", Number: 2, Title: "PR two", ColumnID: "c0", GroupID: "owner",
+		PR: &store.PR{Number: 11, Branch: "two", State: "MERGED"}}
+	m.snap.Tasks = []*store.Task{owner, split}
+
+	if m.sessionFor(split) != owner.Sessions[store.MainSession] {
+		t.Fatal("split card doesn't resolve its group's session")
+	}
+	splitCard := ansi.Strip(m.renderCard(split, 60, false, false))
+	for _, want := range []string{"⧉ 2/2", "● idle", "PR #11 merged two"} {
+		if !strings.Contains(splitCard, want) {
+			t.Errorf("split card misses %q:\n%s", want, splitCard)
+		}
+	}
+	// The owner sits in a plain column while the agent works for the split
+	// card, so it doesn't show the agent's activity.
+	ownerCard := ansi.Strip(m.renderCard(owner, 60, false, false))
+	if !strings.Contains(ownerCard, "⧉ 1/2") || strings.Contains(ownerCard, "idle") || !strings.Contains(ownerCard, "PR #10") {
+		t.Errorf("owner card:\n%s", ownerCard)
+	}
+	for _, d := range []density{densityNormal, densityCompact, densityTall} {
+		m.prefs.Density = d
+		if got := lipgloss.Height(m.renderCard(split, 30, false, false)); got != d.cardHeight() {
+			t.Fatalf("density %d: card is %d rows, want %d", d, got, d.cardHeight())
+		}
+	}
+}

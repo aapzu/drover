@@ -96,6 +96,27 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   to `.kangentic/tui/sessions/…/events.jsonl`. The board reads them to show
   working, idle and needs-you states and to run turn-end automations.
 
+## One card per pull request
+
+When an agent opens a second pull request (`gh pr create` or `gh stack`), the
+board splits its card. Every PR gets its own card in the column the agent is
+working in. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker
+has the same color on every card of the group.
+
+- The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
+  and the preview all reach the same agent from any of them.
+- Moving a card into an agent column points the agent at that card: it takes
+  that column's settings and runs its automations with the card's PR. Turn-end
+  automations act only on the card the agent is working for.
+- The agent stops once no card in the group is in an agent column. The
+  worktree goes once every card is in Done or To Do, and the conversation
+  resets once every card is back in To Do.
+- Deleting a card removes only that card while others remain.
+- `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
+  automations. `{{branchName}}` is the PR's branch when known.
+- Titles, branches and states come from `gh pr view` when the PR is detected.
+  They are not refreshed after that.
+
 ## Importing Claude Code agents
 
 `I` lists Claude Code conversations started in this repo or any directory
@@ -134,5 +155,5 @@ fetches any issue by key or URL.
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only. Not yet
-  supported: workflows, the MCP board tools, PR status, and multi-project
+  supported: workflows, the MCP board tools, live PR status, and multi-project
   view.

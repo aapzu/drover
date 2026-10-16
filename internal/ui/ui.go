@@ -453,6 +453,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := t.ID
 		m.mode = modeConfirm
 		m.confirmText = fmt.Sprintf("Delete #%d %q? Its agent is stopped and worktree removed; the branch is kept. (y/N)", t.Number, t.Title)
+		if len(store.Members(m.snap.Tasks, store.Owner(m.snap.Tasks, t))) > 1 {
+			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, t.Title)
+		}
 		m.confirmAction = func() tea.Cmd { return m.action(func() error { return m.eng.DeleteTask(id) }) }
 	case "enter", "a":
 		if t == nil {
