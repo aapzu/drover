@@ -9,21 +9,9 @@ import (
 	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
 )
 
-// liveExitKey matches tmux.DetachKey so leaving live mode and leaving an
-// attached session are the same key.
+// liveExitKey is the only key live mode keeps; it matches tmux.DetachKey.
+// Option chords can't be reserved: macOS types them as characters such as å.
 const liveExitKey = "ctrl+q"
-
-// liveBoardKeys keep a few board actions reachable in live mode. Everything
-// else, alt keys included, goes to the agent.
-var liveBoardKeys = map[string]tea.KeyMsg{
-	"alt+left":        {Type: tea.KeyLeft},
-	"alt+right":       {Type: tea.KeyRight},
-	"alt+up":          {Type: tea.KeyUp},
-	"alt+down":        {Type: tea.KeyDown},
-	"alt+shift+left":  {Type: tea.KeyRunes, Runes: []rune{'H'}},
-	"alt+shift+right": {Type: tea.KeyRunes, Runes: []rune{'L'}},
-	"alt+a":           {Type: tea.KeyRunes, Runes: []rune{'a'}},
-}
 
 var tmuxKeyNames = map[string]string{
 	"enter":     "Enter",
@@ -165,9 +153,6 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		return m, nil
 	}
-	if k, ok := liveBoardKeys[msg.String()]; ok {
-		return m.updateBoard(k)
-	}
 	t := m.current()
 	if t == nil {
 		return m, nil
@@ -187,6 +172,7 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.keys.send(job)
+	m.previewScroll = 0
 	capture := m.capturePreview()
 	return m, func() tea.Msg {
 		time.Sleep(40 * time.Millisecond)

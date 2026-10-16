@@ -157,7 +157,7 @@ func Default() *Board {
 		Columns: []Column{
 			{ID: "todo", Name: "To Do", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
-			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, PermissionMode: "acceptEdits"},
+			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, PermissionMode: "auto"},
 			{ID: "review", Name: "Review", Color: "#f59e0b"},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},

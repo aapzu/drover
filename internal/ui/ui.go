@@ -38,6 +38,7 @@ const (
 type tickMsg time.Time
 type previewMsg struct {
 	taskID, content string
+	history         int
 	at              time.Time
 }
 type noticeMsg string
@@ -61,6 +62,9 @@ type Model struct {
 	previewFor string
 	previewTxt string
 	previewAt  time.Time
+	// previewScroll is how many lines above the bottom the preview shows.
+	previewScroll  int
+	previewHistory int
 
 	prefs   prefs
 	drag    dragState
@@ -253,7 +257,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.at.Before(m.previewAt) {
 			return m, nil
 		}
-		m.previewFor, m.previewTxt, m.previewAt = msg.taskID, msg.content, msg.at
+		switch {
+		case msg.taskID != m.previewFor:
+			m.previewScroll = 0
+		case m.previewScroll > 0:
+			// Keep the scrolled view on the same lines as output arrives.
+			m.previewScroll += msg.history - m.previewHistory
+		}
+		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
+		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
 		return m, nil
 	case liveTickMsg:
 		if m.mode != modeLive || msg.gen != m.liveGen {
@@ -324,19 +336,29 @@ func (m Model) capturePreview() tea.Cmd {
 	name, ok := m.eng.LiveSession(id)
 	l := m.layout()
 	w, h := m.width-2, l.previewH-2
+	// Extra history lets the anchored view grow before the next capture.
+	scrollback := 0
+	if m.previewScroll > 0 {
+		scrollback = m.previewScroll + 2*h
+	}
 	return func() tea.Msg {
 		msg := previewMsg{taskID: id}
 		if ok {
 			if l.previewH > 0 {
 				tmux.Resize(name, w, h)
 			}
-			if out, err := tmux.Capture(name, 0); err == nil {
-				msg.content = out
+			if out, history, err := tmux.Capture(name, scrollback); err == nil {
+				msg.content, msg.history = out, history
 			}
 		}
 		msg.at = time.Now()
 		return msg
 	}
+}
+
+func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
+	m.previewScroll = clamp(m.previewScroll+lines, 0, m.previewHistory)
+	return m, m.capturePreview()
 }
 
 func (m Model) hasLiveSession(id string) bool {
@@ -475,6 +497,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "tab":
 		return m.startLive()
+	case "pgup", "pgdown":
+		page := max(1, m.layout().previewH-3)
+		if msg.String() == "pgdown" {
+			page = -page
+		}
+		return m.scrollPreview(page)
 	case "+", "=", "-", "_":
 		l := m.layout()
 		if l.previewH == 0 {

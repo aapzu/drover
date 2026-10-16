@@ -43,6 +43,12 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Action == tea.MouseActionPress && tea.MouseEvent(msg).IsWheel():
 		h := l.hitTest(m, msg.X, msg.Y)
+		if h.kind == hitPreview || h.kind == hitPreviewEdge {
+			if msg.Button == tea.MouseButtonWheelUp {
+				return m.scrollPreview(3)
+			}
+			return m.scrollPreview(-3)
+		}
 		if h.kind != hitCard && h.kind != hitColumn {
 			return m, nil
 		}

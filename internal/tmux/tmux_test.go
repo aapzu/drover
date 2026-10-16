@@ -13,7 +13,7 @@ func waitFor(t *testing.T, name, want string) string {
 	t.Helper()
 	var out string
 	for range 50 {
-		out, _ = Capture(name, 0)
+		out, _, _ = Capture(name, 0)
 		if strings.Contains(out, want) {
 			return out
 		}
@@ -58,5 +58,32 @@ func TestTypingIntoDetachedSession(t *testing.T) {
 	}
 	if strings.TrimSpace(size) != "50x12" {
 		t.Fatalf("window is %s, want 50x12", size)
+	}
+}
+
+func TestCaptureReturnsHistory(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+
+	name := "history"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "seq 1 100; cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Resize(name, 40, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "100")
+	out, history, err := Capture(name, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history < 30 {
+		t.Fatalf("history is %d lines, want at least 30", history)
+	}
+	if rows := strings.Count(out, "\n"); rows != 40 {
+		t.Fatalf("got %d rows, want 30 of history plus 10 on screen:\n%s", rows, out)
 	}
 }

@@ -116,7 +116,7 @@ func (m Model) renderFooter() string {
 	}
 	hints := map[mode]string{
 		modeBoard:   "←→↑↓ navigate  H/L move  n new  enter attach  tab type into agent  s send  r start  S suspend  +/- </> resize  z density  ? help  q quit",
-		modeLive:    "LIVE: keys go to the agent  ctrl+q back to board  alt+←→↑↓ switch card  alt+shift+←→ move card  alt+a full screen",
+		modeLive:    "LIVE: every key goes to the agent  ctrl+q back to board  mouse wheel scrolls",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
 		modeConfirm: "y confirm  any other key cancels",
@@ -353,8 +353,10 @@ func (m Model) renderPreview(height int) string {
 				body += "\n\n" + muted.Render("Last reply:") + "\n" + s.LastReply
 			}
 		} else if m.previewFor == t.ID {
-			body = lastLines(m.previewTxt, height-2)
-			if m.mode != modeLive {
+			body = previewWindow(m.previewTxt, height-2, m.previewScroll)
+			if m.previewScroll > 0 {
+				title += thinking.Render(fmt.Sprintf("· ↑ %d lines up, scroll down to return ", m.previewScroll))
+			} else if m.mode != modeLive {
 				title += dim.Render("· tab to type here, enter for full screen ")
 			}
 		}
@@ -392,6 +394,16 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// previewWindow shows n lines ending scroll lines above the bottom.
+func previewWindow(s string, n, scroll int) string {
+	if scroll == 0 {
+		return lastLines(s, n)
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	end := clamp(len(lines)-scroll, min(n, len(lines)), len(lines))
+	return strings.Join(lines[max(0, end-n):end], "\n")
 }
 
 func (m Model) renderForm() string {
@@ -471,9 +483,8 @@ func (m Model) renderHelp() string {
 		{"click preview", "type into the agent"},
 	}) + "\n\n" + section("Live mode", [][2]string{
 		{"ctrl+q", "back to board"},
-		{"alt+←→↑↓", "switch card, keep typing"},
-		{"alt+shift+←→", "move card"},
-		{"alt+a", "full screen"},
+		{"mouse wheel", "scroll the agent's history"},
+		{"typing", "jumps back to the bottom"},
 		{"anything else", "goes to the agent"},
 	})
 	body := lipgloss.JoinHorizontal(lipgloss.Top, section("Keys", rows), "    ", right)

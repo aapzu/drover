@@ -62,10 +62,10 @@ resize, and click the preview to type into the agent. Layout is saved in
 `.kangentic/tui/ui.json`.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
-`esc` and `ctrl+c` included. `ctrl+q` returns to the board. `alt+←→↑↓`
-switches card without leaving live mode, `alt+shift+←→` moves the card and
-`alt+a` attaches full screen. On macOS the terminal must send Option as Meta
-(Esc+) for these.
+`esc` and `ctrl+c` included. `ctrl+q` returns to the board.
+
+The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
+`pgdown` on the board. Typing in live mode jumps back to the bottom.
 
 ## How it maps to Kangentic
 

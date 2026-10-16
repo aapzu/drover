@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -149,9 +150,17 @@ func Stop(name string) {
 	Kill(name)
 }
 
-// Capture returns the visible pane plus some scrollback, with colors.
-func Capture(name string, scrollback int) (string, error) {
-	return run("capture-pane", "-p", "-e", "-J", "-t", "="+name+":", "-S", fmt.Sprintf("-%d", scrollback))
+// Capture returns the visible screen plus up to scrollback lines of history,
+// with colors, and how many lines of history the pane has.
+func Capture(name string, scrollback int) (string, int, error) {
+	target := "=" + name + ":"
+	size, err := run("display-message", "-p", "-t", target, "#{history_size}")
+	if err != nil {
+		return "", 0, err
+	}
+	history, _ := strconv.Atoi(strings.TrimSpace(size))
+	out, err := run("capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback))
+	return out, history, err
 }
 
 func Interrupt(name string) error {

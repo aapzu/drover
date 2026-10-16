@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -131,6 +132,40 @@ func TestOverlay(t *testing.T) {
 	}
 	if got := overlay("ab", "XY", 4, 0); got != "ab  XY" {
 		t.Fatalf("past line end: got %q", got)
+	}
+}
+
+func TestPreviewWindow(t *testing.T) {
+	text := "1\n2\n3\n4\n5\n6\n"
+	cases := []struct {
+		scroll int
+		want   string
+	}{
+		{0, "4\n5\n6"},
+		{2, "2\n3\n4"},
+		{3, "1\n2\n3"},
+		{50, "1\n2\n3"},
+	}
+	for _, c := range cases {
+		if got := previewWindow(text, 3, c.scroll); got != c.want {
+			t.Errorf("scroll %d: got %q want %q", c.scroll, got, c.want)
+		}
+	}
+}
+
+func TestPreviewScrollStaysAnchored(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	id := m.snap.Tasks[0].ID
+	next, _ := m.Update(previewMsg{taskID: id, history: 100, at: time.Now()})
+	m = next.(Model)
+	m.previewScroll = 10
+	next, _ = m.Update(previewMsg{taskID: id, history: 104, at: time.Now()})
+	if got := next.(Model).previewScroll; got != 14 {
+		t.Fatalf("scroll is %d after 4 new lines, want 14", got)
+	}
+	next, _ = next.(Model).Update(previewMsg{taskID: "other", history: 104, at: time.Now()})
+	if got := next.(Model).previewScroll; got != 0 {
+		t.Fatalf("scroll is %d after switching task, want 0", got)
 	}
 }
 
