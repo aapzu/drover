@@ -610,6 +610,12 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			t := m.eng.CreateTask(title, prompt)
 			m.snap = m.eng.Snapshot()
+			m.mode = modeBoard
+			if start := m.snap.Board.StartColumn(); start.ID != t.ColumnID {
+				_, m.col, _ = m.snap.Board.Column(start.ID)
+				m.selected[start.ID] = t.ID
+				return m, m.moveCmd(t, start)
+			}
 			m.selectTask(t)
 			m.setFlash(fmt.Sprintf("Created #%d. Move it right (L) to start an agent.", t.Number))
 		}

@@ -455,7 +455,7 @@ func (m Model) renderHelp() string {
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
 		{"m 1-9", "move card to column"},
-		{"n", "new task (lands in To Do)"},
+		{"n", "new task (starts an agent)"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal (Ctrl-q returns)"},

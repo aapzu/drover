@@ -44,7 +44,7 @@ kangentic-tui
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m` then `1`–`9` | move card to a column |
-| `n`, `e`, `x` | new, edit, delete task |
+| `n`, `e`, `x` | new task (starts in the first agent column), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
