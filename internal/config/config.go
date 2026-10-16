@@ -14,9 +14,10 @@ import (
 const FileName = "kangentic.json"
 
 type Board struct {
-	Version           int      `json:"version"`
-	DefaultBaseBranch string   `json:"defaultBaseBranch,omitempty"`
-	Columns           []Column `json:"columns"`
+	Version               int      `json:"version"`
+	DefaultBaseBranch     string   `json:"defaultBaseBranch,omitempty"`
+	DefaultPermissionMode string   `json:"defaultPermissionMode,omitempty"`
+	Columns               []Column `json:"columns"`
 }
 
 type Column struct {
@@ -142,6 +143,18 @@ func (b *Board) Find(ref string) (Column, bool) {
 	return Column{}, false
 }
 
+// PermissionMode is the column's own mode, else the board default, else auto.
+func (b *Board) PermissionMode(c Column) string {
+	switch {
+	case c.PermissionMode != "":
+		return c.PermissionMode
+	case b.DefaultPermissionMode != "":
+		return b.DefaultPermissionMode
+	default:
+		return "auto"
+	}
+}
+
 func (b *Board) TodoColumn() Column {
 	for _, c := range b.Columns {
 		if c.IsTodo() {
@@ -157,7 +170,7 @@ func Default() *Board {
 		Columns: []Column{
 			{ID: "todo", Name: "To Do", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
-			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, PermissionMode: "auto"},
+			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
 			{ID: "review", Name: "Review", Color: "#f59e0b"},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},

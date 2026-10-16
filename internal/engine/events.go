@@ -144,8 +144,9 @@ func (e *Engine) planExit(taskID string, visit int) {
 	}
 	col, _, _ := e.board.Column(t.ColumnID)
 	target, ok := e.board.Find(col.PlanExitTarget)
+	planning := e.board.PermissionMode(col) == "plan"
 	e.mu.Unlock()
-	if col.PermissionMode != "plan" || col.PlanExitTarget == "" || !ok {
+	if !planning || col.PlanExitTarget == "" || !ok {
 		return
 	}
 	e.logf(t, "Plan approved, moving to %s", target.Name)
@@ -158,7 +159,7 @@ func (e *Engine) planExit(taskID string, visit int) {
 	e.with(func() {
 		if s := t.Sessions[sessionKey(target)]; s != nil && s.Status == store.StatusRunning {
 			s.TurnInVisit = true
-			s.PermissionMode = target.PermissionMode
+			s.PermissionMode = e.board.PermissionMode(target)
 			s.RespawnPending = false
 		}
 	})
@@ -177,8 +178,9 @@ func (e *Engine) respawnPending(taskID, key string) {
 		s = t.Sessions[key]
 		col, _, _ = e.board.Column(t.ColumnID)
 	}
+	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		sessionKey(col) == key && s.PermissionMode != col.PermissionMode
+		sessionKey(col) == key && s.PermissionMode != mode
 	if s != nil {
 		s.RespawnPending = false
 	}
@@ -190,7 +192,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	if !due {
 		return
 	}
-	e.logf(t, "Turn ended, respawning agent in %s mode", col.PermissionMode)
+	e.logf(t, "Turn ended, respawning agent in %s mode", mode)
 	tmux.Stop(s.Tmux)
 	if err := e.spawn(t, col, key, worktree, false, ""); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
@@ -246,7 +248,7 @@ func (e *Engine) startQueued(taskID, key string) {
 		SettingsPath:   filepath.Join(dir, "settings.json"),
 		SessionID:      s.AgentSessionID,
 		Resume:         s.Started,
-		PermissionMode: col.PermissionMode,
+		PermissionMode: e.board.PermissionMode(col),
 		Model:          col.ModelOverride,
 		Effort:         col.EffortOverride,
 	}

@@ -79,7 +79,9 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   agent and removes the worktree, asking first if there are uncommitted
   changes. Branches are never deleted.
 - **Column settings.** `autoSpawn`, `permissionMode`, `modelOverride` and
-  `effortOverride` become `claude --permission-mode/--model/--effort`. A model
+  `effortOverride` become `claude --permission-mode/--model/--effort`. Columns
+  without `permissionMode` use the board's `defaultPermissionMode`, or `auto`
+  when that is unset. A model
   or effort change respawns the agent with `--resume`. So does a permission
   change, but only while the agent is idle. `sessionTarget: "isolated"` and
   `sessionSpawnStrategy: "always_spawn_new"` give a column its own

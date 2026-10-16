@@ -57,3 +57,20 @@ func TestLoadMissingUsesDefault(t *testing.T) {
 		t.Fatalf("got found=%v err=%v cols=%d", found, err, len(board.Columns))
 	}
 }
+
+func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
+	plan := Column{PermissionMode: "plan"}
+	for _, tc := range []struct {
+		board *Board
+		col   Column
+		want  string
+	}{
+		{&Board{DefaultPermissionMode: "acceptEdits"}, plan, "plan"},
+		{&Board{DefaultPermissionMode: "acceptEdits"}, Column{}, "acceptEdits"},
+		{&Board{}, Column{}, "auto"},
+	} {
+		if got := tc.board.PermissionMode(tc.col); got != tc.want {
+			t.Errorf("PermissionMode(%+v) with default %q = %q, want %q", tc.col, tc.board.DefaultPermissionMode, got, tc.want)
+		}
+	}
+}

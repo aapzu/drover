@@ -61,7 +61,7 @@ func (e *Engine) DiscoverSessions() []claude.Found {
 func importColumn(board *config.Board, running bool) config.Column {
 	if running {
 		for _, c := range board.Columns {
-			if c.AutoSpawn && c.PermissionMode != "plan" && !c.Isolated() {
+			if c.AutoSpawn && board.PermissionMode(c) != "plan" && !c.Isolated() {
 				return c
 			}
 		}

@@ -529,14 +529,15 @@ func (e *Engine) activate(t *store.Task, col, from config.Column, message string
 	started := sess != nil && sess.Started
 	// A permission change never kills a turn in progress: a busy agent is
 	// respawned when its turn ends.
-	permissionChanged := live && sess.PermissionMode != col.PermissionMode
+	mode := e.board.PermissionMode(col)
+	permissionChanged := live && sess.PermissionMode != mode
 	modelChanged := live && (sess.Model != col.ModelOverride || sess.Effort != col.EffortOverride ||
 		(permissionChanged && sess.Activity == store.ActivityIdle))
 	deferRespawn := permissionChanged && !modelChanged
 	e.mu.Unlock()
 	if deferRespawn {
 		e.with(func() { sess.RespawnPending = true })
-		e.logf(t, "Agent switches to %s mode when its current turn ends", col.PermissionMode)
+		e.logf(t, "Agent switches to %s mode when its current turn ends", mode)
 	}
 
 	enter := col.Automations.OnEnter
@@ -651,14 +652,14 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			// Skip events the previous process wrote while shutting down.
 			s.EventsOffset = info.Size()
 		}
-		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, col.PermissionMode
+		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, e.board.PermissionMode(col)
 		s.RespawnPending = false
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
 			SessionID:      s.AgentSessionID,
 			Resume:         !fresh,
-			PermissionMode: col.PermissionMode,
+			PermissionMode: s.PermissionMode,
 			Model:          col.ModelOverride,
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,

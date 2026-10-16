@@ -176,10 +176,10 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 
 func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"auto"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	e, err := New(root)
 	if err != nil {
@@ -203,9 +203,9 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; !s.RespawnPending || s.PermissionMode != "plan" {
 		t.Fatalf("a mid-turn move should defer the respawn: pending=%v mode=%s", s.RespawnPending, s.PermissionMode)
 	}
-	waitFor(t, e, "respawn in auto mode", func(t *store.Task) bool {
+	waitFor(t, e, "respawn in the board's default mode", func(t *store.Task) bool {
 		s := t.Sessions[store.MainSession]
-		return s != nil && s.PermissionMode == "auto" && !s.RespawnPending && s.Status == store.StatusRunning
+		return s != nil && s.PermissionMode == "acceptEdits" && !s.RespawnPending && s.Status == store.StatusRunning
 	})
 
 	argv, _ := os.ReadFile(log)
@@ -213,8 +213,8 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	if len(launches) != 2 {
 		t.Fatalf("want 2 launches, got %d:\n%s", len(launches), argv)
 	}
-	if !strings.Contains(launches[1], "--permission-mode\nauto") || !strings.Contains(launches[1], "--resume") {
-		t.Errorf("respawn should resume in auto mode:\n%s", launches[1])
+	if !strings.Contains(launches[1], "--permission-mode\nacceptEdits") || !strings.Contains(launches[1], "--resume") {
+		t.Errorf("respawn should resume in the board's default mode:\n%s", launches[1])
 	}
 }
 
