@@ -31,6 +31,7 @@ const (
 	modeConfirm
 	modeDetail
 	modeHelp
+	modeImport
 )
 
 type tickMsg time.Time
@@ -76,6 +77,8 @@ type Model struct {
 	confirmAction func() tea.Cmd
 
 	detail viewport.Model
+
+	imp importState
 }
 
 func New(eng *engine.Engine) Model {
@@ -98,6 +101,7 @@ func New(eng *engine.Engine) Model {
 		promptInput: ta,
 		sendInput:   si,
 		detail:      viewport.New(80, 20),
+		imp:         newImportState(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No kangentic.json found, using the default board (press W to write it)")
@@ -225,6 +229,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewMsg:
 		m.previewFor, m.previewTxt = msg.taskID, msg.content
 		return m, nil
+	case sessionsLoadedMsg, issuesLoadedMsg:
+		return m.updateImportLoaded(msg), nil
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -261,6 +267,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
+		case modeImport:
+			return m.updateImport(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -351,7 +359,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.col = next
 		m.selected[cols[next].ID] = t.ID
-		return m, m.moveCmd(t, cols[next])
+		cmd := m.moveCmd(t, cols[next])
+		return m, cmd
 	case "m":
 		if t != nil {
 			m.mode = modeMove
@@ -378,6 +387,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		name, ok := m.eng.LiveSession(t.ID)
+		if s := m.sessionFor(t); !ok && s != nil && s.Status == store.StatusExternal {
+			m.setFlash(fmt.Sprintf("#%d runs in another terminal (pid %d). Exit it there, then press r to resume it here.", t.Number, s.PID))
+			break
+		}
 		if !ok {
 			m.setFlash("No running agent. Press r to start or resume it.")
 			break
@@ -415,6 +428,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.SetContent(m.renderDetail(t))
 			m.detail.GotoTop()
 		}
+	case "I":
+		cmd := m.openImport(sourceClaude)
+		return m, cmd
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())
@@ -450,15 +466,18 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.formFocus = 1 - m.formFocus
 		if m.formFocus == 0 {
 			m.promptInput.Blur()
-			return m, m.titleInput.Focus()
+			cmd := m.titleInput.Focus()
+			return m, cmd
 		}
 		m.titleInput.Blur()
-		return m, m.promptInput.Focus()
+		cmd := m.promptInput.Focus()
+		return m, cmd
 	case "enter":
 		if m.formFocus == 0 {
 			m.formFocus = 1
 			m.titleInput.Blur()
-			return m, m.promptInput.Focus()
+			cmd := m.promptInput.Focus()
+			return m, cmd
 		}
 	case "ctrl+s":
 		title := strings.TrimSpace(m.titleInput.Value())
@@ -523,7 +542,8 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	target := m.columns()[i]
 	m.col = i
 	m.selected[target.ID] = t.ID
-	return m, m.moveCmd(t, target)
+	cmd := m.moveCmd(t, target)
+	return m, cmd
 }
 
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

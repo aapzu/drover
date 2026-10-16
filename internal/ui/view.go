@@ -47,6 +47,8 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderForm())
 	case modeHelp:
 		body = m.place(bodyHeight, m.renderHelp())
+	case modeImport:
+		body = m.place(bodyHeight, m.renderImport(bodyHeight))
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
@@ -69,7 +71,7 @@ func (m Model) renderHeader() string {
 	var working, waiting, attention int
 	for _, t := range m.snap.Tasks {
 		for _, s := range t.Sessions {
-			if s.Status != store.StatusRunning {
+			if s.Status != store.StatusRunning && s.Status != store.StatusExternal {
 				continue
 			}
 			switch {
@@ -109,7 +111,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  m move to…  n new  enter attach  s send  r start  S suspend  p preview  i info  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  H/L move  m move to…  n new  I import  enter attach  s send  r start  S suspend  p preview  i info  ? help  q quit",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
 		modeConfirm: "y confirm  any other key cancels",
@@ -248,6 +250,11 @@ func (m Model) status(t *store.Task) string {
 		return dim.Render("⏸ suspended")
 	case store.StatusExited:
 		return dim.Render("■ exited")
+	case store.StatusExternal:
+		if s.Activity == store.ActivityThinking {
+			return thinking.Render(spinner[m.frame%len(spinner)] + " working elsewhere")
+		}
+		return idle.Render("↗ idle elsewhere")
 	}
 	pending := ""
 	if len(s.Pending) > 0 {
@@ -277,6 +284,9 @@ func stuckStarting(s *store.Session) bool {
 func (m Model) renderCard(t *store.Task, width int, active bool) string {
 	content := width - 4
 	title := fmt.Sprintf("#%d %s", t.Number, t.Title)
+	if t.Issue != nil {
+		title = fmt.Sprintf("#%d %s %s", t.Number, t.Issue.Key, t.Title)
+	}
 	wrapped := strings.Split(ansi.Wordwrap(title, content, " -"), "\n")
 	line1 := ansi.Truncate(wrapped[0], content, "…")
 	line2 := ""
@@ -308,7 +318,9 @@ func (m Model) renderPreview(height int) string {
 	body := ""
 	if t != nil {
 		title = fmt.Sprintf(" #%d %s ", t.Number, t.Title)
-		if _, ok := m.eng.LiveSession(t.ID); !ok {
+		if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
+			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d). Its latest reply:", s.PID)) + "\n\n" + s.LastReply
+		} else if _, ok := m.eng.LiveSession(t.ID); !ok {
 			body = dim.Render("No running agent. Move the card into an agent column, or press r to resume.")
 			if s := m.sessionFor(t); s != nil && s.LastReply != "" {
 				body += "\n\n" + muted.Render("Last reply:") + "\n" + s.LastReply
@@ -398,6 +410,7 @@ func (m Model) renderHelp() string {
 		{"S", "suspend the agent (resume later with r)"},
 		{"p", "toggle live preview"},
 		{"i", "task details and automation log"},
+		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"W", "write the default board to kangentic.json"},
 		{"q", "quit (agents keep running in tmux)"},
 	}
@@ -421,6 +434,9 @@ func (m Model) renderDetail(t *store.Task) string {
 		}
 	}
 	field("Column", col.Name)
+	if t.Issue != nil {
+		field("Issue", fmt.Sprintf("%s  %s  %s", t.Issue.Key, t.Issue.State, t.Issue.URL))
+	}
 	field("Branch", t.Branch)
 	field("Base", t.BaseBranch)
 	field("Worktree", t.WorktreePath)

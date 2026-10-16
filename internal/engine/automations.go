@@ -223,7 +223,13 @@ func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 	if base == "" {
 		base = "main"
 	}
+	var issueKey, issueURL string
+	if t.Issue != nil {
+		issueKey, issueURL = t.Issue.Key, t.Issue.URL
+	}
 	return map[string]string{
+		"issueKey":     issueKey,
+		"issueUrl":     issueURL,
 		"title":        t.Title,
 		"description":  t.Prompt,
 		"taskId":       t.ID,

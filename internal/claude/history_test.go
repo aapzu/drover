@@ -1,0 +1,81 @@
+package claude
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func writeTranscript(t *testing.T, config, cwd, id string, lines ...string) {
+	t.Helper()
+	dir := filepath.Join(config, "projects", projectDirName(cwd))
+	os.MkdirAll(dir, 0o755)
+	user := func(text string) string {
+		b, _ := json.Marshal(map[string]any{
+			"type": "user", "cwd": cwd, "gitBranch": "feature-x", "isSidechain": false,
+			"message": map[string]any{"role": "user", "content": text},
+		})
+		return string(b)
+	}
+	var out []string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "{") {
+			out = append(out, l)
+		} else {
+			out = append(out, user(l))
+		}
+	}
+	os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(strings.Join(out, "\n")+"\n"), 0o644)
+}
+
+func TestDiscover(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	root := "/work/app"
+
+	writeTranscript(t, config, root, "11111111-old", "<command-name>/clear</command-name>", "Fix the flaky login test", `{"type":"ai-title","aiTitle":"Flaky login test"}`)
+	writeTranscript(t, config, root+"/.claude/worktrees/feat", "22222222-wt", "Add dark mode")
+	writeTranscript(t, config, "/work/app-other", "33333333-sib", "Not this repo")
+	writeTranscript(t, config, root, "44444444-tool", `{"type":"user","cwd":"/work/app","message":{"content":[{"type":"tool_result"}]}}`)
+	writeTranscript(t, config, root, "55555555-skip", "Already on the board")
+	writeTranscript(t, config, root, "66666666-cmd", "<command-name>/review</command-name>\n<command-args>PR 12</command-args>")
+	older := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(filepath.Join(config, "projects", projectDirName(root), "66666666-cmd.jsonl"), older, older)
+	past := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(config, "projects", projectDirName(root), "11111111-old.jsonl"), past, past)
+
+	os.MkdirAll(filepath.Join(config, "sessions"), 0o755)
+	registry := func(pid int, id, cwd, status string) {
+		b, _ := json.Marshal(Live{PID: pid, SessionID: id, Cwd: cwd, Name: "live one", Status: status})
+		os.WriteFile(filepath.Join(config, "sessions", fmt.Sprintf("%d.json", pid)), b, 0o644)
+	}
+	registry(os.Getpid(), "22222222-wt", root+"/.claude/worktrees/feat", "busy")
+	registry(99999999, "11111111-old", root, "idle") // dead process
+
+	found := Discover(root, map[string]bool{"55555555-skip": true}, 10)
+	if len(found) != 3 {
+		t.Fatalf("got %d sessions: %+v", len(found), found)
+	}
+	live, old, cmd := found[0], found[1], found[2]
+	if cmd.SessionID != "66666666-cmd" || cmd.Title != "/review PR 12" {
+		t.Errorf("slash-command session wrong: %+v", cmd)
+	}
+	if live.SessionID != "22222222-wt" || !live.Running || !live.Busy || live.Title != "live one" || live.PID != os.Getpid() {
+		t.Errorf("running session wrong: %+v", live)
+	}
+	if old.SessionID != "11111111-old" || old.Running || old.Title != "Flaky login test" ||
+		old.FirstPrompt != "Fix the flaky login test" || old.Branch != "feature-x" || old.Cwd != root {
+		t.Errorf("past session wrong: %+v", old)
+	}
+}
+
+func TestProjectDirName(t *testing.T) {
+	got := projectDirName("/Users/me/dev/kangentic-tui/.claude/worktrees/aapeli+kangentic-tui")
+	if want := "-Users-me-dev-kangentic-tui--claude-worktrees-aapeli-kangentic-tui"; got != want {
+		t.Errorf("got %s", got)
+	}
+}

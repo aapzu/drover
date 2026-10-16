@@ -49,6 +49,10 @@ func (e *Engine) Tick() {
 			}
 		}
 		followUps = append(followUps, e.dequeue()...)
+		if time.Since(e.lastPoll) > 1500*time.Millisecond {
+			e.lastPoll = time.Now()
+			followUps = append(followUps, e.pollExternal()...)
+		}
 	})
 
 	for _, fn := range followUps {

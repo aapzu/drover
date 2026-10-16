@@ -22,6 +22,7 @@ import (
 	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
+	"github.com/aapelihaanpuu/kangentic-tui/internal/linear"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
 	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
 )
@@ -37,6 +38,8 @@ type Engine struct {
 	MaxConcurrent int
 	exe           string
 	isRepo        bool
+	linear        *linear.Client
+	lastPoll      time.Time
 
 	mu         sync.Mutex
 	state      *store.State
@@ -79,6 +82,9 @@ func New(root string) (*Engine, error) {
 	}
 	if info, err := os.Stat(filepath.Join(root, config.FileName)); err == nil {
 		e.boardMod = info.ModTime()
+	}
+	if client, ok := linear.FromEnv(); ok {
+		e.linear = client
 	}
 	if e.isRepo {
 		gitx.EnsureExcluded(root)
@@ -296,6 +302,10 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	if from.ID == target.ID {
 		return nil
 	}
+	external := e.externalCheck(t)
+	if external != nil && (target.IsTodo() || target.IsDone()) {
+		return external
+	}
 	if target.IsDone() && !opts.Force && gitx.Dirty(worktree) {
 		return ErrDirty
 	}
@@ -326,6 +336,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	case !target.AutoSpawn:
 		e.stopSessions(t, "", store.StatusSuspended)
 		return nil
+	case external != nil:
+		e.logf(t, "Not starting an agent: the imported one is still running in its own terminal")
+		return nil
 	default:
 		return e.activate(t, target, from, opts.Message, true)
 	}
@@ -344,6 +357,9 @@ func (e *Engine) Start(id string) error {
 		return errors.New("task not found")
 	}
 	col, _, _ := board.Column(t.ColumnID)
+	if err := e.externalCheck(t); err != nil {
+		return err
+	}
 	if col.IsTodo() || col.IsDone() {
 		return fmt.Errorf("move the task out of %s to start an agent", col.Name)
 	}
@@ -391,7 +407,18 @@ func (e *Engine) ensureWorktree(t *store.Task) (string, error) {
 	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
 	title, id, number := t.Title, t.ID, t.Number
 	defaultBase := e.board.DefaultBaseBranch
+	imported := false
+	for _, s := range t.Sessions {
+		imported = imported || s.Imported
+	}
 	e.mu.Unlock()
+	// An imported conversation can only be resumed from its own directory.
+	if imported {
+		if _, err := os.Stat(path); err != nil {
+			return "", fmt.Errorf("the imported session's directory %s no longer exists", path)
+		}
+		return path, nil
+	}
 	if !e.isRepo {
 		return e.Root, nil
 	}
@@ -425,7 +452,9 @@ func (e *Engine) removeWorktree(t *store.Task) error {
 	e.mu.Lock()
 	path := t.WorktreePath
 	e.mu.Unlock()
-	if path == "" || !e.isRepo {
+	// Imported sessions may live in the main checkout or a worktree the board
+	// did not create; those are never deleted.
+	if path == "" || !e.isRepo || !claude.Within(gitx.WorktreesDir(e.Root), path) {
 		return nil
 	}
 	if err := gitx.RemoveWorktree(e.Root, path); err != nil {
@@ -657,6 +686,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		verb = "Resumed"
 	}
 	e.logf(t, "%s agent (%s)", verb, describeLaunch(launch))
+	e.syncIssueStarted(t)
 	return nil
 }
 

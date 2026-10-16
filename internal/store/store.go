@@ -18,6 +18,9 @@ const (
 	StatusQueued    SessionStatus = "queued"
 	StatusSuspended SessionStatus = "suspended"
 	StatusExited    SessionStatus = "exited"
+	// StatusExternal is an imported agent still running in another terminal.
+	// The board mirrors its status but never starts a second copy of it.
+	StatusExternal SessionStatus = "external"
 )
 
 type Activity string
@@ -44,6 +47,7 @@ type Task struct {
 	Title          string              `json:"title"`
 	Prompt         string              `json:"prompt"`
 	ColumnID       string              `json:"columnId"`
+	Issue          *Issue              `json:"issue,omitempty"`
 	BaseBranch     string              `json:"baseBranch,omitempty"`
 	Branch         string              `json:"branch,omitempty"`
 	WorktreePath   string              `json:"worktreePath,omitempty"`
@@ -71,7 +75,22 @@ type Session struct {
 	TurnInVisit bool      `json:"turnInVisit"`
 	Pending     []Pending `json:"pending,omitempty"`
 	LastReply   string    `json:"lastReply,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// Imported sessions came from outside the board; PID and TranscriptPath
+	// track them while they run in another terminal.
+	Imported       bool      `json:"imported,omitempty"`
+	PID            int       `json:"pid,omitempty"`
+	TranscriptPath string    `json:"transcriptPath,omitempty"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// Issue links a task to a tracker issue, currently Linear.
+type Issue struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+	Key      string `json:"key"`
+	URL      string `json:"url"`
+	TeamID   string `json:"teamId,omitempty"`
+	State    string `json:"state,omitempty"`
 }
 
 // Pending is a message waiting for the session to become idle.
@@ -106,6 +125,10 @@ func (t *Task) Clone() *Task {
 		c.AutomationRuns[k] = v
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)
+	if t.Issue != nil {
+		issue := *t.Issue
+		c.Issue = &issue
+	}
 	return &c
 }
 

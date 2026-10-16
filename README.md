@@ -45,6 +45,7 @@ kangentic-tui
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m` then `1`–`9` | move card to a column |
 | `n`, `e`, `x` | new, edit, delete task |
+| `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
 | `s` | send the agent a message |
 | `r` / `S` | start or resume / suspend the agent |
@@ -78,6 +79,36 @@ kangentic-tui
   to `.kangentic/tui/sessions/…/events.jsonl`. The board reads them to show
   working, idle and needs-you states and to run turn-end automations.
 
+## Importing Claude Code agents
+
+`I` lists Claude Code conversations started in this repo or any directory
+below it, such as worktrees. Running agents come first and are preselected.
+Past sessions follow, newest first.
+
+- **Running agents** land in the first agent column. The card mirrors the
+  agent's working or idle status, and the preview shows its latest reply.
+  While it runs in its own terminal, the board won't start a second copy of
+  it, and moves to To Do or Done are refused. Once you exit it there, press
+  `r` and the board resumes the conversation with `claude --resume` in the
+  agent's original directory.
+- **Past sessions** land in To Do. Moving one into an agent column resumes it.
+- The board never deletes a directory it didn't create. Imported sessions
+  that live in the main checkout or in another tool's worktree keep their
+  directory.
+
+## Linear
+
+Set `LINEAR_API_KEY` to a personal API key (Linear → Settings → Security &
+access). Then `I`, followed by `tab`, lists your open assigned issues. `/`
+fetches any issue by key or URL.
+
+- Imported issues land in To Do. The issue description becomes the prompt.
+- The worktree uses Linear's branch name (for example
+  `you/dx-123-fix-login`), so pull requests link back to the issue.
+- `{{issueKey}}` and `{{issueUrl}}` work in automations.
+- With `KANGENTIC_LINEAR_SYNC=1`, starting an agent on an unstarted issue
+  moves it to the team's first "started" state, such as In Progress.
+
 ## Differences from the desktop app
 
 - Tasks live in `.kangentic/tui/state.json`, not in the desktop app's
@@ -85,5 +116,6 @@ kangentic-tui
 - Agents run in a private tmux server (`tmux -L kangentic-tui ls`) and keep
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.
-- Only Claude Code is supported. Not yet supported: issue imports,
-  workflows, the MCP board tools, PR status, and multi-project view.
+- Only Claude Code is supported. Issues import from Linear only. Not yet
+  supported: workflows, the MCP board tools, PR status, and multi-project
+  view.
