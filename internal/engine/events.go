@@ -75,7 +75,19 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 	for _, ev := range events {
 		switch ev.Name {
 		case "SessionStart":
-			// /clear and /compact continue under a new id; resume that one.
+			if ev.Source == "startup" && s.Started && ev.SessionID != s.AgentSessionID {
+				// A blank conversation opened in the pane after the agent was
+				// sent to the background; follow the background session.
+				if s.Forked {
+					return append(out, e.followBackground(t, s))
+				}
+				continue
+			}
+			s.Forked = ev.Source == "fork"
+			if s.Forked && ev.TranscriptPath != "" {
+				s.TranscriptPath = ev.TranscriptPath
+			}
+			// /clear, /compact and forks continue under a new id; resume that one.
 			if ev.SessionID != "" {
 				s.AgentSessionID = ev.SessionID
 			}
@@ -86,6 +98,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.Forked = false
 			s.Activity = store.ActivityThinking
 			s.Started = true
 			s.TurnInVisit = true
@@ -123,6 +136,24 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		}
 	}
 	return out
+}
+
+// followBackground hands a session that moved to a background Claude Code
+// process over to pollExternal, which mirrors it until it exits, and returns
+// the follow-up that stops the blank pane left behind. Called with mu held.
+func (e *Engine) followBackground(t *store.Task, s *store.Session) func() {
+	s.Forked = false
+	s.Imported = true
+	s.Status = store.StatusExternal
+	s.Activity = store.ActivityIdle
+	s.Pending = nil
+	s.PID = 0
+	if l, ok := claude.Running()[s.AgentSessionID]; ok {
+		s.PID = l.PID
+	}
+	t.AddLog(fmt.Sprintf("Conversation moved to background session %s", claude.ShortID(s.AgentSessionID)))
+	name := s.Tmux
+	return func() { tmux.Stop(name) }
 }
 
 func (e *Engine) taskByID(id string) *store.Task {
@@ -198,7 +229,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	e.logf(t, "Turn ended, respawning agent in %s mode", mode)
 	tmux.Stop(s.Tmux)
-	if err := e.spawn(t, col, key, worktree, false, ""); err != nil {
+	if err := e.spawn(t, col, key, worktree, false, "", false); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
 	}
 }
@@ -237,11 +268,20 @@ func (e *Engine) startQueued(taskID, key string) {
 	defer e.setBusy(taskID, "")
 	e.mu.Lock()
 	t := e.find(taskID)
-	if t == nil || t.Sessions[key] == nil {
+	e.mu.Unlock()
+	if t != nil {
+		e.launchQueued(t, key)
+	}
+}
+
+// launchQueued starts a dequeued session in tmux. The caller holds the task lock.
+func (e *Engine) launchQueued(t *store.Task, key string) {
+	e.mu.Lock()
+	s := t.Sessions[key]
+	if s == nil {
 		e.mu.Unlock()
 		return
 	}
-	s := t.Sessions[key]
 	col := e.sessionColumn(t)
 	// The task may have moved or been stopped while waiting for its lock.
 	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting || sessionKey(col) != key {

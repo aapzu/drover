@@ -40,6 +40,9 @@ turn() {
     *PRS*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/2\\n"}}';;
+    *FORK*)
+      emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"fork\",\"session_id\":\"forked-$sid\"}"
+      emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"startup\",\"session_id\":\"blank-$sid\"}";;
   esac
   case "$1" in
     /code-review*) reply='Looks fine.\nVerdict: Ready';;
@@ -330,7 +333,8 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	defer cancel()
 	go e.Run(ctx)
 
-	first := e.CreateTask("First", "")
+	// A busy agent is never suspended to make room.
+	first := e.CreateTask("First SLOW", "")
 	if err := e.Move(first.ID, "exec", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -502,4 +506,105 @@ func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) b
 		}
 	}
 	t.Fatalf("timed out waiting for %s; log:\n%s", what, strings.Join(logs, "\n"))
+}
+
+func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"Review"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.MaxConcurrent = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := func(id string) *store.Task {
+		for _, task := range e.Snapshot().Tasks {
+			if task.ID == id {
+				return task
+			}
+		}
+		return nil
+	}
+	first := e.CreateTask("First", "")
+	if err := e.Move(first.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		s := task(first.ID).Sessions[store.MainSession]
+		if s.Started && s.Activity == store.ActivityIdle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("first agent never went idle: %+v", s)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	firstTmux := task(first.ID).Sessions[store.MainSession].Tmux
+
+	second := e.CreateTask("Second", "")
+	if err := e.Move(second.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if s := task(first.ID).Sessions[store.MainSession]; s.Status != store.StatusSuspended {
+		t.Fatalf("idle agent should be suspended, got %s", s.Status)
+	}
+	if tmux.Has(firstTmux) {
+		t.Error("suspended agent's tmux session is still running")
+	}
+	if s := task(second.ID).Sessions[store.MainSession]; s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
+		t.Fatalf("second agent should be running, got %+v", s)
+	}
+	hasLog := func(task *store.Task, text string) bool {
+		for _, l := range task.Log {
+			if strings.Contains(l.Text, text) {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasLog(task(first.ID), "free a slot for #") || !hasLog(task(second.ID), "to free a slot") {
+		t.Error("both cards should log the suspension")
+	}
+}
+
+func TestBackgroundForkGoesExternal(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Go FORK", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the card to follow the background session", func(task *store.Task) bool {
+		s := task.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusExternal
+	})
+	s := got.Sessions[store.MainSession]
+	if !strings.HasPrefix(s.AgentSessionID, "forked-") || !s.Imported {
+		t.Errorf("session = %s imported=%v, want the forked id", s.AgentSessionID, s.Imported)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for tmux.Has(s.Tmux) {
+		if time.Now().After(deadline) {
+			t.Fatal("blank pane left running")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

@@ -110,6 +110,8 @@ type Snapshot struct {
 	Tasks      []*store.Task
 	// Busy maps task ids to the step a move is on, such as "creating worktree".
 	Busy map[string]string
+	// Running agents count against MaxConcurrent; the rest queue.
+	Running, MaxConcurrent int
 }
 
 func (e *Engine) Snapshot() Snapshot {
@@ -124,7 +126,7 @@ func (e *Engine) Snapshot() Snapshot {
 	for i, t := range e.state.Tasks {
 		tasks[i] = t.Clone()
 	}
-	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy}
+	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy, Running: e.runningCount(), MaxConcurrent: e.MaxConcurrent}
 }
 
 func (e *Engine) setBusy(id, what string) {
@@ -296,12 +298,16 @@ type MoveOptions struct {
 	Message string
 	// Force removes a dirty worktree when moving to Done.
 	Force bool
+	// evict marks a move you made, which may suspend an idle agent to free a
+	// slot; automation moves queue instead.
+	evict bool
 }
 
 // Move transitions a task into the column with id targetID.
 func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
 	_, _, unlock := e.lockGroup(id)
 	defer unlock()
+	opts.evict = true
 	return e.moveLocked(id, targetID, opts)
 }
 
@@ -394,7 +400,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.logf(t, "Not starting an agent: the imported one is still running in its own terminal")
 		return nil
 	default:
-		return e.activate(t, target, from, opts.Message, true)
+		return e.activate(t, target, from, opts.Message, true, opts.evict)
 	}
 }
 
@@ -415,7 +421,7 @@ func (e *Engine) Start(id string) error {
 	if col.IsTodo() || col.IsDone() {
 		return fmt.Errorf("move the task out of %s to start an agent", col.Name)
 	}
-	return e.activate(t, col, col, "", false)
+	return e.activate(t, col, col, "", false, true)
 }
 
 // Suspend stops the task's agents but keeps their conversations to resume.
@@ -548,8 +554,10 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 // activate makes sure the agent for col is running in the task's worktree:
 // an existing session is kept (or respawned when the model changes), a missing
 // one is resumed or started, then the enter group runs. card is the card being
-// moved; the session belongs to its group's owner and now follows card.
-func (e *Engine) activate(card *store.Task, col, from config.Column, message string, runEnter bool) error {
+// moved; the session belongs to its group's owner and now follows card. evict
+// lets a start you asked for suspend the longest-idle agent when every slot is
+// taken.
+func (e *Engine) activate(card *store.Task, col, from config.Column, message string, runEnter, evict bool) error {
 	e.setBusy(card.ID, "starting agent")
 	defer e.setBusy(card.ID, "")
 	e.mu.Lock()
@@ -598,9 +606,14 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	case live && modelChanged:
 		e.logf(t, "Agent settings changed, respawning agent")
 		tmux.Stop(sess.Tmux)
-		if err := e.spawn(t, col, key, worktree, false, ""); err != nil {
+		if err := e.spawn(t, col, key, worktree, false, "", false); err != nil {
 			return err
 		}
+		if message != "" {
+			e.sendMessage(t, key, message, false)
+		}
+	case queued && evict:
+		e.startQueuedNow(t, key)
 		if message != "" {
 			e.sendMessage(t, key, message, false)
 		}
@@ -617,7 +630,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 				prompt += "\n\n" + message
 			}
 		}
-		if err := e.spawn(t, col, key, worktree, fresh, prompt); err != nil {
+		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
 			return err
 		}
 		if !fresh && message != "" {
@@ -664,9 +677,72 @@ func (e *Engine) runningCount() int {
 	return n
 }
 
+// freeSlot suspends the agent on another task that has been idle longest, to
+// make room for a start you asked for. It returns that agent's tmux session to
+// stop, or "" when no agent is idle. Called with mu held.
+func (e *Engine) freeSlot(t *store.Task) string {
+	var victim *store.Session
+	var owner *store.Task
+	for _, o := range e.state.Tasks {
+		if o == t {
+			continue
+		}
+		for _, s := range o.Sessions {
+			if s.Status != store.StatusRunning || s.Activity != store.ActivityIdle || !s.Started || len(s.Pending) > 0 {
+				continue
+			}
+			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
+				victim, owner = s, o
+			}
+		}
+	}
+	if victim == nil {
+		return ""
+	}
+	victim.Status = store.StatusSuspended
+	victim.RespawnPending = false
+	owner.AddLog(fmt.Sprintf("Agent suspended to free a slot for #%d", t.Number))
+	t.AddLog(fmt.Sprintf("Suspended #%d (idle longest) to free a slot", owner.Number))
+	e.notify("#%d suspended to free a slot for #%d", owner.Number, t.Number)
+	return victim.Tmux
+}
+
+// startQueuedNow starts a queued session right away, suspending an idle agent
+// if every slot is taken. The caller holds the task lock.
+func (e *Engine) startQueuedNow(t *store.Task, key string) {
+	stop, name := "", ""
+	start := false
+	e.with(func() {
+		s := t.Sessions[key]
+		if s == nil || s.Status != store.StatusQueued {
+			return
+		}
+		if e.runningCount() >= e.MaxConcurrent {
+			stop = e.freeSlot(t)
+		}
+		if e.runningCount() >= e.MaxConcurrent {
+			return
+		}
+		start = true
+		s.Status = store.StatusRunning
+		s.Activity = store.ActivityStarting
+		s.UpdatedAt = time.Now()
+		e.launching.Store(s.Tmux, true)
+		name = s.Tmux
+	})
+	if stop != "" {
+		tmux.Stop(stop)
+	}
+	if start {
+		defer e.launching.Delete(name)
+		e.launchQueued(t, key)
+	}
+}
+
 // spawn starts the agent in tmux, or queues it when the concurrency limit is
-// reached. The caller holds the task lock.
-func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, fresh bool, prompt string) error {
+// reached; with evict it first tries to suspend an idle agent. The caller
+// holds the task lock.
+func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, fresh bool, prompt string, evict bool) error {
 	dir := e.sessionDir(t, key)
 	events := filepath.Join(dir, "events.jsonl")
 	settings := filepath.Join(dir, "settings.json")
@@ -676,6 +752,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 
 	var launch claude.Launch
 	queue := false
+	stop := ""
 	e.with(func() {
 		if t.Sessions == nil {
 			t.Sessions = map[string]*store.Session{}
@@ -707,6 +784,9 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,
 		}
+		if evict && e.runningCount() >= e.MaxConcurrent {
+			stop = e.freeSlot(t)
+		}
 		if e.runningCount() >= e.MaxConcurrent {
 			queue = true
 			s.Status = store.StatusQueued
@@ -727,6 +807,9 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			s.TurnInVisit = true
 		}
 	})
+	if stop != "" {
+		tmux.Stop(stop)
+	}
 	if queue {
 		return nil
 	}

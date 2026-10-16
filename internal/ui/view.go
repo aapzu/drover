@@ -73,9 +73,12 @@ func (m Model) place(height int, content string) string {
 }
 
 func (m Model) renderHeader() string {
-	var working, waiting, attention int
+	var working, waiting, attention, queued int
 	for _, t := range m.snap.Tasks {
 		for _, s := range t.Sessions {
+			if s.Status == store.StatusQueued {
+				queued++
+			}
 			if s.Status != store.StatusRunning && s.Status != store.StatusExternal {
 				continue
 			}
@@ -102,6 +105,9 @@ func (m Model) renderHeader() string {
 	}
 	if attention > 0 {
 		stats = append(stats, needsYou.Render(fmt.Sprintf("◆ %d need you", attention)))
+	}
+	if queued > 0 {
+		stats = append(stats, muted.Render(fmt.Sprintf("◷ %d queued · %d/%d slots", queued, m.snap.Running, m.snap.MaxConcurrent)))
 	}
 	right := strings.Join(stats, "  ") + " "
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
@@ -250,7 +256,7 @@ func (m Model) status(t *store.Task) string {
 	}
 	switch s.Status {
 	case store.StatusQueued:
-		return muted.Render("◷ queued")
+		return muted.Render(fmt.Sprintf("◷ queued (%d/%d slots busy)", m.snap.Running, m.snap.MaxConcurrent))
 	case store.StatusSuspended:
 		return dim.Render("⏸ suspended")
 	case store.StatusExited:

@@ -195,16 +195,17 @@ func (e *Engine) pollExternal() []func() {
 			continue
 		}
 		l, ok := live[s.AgentSessionID]
-		if !ok {
+		if ok {
+			s.PID = l.PID
+		} else if l, ok = byPID[s.PID]; ok {
 			// /clear keeps the process but starts a new conversation id.
-			if l, ok = byPID[s.PID]; ok {
-				s.AgentSessionID = l.SessionID
-			}
+			s.AgentSessionID = l.SessionID
 		}
 		if !ok {
-			// The registry is Claude Code's internal file and may be mid-write;
-			// only a vanished process means the agent really exited.
-			if claude.ProcessAlive(s.PID) {
+			// The registry is Claude Code's internal file and may be mid-write,
+			// or not list a just-backgrounded session yet; only a vanished
+			// process means the agent really exited.
+			if claude.ProcessAlive(s.PID) || (s.PID == 0 && time.Since(s.UpdatedAt) < 30*time.Second) {
 				continue
 			}
 			s.Status, s.Activity = store.StatusSuspended, store.ActivityIdle
