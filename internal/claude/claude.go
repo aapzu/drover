@@ -120,7 +120,24 @@ type Event struct {
 var (
 	prCommand = regexp.MustCompile(`\bgh\s+(pr\s+create|stack)\b`)
 	prURL     = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+	prAsk     = regexp.MustCompile(`(?i)\b(open|create|raise|submit|put up|make)\s+(((a|an|new|draft)\s+)+(pr|pull request)s?|prs|pull requests)\b`)
+	prNegated = regexp.MustCompile(`(?i)\b(don['’]?t|do not|not|never|no need to|without|before|until)\b[^.?!\n]{0,30}$`)
 )
+
+// AsksForPR reports whether a prompt asks the agent to open a pull request,
+// like "open a PR" or "create pull requests". Slash commands never count.
+func AsksForPR(prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	if strings.HasPrefix(prompt, "/") {
+		return false
+	}
+	for _, m := range prAsk.FindAllStringIndex(prompt, -1) {
+		if !prNegated.MatchString(prompt[max(0, m[0]-64):m[0]]) {
+			return true
+		}
+	}
+	return false
+}
 
 // CreatedPRs returns the pull request URLs a Bash `gh pr create` or
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
@@ -141,18 +158,59 @@ func (e Event) CreatedPRs() []string {
 // ReadEvents returns complete event lines after offset and the new offset.
 // A trailing partial line is left for the next read.
 func ReadEvents(path string, offset int64) ([]Event, int64, error) {
+	var events []Event
+	offset, err := readLines(path, offset, func(line []byte) {
+		var ev Event
+		if json.Unmarshal(line, &ev) == nil && ev.Name != "" {
+			events = append(events, ev)
+		}
+	})
+	return events, offset, err
+}
+
+// TranscriptPRs returns the pull requests Claude Code recorded as created in
+// the transcript after offset, and the new offset.
+func TranscriptPRs(path string, offset int64) ([]string, int64, error) {
+	var urls []string
+	offset, err := readLines(path, offset, func(line []byte) {
+		if !bytes.Contains(line, []byte(`"gitOperation"`)) {
+			return
+		}
+		var entry struct {
+			ToolUseResult struct {
+				GitOperation struct {
+					PR struct {
+						URL    string `json:"url"`
+						Action string `json:"action"`
+					} `json:"pr"`
+				} `json:"gitOperation"`
+			} `json:"toolUseResult"`
+		}
+		if json.Unmarshal(line, &entry) != nil {
+			return
+		}
+		pr := entry.ToolUseResult.GitOperation.PR
+		if pr.Action == "created" && pr.URL != "" && !slices.Contains(urls, pr.URL) {
+			urls = append(urls, pr.URL)
+		}
+	})
+	return urls, offset, err
+}
+
+// readLines calls fn with each complete line after offset and returns the
+// new offset. A trailing partial line is left for the next read.
+func readLines(path string, offset int64, fn func([]byte)) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, offset, nil
+			return offset, nil
 		}
-		return nil, offset, err
+		return offset, err
 	}
 	defer f.Close()
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, err
+		return offset, err
 	}
-	var events []Event
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -160,12 +218,9 @@ func ReadEvents(path string, offset int64) ([]Event, int64, error) {
 			break
 		}
 		offset += int64(len(line))
-		var ev Event
-		if json.Unmarshal(line, &ev) == nil && ev.Name != "" {
-			events = append(events, ev)
-		}
+		fn(line)
 	}
-	return events, offset, nil
+	return offset, nil
 }
 
 // Reply returns the agent's final message for a Stop event, falling back to

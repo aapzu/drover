@@ -101,10 +101,12 @@ type Session struct {
 	Scratch   bool `json:"scratch,omitempty"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
-	Forked         bool      `json:"forked,omitempty"`
-	PID            int       `json:"pid,omitempty"`
-	TranscriptPath string    `json:"transcriptPath,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	Forked         bool   `json:"forked,omitempty"`
+	PID            int    `json:"pid,omitempty"`
+	TranscriptPath string `json:"transcriptPath,omitempty"`
+	// PRScan is how far the current transcript was searched for PRs.
+	PRScan    int64     `json:"prScan,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Issue links a task to a tracker issue, currently Linear.

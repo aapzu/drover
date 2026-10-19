@@ -26,7 +26,7 @@ func (e *Engine) sessionColumn(owner *store.Task) config.Column {
 	return col
 }
 
-func isAgentColumn(c config.Column) bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
+func isAgentColumn(c config.Column) bool { return c.IsAgent() }
 
 // lockGroup takes the lock shared by every card of id's group and returns the
 // card, its owner and the unlock function. card is nil if id is unknown.

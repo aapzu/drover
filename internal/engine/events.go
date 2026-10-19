@@ -90,8 +90,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.TranscriptPath = ev.TranscriptPath
 			}
 			// /clear, /compact and forks continue under a new id; resume that one.
-			if ev.SessionID != "" {
+			if ev.SessionID != "" && ev.SessionID != s.AgentSessionID {
 				s.AgentSessionID = ev.SessionID
+				s.PRScan = 0
 			}
 			// /clear starts a new conversation without a Stop event.
 			if s.Activity == store.ActivityStarting || ev.Source == "clear" {
@@ -106,6 +107,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.TurnInVisit = true
 			if prompt := strings.TrimSpace(ev.Prompt); t.Title == "" && prompt != "" && !strings.HasPrefix(prompt, "/") {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
+			}
+			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
+				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
@@ -201,6 +205,45 @@ func (e *Engine) planExit(taskID string, visit int) {
 			s.TurnInVisit = true
 			s.PermissionMode = e.board.PermissionMode(target)
 			s.RespawnPending = false
+		}
+	})
+}
+
+// prRequested moves the card the agent works for to the prFlow's requested
+// column when you ask the agent to open a PR from an earlier agent column.
+func (e *Engine) prRequested(taskID string, visit int) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	if t == nil || t.Visit != visit || e.board.PRFlow == nil {
+		e.mu.Unlock()
+		return
+	}
+	card := store.Driver(e.state.Tasks, t)
+	col, idx, _ := e.board.Column(card.ColumnID)
+	target, ok := e.board.Find(e.board.PRFlow.Requested)
+	_, targetIdx, _ := e.board.Column(target.ID)
+	e.mu.Unlock()
+	if !ok || !isAgentColumn(col) || idx >= targetIdx {
+		return
+	}
+	e.logf(card, "PR requested, moving to %s", target.Name)
+	if err := e.moveLocked(card.ID, target.ID, MoveOptions{skipEnter: true}); err != nil {
+		e.logf(card, "PR-request move failed: %v", err)
+		return
+	}
+	// A turn that ended during the move had its turn end dropped as
+	// belonging to the previous visit; run it for this one.
+	e.with(func() {
+		s := t.Sessions[sessionKey(target)]
+		if s == nil || s.Status != store.StatusRunning {
+			return
+		}
+		if s.Activity == store.ActivityIdle {
+			go e.runTurnEnd(taskID, sessionKey(target), t.Visit, s.LastReply)
+		} else {
+			s.TurnInVisit = true
 		}
 	})
 }

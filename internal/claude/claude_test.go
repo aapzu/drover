@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -73,5 +74,57 @@ func TestCreatedPRs(t *testing.T) {
 	want := []string{"https://github.com/o/r/pull/12", "https://github.com/o/r/pull/13", "https://github.com/o/r.js/pull/14"}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestTranscriptPRs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	pr := func(n int, action string) string {
+		return fmt.Sprintf(`{"type":"user","toolUseResult":{"stdout":"","gitOperation":{"pr":{"number":%d,"url":"https://github.com/o/r/pull/%d","action":%q}}}}`, n, n, action)
+	}
+	os.WriteFile(path, []byte(strings.Join([]string{
+		pr(1, "created"),
+		`{"type":"user","toolUseResult":"plain text"}`,
+		pr(2, "viewed"),
+		pr(1, "created"),
+		"",
+	}, "\n")+pr(3, "created")), 0o644)
+
+	urls, offset, err := TranscriptPRs(path, 0)
+	if err != nil || !slices.Equal(urls, []string{"https://github.com/o/r/pull/1"}) {
+		t.Fatalf("got %v, err %v", urls, err)
+	}
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString("\n")
+	f.Close()
+	urls, _, _ = TranscriptPRs(path, offset)
+	if !slices.Equal(urls, []string{"https://github.com/o/r/pull/3"}) {
+		t.Errorf("after offset got %v", urls)
+	}
+}
+
+func TestAsksForPR(t *testing.T) {
+	for prompt, want := range map[string]bool{
+		"Looks good, open a PR":                      true,
+		"commit, push and create a pull request":     true,
+		"Please make PRs for both repos.":            true,
+		"Fix the tests. Then open a draft PR":        true,
+		"don't open a PR yet":                        false,
+		"Do not create the pull request":             false,
+		"review the PR comments":                     false,
+		"/pr-review-toolkit:review-pr":               false,
+		"open the file and check the price":          false,
+		"open app.go":                                false,
+		"make sure the PR checks pass":               false,
+		"open the PR and read the comments":          false,
+		"open PR #12 in the browser":                 false,
+		"file a bug about the PR":                    false,
+		"Don’t open a PR yet":                        false,
+		"Do not, under any circumstances, open a PR": false,
+		"Wait before you open a PR":                  false,
+	} {
+		if got := AsksForPR(prompt); got != want {
+			t.Errorf("AsksForPR(%q) = %v, want %v", prompt, got, want)
+		}
 	}
 }
