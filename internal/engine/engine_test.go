@@ -19,6 +19,8 @@ import (
 // fakeClaude stands in for the claude CLI: it records its argv and writes the
 // hook events Claude would, replying "Verdict: Ready" to /code-review and
 // "Findings: applied" to anything else, including messages typed into it.
+// /plan only switches mode, Shift+Tab is ignored, and a worktree it is asked
+// to enter is entered unless FAKE_STAY is set.
 const fakeClaude = `#!/bin/sh
 settings=""; sid=""; prompt=""
 for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_LOG"
@@ -49,6 +51,8 @@ turn() {
     *ONEPR*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}';;
     *PUSH*) cp "$FAKE_PUSH" "$FAKE_GH";;
+    *EnterWorktree*)
+      [ -z "$FAKE_STAY" ] && emit "{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"EnterWorktree\",\"cwd\":\"$(printf '%s' "$1" | sed -n 's/.*with path "\([^"]*\)".*/\1/p')\"}";;
     *FORK*)
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"fork\",\"session_id\":\"forked-$sid\"}"
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"startup\",\"session_id\":\"blank-$sid\"}";;
@@ -61,7 +65,13 @@ turn() {
 }
 emit "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$sid\"}"
 [ -n "$prompt" ] && turn "$prompt"
-while IFS= read -r line; do echo "typed:$line" >> "$FAKE_LOG"; turn "$line"; done
+while IFS= read -r line; do
+  echo "typed:$line" >> "$FAKE_LOG"
+  case "$line" in
+    /plan) echo "  ⏸ plan mode on (shift+tab to cycle)";;
+    *) turn "$line";;
+  esac
+done
 `
 
 const testBoard = `{
@@ -1143,8 +1153,11 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug\nIt fails on Safari"}` + "\n")
+	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"On it."}` + "\n")
 	events.Close()
-	waitFor(t, e, "title from the first prompt", func(t *store.Task) bool { return t.Title == "Fix the login bug" })
+	waitFor(t, e, "title from the first prompt", func(t *store.Task) bool {
+		return t.Title == "Fix the login bug" && t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
 
 	transcript := claude.TranscriptPath(sid, root)
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
@@ -1170,4 +1183,141 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
 		return strings.Contains(readFile(log), "--resume\n"+sid)
 	})
+}
+
+func TestMoveSwitchesSettingsInPlace(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","modelOverride":"opus"},
+	  {"id":"review","name":"Review","autoSpawn":true,"permissionMode":"plan","modelOverride":"sonnet"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Retune", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && s.Started
+	})
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	s := e.Snapshot().Tasks[0].Sessions[store.MainSession]
+	if s.PermissionMode != "plan" || s.Status != store.StatusRunning {
+		t.Errorf("not switched in place: mode=%s status=%s", s.PermissionMode, s.Status)
+	}
+	if got := readFile(log); strings.Count(got, "---") != 1 || !strings.Contains(got, "typed:/plan") {
+		t.Errorf("want /plan typed into the running agent:\n%s", got)
+	}
+
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || !strings.Contains(l, "--permission-mode\nacceptEdits") {
+		t.Errorf("restart should resume in Executing's mode:\n%s", l)
+	}
+
+	waitFor(t, e, "the restarted agent to settle", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart with the new model", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 3
+	})
+	if got := readFile(log); strings.Contains(got, "typed:/model") || !strings.Contains(strings.Split(got, "---")[2], "--model\nsonnet") {
+		t.Errorf("model change should restart with --model sonnet:\n%s", got)
+	}
+}
+
+func TestRunningSessionEntersWorktree(t *testing.T) {
+	for _, stays := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stays=%v", stays), func(t *testing.T) {
+			root, log := setupProject(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			if stays {
+				t.Setenv("FAKE_STAY", "1")
+			}
+			os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+			  {"id":"todo","name":"To Do","role":"todo"},
+			  {"id":"exec","name":"Executing","autoSpawn":true},
+			  {"id":"opus","name":"Opus","autoSpawn":true,"modelOverride":"opus"},
+			  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go e.Run(ctx)
+
+			task, err := e.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s != nil && s.Activity == store.ActivityIdle
+			})
+			if err := e.Send(task.ID, "hello"); err != nil {
+				t.Fatal(err)
+			}
+			ready := waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s.Activity == store.ActivityIdle && s.Started
+			})
+			sid := ready.Sessions[store.MainSession].AgentSessionID
+			transcript := claude.TranscriptPath(sid, root)
+			os.MkdirAll(filepath.Dir(transcript), 0o755)
+			os.WriteFile(transcript, []byte("{}\n"), 0o644)
+			if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			if !stays {
+				moved := waitFor(t, e, "the agent to enter the worktree", func(t *store.Task) bool {
+					s := t.Sessions[store.MainSession]
+					return s.Relocate == "" && s.Activity == store.ActivityIdle && t.WorktreePath != ""
+				})
+				if s := moved.Sessions[store.MainSession]; s.Scratch || s.Status != store.StatusRunning {
+					t.Errorf("scratch=%v status=%s", s.Scratch, s.Status)
+				}
+				if n := strings.Count(readFile(log), "---"); n != 1 {
+					t.Errorf("want the agent kept running, got %d launches", n)
+				}
+				if err := e.Move(task.ID, "opus", MoveOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				waitForAll(t, e, "the agent to restart with the new model", func([]*store.Task) bool {
+					return strings.Count(readFile(log), "---") >= 2
+				})
+				if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume\n"+sid) {
+					t.Errorf("restart should resume the conversation:\n%s", l)
+				}
+				if _, err := os.Stat(claude.TranscriptPath(sid, moved.WorktreePath)); err != nil {
+					t.Errorf("transcript not carried into the worktree's project: %v", err)
+				}
+				return
+			}
+			waitForAll(t, e, "the agent to restart in the worktree", func([]*store.Task) bool {
+				return strings.Count(readFile(log), "---") >= 2
+			})
+			if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume\n"+sid) {
+				t.Errorf("restart should resume the conversation:\n%s", l)
+			}
+		})
+	}
 }

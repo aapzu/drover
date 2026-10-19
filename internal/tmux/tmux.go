@@ -165,6 +165,11 @@ func Capture(name string, scrollback int) (string, int, error) {
 	return out, history, err
 }
 
+// Screen returns the visible screen as plain text.
+func Screen(name string) (string, error) {
+	return run("capture-pane", "-p", "-t", "="+name+":")
+}
+
 func Interrupt(name string) error {
 	_, err := run("send-keys", "-t", "="+name+":", "Escape")
 	return err

@@ -111,6 +111,8 @@ type Event struct {
 	Prompt               string `json:"prompt"`
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	PermissionMode       string `json:"permission_mode"`
+	Cwd                  string `json:"cwd"`
 	ToolInput            struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
@@ -153,6 +155,29 @@ func (e Event) CreatedPRs() []string {
 		}
 	}
 	return urls
+}
+
+var modeIndicators = []struct{ text, mode string }{
+	{"plan mode", "plan"},
+	{"accept edits", "acceptEdits"},
+	{"auto mode", "auto"},
+	{"bypass permissions", "bypassPermissions"},
+	{"don't ask", "dontAsk"},
+	{"manual mode", "default"},
+}
+
+// ScreenMode returns the permission mode shown at the bottom of a plain
+// Claude Code screen, or "" when none is shown.
+func ScreenMode(screen string) string {
+	lines := strings.Split(strings.TrimRight(screen, "\n "), "\n")
+	for i := len(lines) - 1; i >= max(0, len(lines)-6); i-- {
+		for _, m := range modeIndicators {
+			if strings.Contains(lines[i], m.text) {
+				return m.mode
+			}
+		}
+	}
+	return ""
 }
 
 // ReadEvents returns complete event lines after offset and the new offset.

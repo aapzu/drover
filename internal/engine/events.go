@@ -75,6 +75,13 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 	taskID, visit, number := t.ID, t.Visit, t.Number
 	var out []func()
 	for _, ev := range events {
+		if ev.PermissionMode != "" {
+			s.PermissionMode = ev.PermissionMode
+		}
+		if s.Relocate != "" && (ev.Name == "Stop" || ev.ToolName == "EnterWorktree") && sameDir(ev.Cwd, s.Relocate) {
+			s.Relocate = ""
+			t.AddLog("Agent moved into the worktree")
+		}
 		switch ev.Name {
 		case "SessionStart":
 			if ev.Source == "startup" && s.Started && ev.SessionID != s.AgentSessionID {
@@ -131,17 +138,21 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true
-			if s.RespawnPending {
-				out = append(out, func() { e.respawnPending(taskID, key) })
+			if s.Relocate != "" {
+				s.RespawnPending = true
 			}
 			reply := ev.Reply()
 			s.LastReply = reply
+			next := func() { e.flushPending(e.taskByID(taskID), key) }
 			if s.TurnInVisit {
 				s.TurnInVisit = false
-				out = append(out, func() { e.runTurnEnd(taskID, key, visit, reply) })
-			} else {
-				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
+				next = func() { e.runTurnEnd(taskID, key, visit, reply) }
 			}
+			if s.RespawnPending {
+				then := next
+				next = func() { e.respawnPending(taskID, key); then() }
+			}
+			out = append(out, next)
 		}
 	}
 	return out
@@ -248,8 +259,9 @@ func (e *Engine) prRequested(taskID string, visit int) {
 	})
 }
 
-// respawnPending restarts an agent whose card moved mid-turn into a column
-// with another permission mode, resuming its conversation.
+// respawnPending switches an agent whose card moved mid-turn into a column
+// with other settings, in place or by resuming its conversation, and restarts
+// one that was asked to move into its worktree but didn't.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -263,8 +275,10 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		sessionKey(col) == key && s.PermissionMode != mode
+		sessionKey(col) == key && (s.Relocate != "" || settingsDiffer(s, col, mode))
+	relocate := ""
 	if s != nil {
+		relocate = s.Relocate
 		s.RespawnPending = false
 	}
 	worktree := ""
@@ -275,9 +289,9 @@ func (e *Engine) respawnPending(taskID, key string) {
 	if !due {
 		return
 	}
-	e.logf(t, "Turn ended, respawning agent in %s mode", mode)
-	tmux.Stop(s.Tmux)
-	if err := e.spawn(t, col, key, worktree, false, "", false); err != nil {
+	if relocate != "" {
+		e.relocateByRespawn(t, s, col, key, relocate)
+	} else if _, err := e.switchSettings(t, key, col, worktree); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
 	}
 }
@@ -361,4 +375,15 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)
+}
+
+// sameDir reports whether a and b are the same directory, through symlinks
+// such as macOS's /var → /private/var.
+func sameDir(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }

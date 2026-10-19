@@ -8,12 +8,14 @@
 package engine
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -681,6 +683,19 @@ func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) 
 		path = claude.TranscriptPath(s.AgentSessionID, e.Root)
 	}
 	e.mu.Unlock()
+	moved, err := e.moveConversation(t, path, worktree)
+	switch {
+	case err != nil && !moved:
+		e.notify("#%d: couldn't move the conversation into the worktree, starting a new one: %v", t.Number, err)
+	case !moved && started:
+		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
+	}
+	e.with(func() { s.Started, s.TranscriptPath, s.Scratch = moved, "", false })
+}
+
+// moveConversation moves the transcript at path into worktree's project and
+// logs how that went.
+func (e *Engine) moveConversation(t *store.Task, path, worktree string) (bool, error) {
 	moved, err := claude.MoveTranscript(path, worktree)
 	switch {
 	case moved && err != nil:
@@ -688,13 +703,133 @@ func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) 
 	case moved:
 		e.logf(t, "Moved the conversation into the worktree")
 	case err != nil:
-		e.logf(t, "Moving the conversation into the worktree failed, starting over: %v", err)
-		e.notify("#%d: couldn't move the conversation into the worktree, starting a new one: %v", t.Number, err)
-	case started:
-		e.logf(t, "No conversation found at %s, starting over", path)
-		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
+		e.logf(t, "Moving the conversation into the worktree failed: %v", err)
+	default:
+		e.logf(t, "No conversation found at %s", path)
 	}
-	e.with(func() { s.Started, s.TranscriptPath, s.Scratch = moved, "", false })
+	return moved, err
+}
+
+// relocateLive keeps a running scratch conversation alive across the move,
+// and returns the request asking it to switch into worktree itself. It
+// declines, leaving the restart to the caller, when there is nothing to keep.
+func (e *Engine) relocateLive(t *store.Task, s *store.Session, col config.Column, worktree string, runEnter bool) (store.Pending, bool) {
+	e.mu.Lock()
+	ok := sessionKey(col) == store.MainSession && !(runEnter && col.AlwaysSpawnNew()) &&
+		s.Status == store.StatusRunning && s.Started
+	name, branch := s.Tmux, t.Branch
+	e.mu.Unlock()
+	if !ok || !tmux.Has(name) {
+		return store.Pending{}, false
+	}
+	e.with(func() { s.Scratch = false })
+	e.logf(t, "Asking the agent to move into the worktree")
+	return store.Pending{Relocate: worktree, Text: fmt.Sprintf("This task now has its own git worktree at %s on branch %s. "+
+		"Call the EnterWorktree tool with path %q to switch into it, and do all further work there.", worktree, branch, worktree)}, true
+}
+
+// relocateByRespawn resumes an agent that did not move into worktree when
+// asked, in a new process there.
+func (e *Engine) relocateByRespawn(t *store.Task, s *store.Session, col config.Column, key, worktree string) {
+	e.logf(t, "The agent didn't move into the worktree, restarting it there")
+	e.mu.Lock()
+	name := s.Tmux
+	e.mu.Unlock()
+	tmux.Stop(name)
+	e.adoptScratch(t, s, worktree)
+	e.mu.Lock()
+	fresh := !s.Started
+	e.mu.Unlock()
+	if err := e.spawn(t, col, key, worktree, fresh, "", false); err != nil {
+		e.logf(t, "Respawn failed: %v", err)
+	}
+}
+
+// carryTranscript moves a conversation that switched into worktree while
+// running, and so is still recorded under the main checkout, next to it so
+// `claude --resume` finds it there.
+func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
+	e.mu.Lock()
+	id := t.Sessions[key].AgentSessionID
+	e.mu.Unlock()
+	if _, err := os.Stat(claude.TranscriptPath(id, worktree)); err == nil {
+		return
+	}
+	e.moveConversation(t, claude.TranscriptPath(id, e.Root), worktree)
+}
+
+// settingsDiffer reports whether s runs with other settings than col wants.
+func settingsDiffer(s *store.Session, col config.Column, mode string) bool {
+	return s.PermissionMode != mode || s.Model != col.ModelOverride || s.Effort != col.EffortOverride
+}
+
+// switchSettings moves a live, idle agent to col's settings, in place when it
+// can and by resuming it in a new process otherwise, which it reports.
+func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, worktree string) (restarted bool, err error) {
+	if e.retune(t, key, col) {
+		return false, nil
+	}
+	e.mu.Lock()
+	name := t.Sessions[key].Tmux
+	e.mu.Unlock()
+	tmux.Stop(name)
+	return true, e.spawn(t, col, key, worktree, false, "", false)
+}
+
+// retune switches a running agent to col's permission mode as you would,
+// and reports whether it did. A model or effort change needs a restart:
+// /model and /effort save your pick as the default for every new session. It
+// leaves Activity alone: switching modes starts no turn.
+func (e *Engine) retune(t *store.Task, key string, col config.Column) bool {
+	e.mu.Lock()
+	s := t.Sessions[key]
+	name, mode := s.Tmux, s.PermissionMode
+	same := s.Model == col.ModelOverride && s.Effort == col.EffortOverride
+	want := e.board.PermissionMode(col)
+	e.mu.Unlock()
+	if !same {
+		return false
+	}
+
+	defer e.lockTyping(name)()
+	var err error
+	if mode != want {
+		err = switchMode(name, want)
+	}
+	e.with(func() {
+		if err == nil {
+			s.PermissionMode = want
+			t.AddLog(fmt.Sprintf("Switched agent to %s mode in place", want))
+		} else {
+			t.AddLog(fmt.Sprintf("Couldn't switch the agent to %s mode in place, restarting it: %v", want, err))
+		}
+	})
+	return err == nil
+}
+
+// switchMode puts the agent in mode: /plan for plan mode, otherwise
+// Shift+Tab until the screen shows it, as you would.
+func switchMode(name, mode string) error {
+	if mode == "plan" {
+		if err := tmux.SendText(name, "/plan"); err != nil {
+			return err
+		}
+	}
+	seen := ""
+	for range 6 {
+		time.Sleep(300 * time.Millisecond)
+		screen, err := tmux.Screen(name)
+		if err != nil {
+			return err
+		}
+		if seen = claude.ScreenMode(screen); seen == mode {
+			return nil
+		}
+		if err := tmux.SendKey(name, "BTab"); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("the screen shows %q", cmp.Or(seen, "no mode"))
 }
 
 // scratchSession returns t's conversation while it still runs in the main
@@ -816,6 +951,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	scratch := scratchSession(t)
 	e.mu.Unlock()
 	worktree := e.Root
+	var relocation store.Pending
 	if scratch == nil || !col.IsTodo() {
 		var err error
 		if worktree, err = e.ensureWorktree(t, card.ID); err != nil {
@@ -824,8 +960,12 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 			return err
 		}
 		if scratch != nil {
-			e.stopSessions(t, "", store.StatusSuspended)
-			e.adoptScratch(t, scratch, worktree)
+			if p, ok := e.relocateLive(t, scratch, col, worktree, runEnter); ok {
+				relocation = p
+			} else {
+				e.stopSessions(t, "", store.StatusSuspended)
+				e.adoptScratch(t, scratch, worktree)
+			}
 		}
 	}
 	e.with(func() { t.ActiveCard = card.ID })
@@ -837,17 +977,13 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	live := sess != nil && sess.Status == store.StatusRunning && tmux.Has(sess.Tmux)
 	queued := sess != nil && sess.Status == store.StatusQueued
 	started := sess != nil && sess.Started
-	// A permission change never kills a turn in progress: a busy agent is
-	// respawned when its turn ends.
 	mode := e.board.PermissionMode(col)
-	permissionChanged := live && sess.PermissionMode != mode
-	modelChanged := live && (sess.Model != col.ModelOverride || sess.Effort != col.EffortOverride ||
-		(permissionChanged && sess.Activity == store.ActivityIdle))
-	deferRespawn := permissionChanged && !modelChanged
+	changed := live && settingsDiffer(sess, col, mode)
+	busy := changed && sess.Activity != store.ActivityIdle && sess.Activity != store.ActivityStarting
 	e.mu.Unlock()
-	if deferRespawn {
+	if busy {
 		e.with(func() { sess.RespawnPending = true })
-		e.logf(t, "Agent switches to %s mode when its current turn ends", mode)
+		e.logf(t, "Agent switches to %s's settings when its current turn ends", col.Name)
 	}
 
 	enter := col.Automations.OnEnter
@@ -862,24 +998,17 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	}
 
 	switch {
-	case live && modelChanged:
-		e.logf(t, "Agent settings changed, respawning agent")
-		tmux.Stop(sess.Tmux)
-		if err := e.spawn(t, col, key, worktree, false, "", false); err != nil {
+	case live && changed && !busy:
+		restarted, err := e.switchSettings(t, key, col, worktree)
+		if err != nil {
 			return err
 		}
-		if message != "" {
-			e.sendMessage(t, key, message, false)
+		if restarted {
+			relocation = store.Pending{}
 		}
 	case queued && evict:
 		e.startQueuedNow(t, key)
-		if message != "" {
-			e.sendMessage(t, key, message, false)
-		}
 	case live || queued:
-		if message != "" {
-			e.sendMessage(t, key, message, false)
-		}
 	default:
 		fresh := !started || (runEnter && col.AlwaysSpawnNew())
 		prompt := ""
@@ -887,14 +1016,18 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 			prompt, enter = e.initialPrompt(card, col, enter, gc)
 			if message != "" {
 				prompt += "\n\n" + message
+				message = ""
 			}
 		}
 		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
 			return err
 		}
-		if !fresh && message != "" {
-			e.sendMessage(t, key, message, false)
-		}
+	}
+	if relocation.Text != "" {
+		e.sendPending(t, key, relocation, false)
+	}
+	if message != "" {
+		e.sendMessage(t, key, message, false)
 	}
 	e.runGroup(card, col, "enter", enter, gc)
 	return nil
@@ -1012,6 +1145,10 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		return err
 	}
 
+	if !fresh && worktree != e.Root {
+		e.carryTranscript(t, key, worktree)
+	}
+
 	var launch claude.Launch
 	queue := false
 	stop := ""
@@ -1036,6 +1173,8 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		}
 		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, e.board.PermissionMode(col)
 		s.RespawnPending = false
+		s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool { return p.Relocate != "" })
+		s.Relocate = ""
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
@@ -1120,6 +1259,12 @@ func describeLaunch(l claude.Launch) string {
 // sendMessage delivers text to the agent now if it is idle; otherwise it is
 // queued until the turn ends. immediate interrupts a running turn first.
 func (e *Engine) sendMessage(t *store.Task, key, text string, immediate bool) {
+	e.sendPending(t, key, store.Pending{Text: text}, immediate)
+}
+
+// sendPending is sendMessage for a queued message. Typing a relocation
+// request starts watching for the move; its reply is no turn of the column's.
+func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immediate bool) {
 	e.mu.Lock()
 	s := t.Sessions[key]
 	if s == nil {
@@ -1131,28 +1276,37 @@ func (e *Engine) sendMessage(t *store.Task, key, text string, immediate bool) {
 		(s.Activity == store.ActivityThinking || s.Activity == store.ActivityPermission)
 	name := s.Tmux
 	if !ready && !interrupt {
-		s.Pending = append(s.Pending, store.Pending{Text: text})
+		s.Pending = append(s.Pending, p)
 		e.mu.Unlock()
 		return
 	}
 	// Claim the turn before typing so a concurrent sender queues instead.
 	s.Activity = store.ActivityThinking
-	s.TurnInVisit = true
+	s.TurnInVisit = p.Relocate == ""
+	if p.Relocate != "" {
+		s.Relocate = p.Relocate
+	}
 	e.mu.Unlock()
 
-	typing, _ := e.typing.LoadOrStore(name, &sync.Mutex{})
-	typing.(*sync.Mutex).Lock()
-	defer typing.(*sync.Mutex).Unlock()
+	defer e.lockTyping(name)()
 	if interrupt {
 		tmux.Interrupt(name)
 		time.Sleep(700 * time.Millisecond)
 	}
-	if err := tmux.SendText(name, text); err != nil {
+	if err := tmux.SendText(name, p.Text); err != nil {
 		e.with(func() {
 			s.Activity = store.ActivityIdle
+			s.Relocate = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		})
 	}
+}
+
+// lockTyping serializes typing into the tmux session name.
+func (e *Engine) lockTyping(name string) func() {
+	typing, _ := e.typing.LoadOrStore(name, &sync.Mutex{})
+	typing.(*sync.Mutex).Lock()
+	return typing.(*sync.Mutex).Unlock
 }
 
 // Send is the user typing a message for the task's current agent.
