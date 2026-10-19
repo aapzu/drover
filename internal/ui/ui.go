@@ -47,6 +47,7 @@ type actionDoneMsg struct {
 	retryDone func() tea.Cmd
 }
 type attachDoneMsg struct{ err error }
+type suspendAllMsg struct{}
 
 type Model struct {
 	eng    *engine.Engine
@@ -86,6 +87,8 @@ type Model struct {
 
 	confirmText   string
 	confirmAction func() tea.Cmd
+
+	suspendAll bool
 
 	detail viewport.Model
 
@@ -296,6 +299,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + msg.err.Error())
 		}
 		return m, nil
+	case suspendAllMsg:
+		m.suspendAll = true
+		return m, tea.Quit
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.setFlash("Attach failed: " + msg.err.Error())
@@ -392,6 +398,22 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "Q":
+		n := 0
+		for _, task := range m.snap.Tasks {
+			for _, s := range task.Sessions {
+				if s.Status == store.StatusRunning || s.Status == store.StatusQueued {
+					n++
+				}
+			}
+		}
+		if n == 0 {
+			m.setFlash("No agents running. Press q to quit.")
+			break
+		}
+		m.mode = modeConfirm
+		m.confirmText = fmt.Sprintf("Suspend all %d agents and quit? You can continue them with claude --resume. (y/N)", n)
+		m.confirmAction = func() tea.Cmd { return func() tea.Msg { return suspendAllMsg{} } }
 	case "?":
 		m.mode = modeHelp
 	case "left", "h":
@@ -677,6 +699,10 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cmd := m.moveCmd(t, target)
 	return m, cmd
 }
+
+// SuspendAllRequested reports whether the board quit with Q, asking main to
+// suspend every agent.
+func (m Model) SuspendAllRequested() bool { return m.suspendAll }
 
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeBoard

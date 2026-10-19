@@ -124,7 +124,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  n new  enter attach  tab type into agent  s send  r start  S suspend  +/- </> resize  z density  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  H/L move  n new  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
 		modeLive:    "LIVE: every key goes to the agent  ctrl+q back to board  mouse wheel scrolls",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
@@ -536,6 +536,7 @@ func (m Model) renderHelp() string {
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"W", "write the default board to kangentic.json"},
 		{"q", "quit (agents keep running in tmux)"},
+		{"Q", "suspend every agent and quit, printing claude --resume commands"},
 	}
 	section := func(title string, rows [][2]string) string {
 		lines := []string{bold.Render(title), ""}

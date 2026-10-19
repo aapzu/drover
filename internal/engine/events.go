@@ -85,7 +85,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				continue
 			}
 			s.Forked = ev.Source == "fork"
-			if s.Forked && ev.TranscriptPath != "" {
+			if ev.TranscriptPath != "" {
 				s.TranscriptPath = ev.TranscriptPath
 			}
 			// /clear, /compact and forks continue under a new id; resume that one.

@@ -280,7 +280,7 @@ func (e *Engine) render(t *store.Task, tpl string, gc groupContext, escape strin
 		}
 		switch escape {
 		case "shell":
-			return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
+			return claude.ShellQuote(v)
 		case "json":
 			b, _ := json.Marshal(v)
 			return string(b[1 : len(b)-1])
