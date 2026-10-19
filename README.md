@@ -73,7 +73,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 
 - **Same board file.** Columns come from `kangentic.json` at the repo root,
   in the desktop app's format, so you and your teammates share one board. With
-  no file it uses a built-in default; press `W` to write it out.
+  no file it uses a built-in default (To Do, Planning, Executing,
+  Self-review, In review, Verify in develop, Done); press `W` to write it out.
   `kangentic.local.json` can override `defaultBaseBranch`.
 - **Worktree per task.** Entering an agent column creates
   `.kangentic/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
@@ -100,9 +101,9 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 
 ## One card per pull request
 
-When an agent opens a second pull request (`gh pr create` or `gh stack`), the
-board splits its card. Every PR gets its own card in the column the agent is
-working in. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker
+Every pull request an agent opens (`gh pr create` or `gh stack`) gets its own
+card. The session's card stays where the work is, so one session can ship
+several PRs. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker
 has the same color on every card of the group.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
@@ -116,8 +117,37 @@ has the same color on every card of the group.
 - Deleting a card removes only that card while others remain.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
-- Titles, branches and states come from `gh pr view` when the PR is detected.
-  They are not refreshed after that.
+- `gh pr view` refreshes every open PR's card once a minute. Cards
+  show `✓ approved`, `✗ changes`, `merged` and `released`.
+
+### Following a PR to release
+
+`prFlow` in `kangentic.json` moves PR cards as their PR progresses. Targets are
+column ids or names; leave one out to keep cards where they are. The default
+board uses:
+
+```json
+"prFlow": {
+  "opened": "in-review",
+  "changesRequested": "executing",
+  "changesRequestedMessage": "PR #{{prNumber}} got review comments…",
+  "merged": "verify",
+  "released": "done"
+}
+```
+
+- **opened:** where a new PR card goes.
+- **changesRequested:** a new review requesting changes moves a card from
+  `opened` here and sends the agent `changesRequestedMessage`. Once the agent
+  has pushed a new head and is idle, the card goes back to `opened`.
+- **merged:** where a merged PR card goes, for example to verify it in a
+  develop environment.
+- **released:** once the merge commit reaches `releaseBranch` on origin
+  (default `master`, else `main`), a card in `merged` moves here.
+
+Moves only happen when the PR changes, so a card you move by hand stays put.
+The session card never moves by itself; you get a notice once all its PRs are
+released.
 
 ## Importing Claude Code agents
 
@@ -157,8 +187,7 @@ fetches any issue by key or URL.
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only. Not yet
-  supported: workflows, the MCP board tools, live PR status, and multi-project
-  view.
+  supported: workflows, the MCP board tools and multi-project view.
 
 ## Migrating from kangentic-tui
 

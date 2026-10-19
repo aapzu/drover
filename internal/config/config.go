@@ -18,6 +18,18 @@ type Board struct {
 	DefaultBaseBranch     string   `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string   `json:"defaultPermissionMode,omitempty"`
 	Columns               []Column `json:"columns"`
+	PRFlow                *PRFlow  `json:"prFlow,omitempty"`
+}
+
+// PRFlow moves the cards of pull requests as they progress on GitHub. Each
+// target is a column id or name; an empty one leaves cards where they are.
+type PRFlow struct {
+	Opened                  string `json:"opened,omitempty"`
+	ChangesRequested        string `json:"changesRequested,omitempty"`
+	ChangesRequestedMessage string `json:"changesRequestedMessage,omitempty"`
+	Merged                  string `json:"merged,omitempty"`
+	Released                string `json:"released,omitempty"`
+	ReleaseBranch           string `json:"releaseBranch,omitempty"`
 }
 
 type Column struct {
@@ -109,6 +121,13 @@ func (b *Board) validate() error {
 		}
 		seen[c.ID] = true
 	}
+	if f := b.PRFlow; f != nil {
+		for _, ref := range []string{f.Opened, f.ChangesRequested, f.Merged, f.Released} {
+			if _, ok := b.Find(ref); ref != "" && !ok {
+				return fmt.Errorf("%s: prFlow names unknown column %q", FileName, ref)
+			}
+		}
+	}
 	return nil
 }
 
@@ -181,8 +200,19 @@ func Default() *Board {
 			{ID: "todo", Name: "To Do", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
-			{ID: "review", Name: "Review", Color: "#f59e0b"},
+			{ID: "self-review", Name: "Self-review", Color: "#06b6d4", AutoSpawn: true,
+				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
+			{ID: "in-review", Name: "In review", Color: "#f59e0b"},
+			{ID: "verify", Name: "Verify in develop", Color: "#ec4899"},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+		},
+		PRFlow: &PRFlow{
+			Opened:           "in-review",
+			ChangesRequested: "executing",
+			ChangesRequestedMessage: "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` " +
+				"and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",
+			Merged:   "verify",
+			Released: "done",
 		},
 	}
 }

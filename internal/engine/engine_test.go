@@ -40,6 +40,9 @@ turn() {
     *PRS*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/2\\n"}}';;
+    *ONEPR*)
+      emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}';;
+    *PUSH*) cp "$FAKE_PUSH" "$FAKE_GH";;
     *FORK*)
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"fork\",\"session_id\":\"forked-$sid\"}"
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"startup\",\"session_id\":\"blank-$sid\"}";;
@@ -422,71 +425,188 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The turn opened two PRs, then its turn-end automation moved only the
-	// card the agent was working for.
-	var owner, split *store.Task
-	waitForAll(t, e, "split card titled by gh, owner shipped to review", func(tasks []*store.Task) bool {
-		if len(tasks) != 2 {
+	var owner, one, two *store.Task
+	waitForAll(t, e, "PR cards titled by gh, owner shipped to review", func(tasks []*store.Task) bool {
+		if len(tasks) != 3 {
 			return false
 		}
-		owner, split = tasks[0], tasks[1]
-		return owner.ColumnID == "review" && split.Title == "PR two"
+		owner, one, two = tasks[0], tasks[1], tasks[2]
+		return owner.ColumnID == "review" && one.Title == "PR one" && two.Title == "PR two"
 	})
-	if owner.PR == nil || owner.PR.Number != 1 || split.PR == nil || split.PR.Number != 2 || split.PR.Branch != "two" {
-		t.Fatalf("PRs: owner %+v, split %+v", owner.PR, split.PR)
+	if owner.PR != nil || one.PR == nil || one.PR.Number != 1 || two.PR == nil || two.PR.Number != 2 || two.PR.Branch != "two" {
+		t.Fatalf("PRs: owner %+v, one %+v, two %+v", owner.PR, one.PR, two.PR)
 	}
-	if split.GroupID != owner.ID || split.ColumnID != "exec" || len(split.Sessions) != 0 {
-		t.Fatalf("split card: group %q column %q sessions %d", split.GroupID, split.ColumnID, len(split.Sessions))
+	for _, card := range []*store.Task{one, two} {
+		if card.GroupID != owner.ID || card.ColumnID != "exec" || len(card.Sessions) != 0 {
+			t.Fatalf("PR card: group %q column %q sessions %d", card.GroupID, card.ColumnID, len(card.Sessions))
+		}
 	}
-	if owner.ActiveCard != split.ID {
-		t.Errorf("active card = %q, want the split card", owner.ActiveCard)
+	if owner.ActiveCard != two.ID {
+		t.Errorf("active card = %q, want PR two's", owner.ActiveCard)
 	}
 	ownerTmux, ok1 := e.LiveSession(owner.ID)
-	splitTmux, ok2 := e.LiveSession(split.ID)
-	if !ok1 || !ok2 || ownerTmux != splitTmux {
-		t.Fatalf("cards don't share a live session: %q %v, %q %v", ownerTmux, ok1, splitTmux, ok2)
+	twoTmux, ok2 := e.LiveSession(two.ID)
+	if !ok1 || !ok2 || ownerTmux != twoTmux {
+		t.Fatalf("cards don't share a live session: %q %v, %q %v", ownerTmux, ok1, twoTmux, ok2)
 	}
 
-	// A message from either card reaches the shared agent. Its turn end now
-	// runs for the split card, which has its own automation counter.
 	waitForAll(t, e, "agent idle", func(tasks []*store.Task) bool {
 		return tasks[0].Sessions[store.MainSession].Activity == store.ActivityIdle
 	})
-	if err := e.Send(split.ID, "hello"); err != nil {
+	if err := e.Send(one.ID, "hello"); err != nil {
 		t.Fatal(err)
 	}
-	waitForAll(t, e, "split card shipped too, agent suspended", func(tasks []*store.Task) bool {
-		return tasks[1].ColumnID == "review" && tasks[0].Sessions[store.MainSession].Status == store.StatusSuspended
-	})
+	waitForAll(t, e, "PR two shipped too", func(tasks []*store.Task) bool { return tasks[2].ColumnID == "review" })
 	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "typed:hello") {
 		t.Errorf("message not delivered:\n%s", data)
+	}
+	if err := e.Move(one.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusSuspended {
+		t.Fatalf("agent %s with no card in an agent column", s.Status)
 	}
 
 	// The worktree stays until every card is done.
 	worktree := e.Snapshot().Tasks[0].WorktreePath
-	if err := e.Move(owner.ID, "done", MoveOptions{}); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{owner.ID, one.ID} {
+		if err := e.Move(id, "done", MoveOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := os.Stat(worktree); err != nil {
 		t.Fatalf("worktree removed while a card is still in review: %v", err)
 	}
-	if err := e.Move(split.ID, "done", MoveOptions{}); err != nil {
+	if err := e.Move(two.ID, "done", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
 		t.Fatalf("worktree kept after every card is done: %v", err)
 	}
 
-	// Deleting the owner hands the session to the remaining card.
 	if err := e.DeleteTask(owner.ID); err != nil {
 		t.Fatal(err)
 	}
 	tasks := e.Snapshot().Tasks
-	if len(tasks) != 1 || tasks[0].ID != split.ID || tasks[0].GroupID != "" || tasks[0].Sessions[store.MainSession] == nil {
+	if len(tasks) != 2 || tasks[0].ID != one.ID || tasks[0].GroupID != "" || tasks[1].GroupID != one.ID ||
+		tasks[0].Sessions[store.MainSession] == nil {
 		t.Fatalf("after deleting the owner: %+v", tasks)
 	}
 	if dir := tasks[0].Sessions[store.MainSession].Dir; !strings.Contains(dir, owner.ID) {
 		t.Errorf("session dir = %q, want the original owner's", dir)
+	}
+}
+
+const flowBoard = `{
+  "version": 1,
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "review", "name": "In review"},
+    {"id": "verify", "name": "Verify"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ],
+  "prFlow": {"opened": "In review", "changesRequested": "exec", "changesRequestedMessage": "FIX {{prNumber}}",
+    "merged": "verify", "released": "done", "releaseBranch": "main"}
+}`
+
+func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
+	root, log := setupProject(t)
+	tmp := filepath.Dir(root)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(flowBoard), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
+	ghFile, pushFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "pushed.json")
+	t.Setenv("FAKE_GH", ghFile)
+	t.Setenv("FAKE_PUSH", pushFile)
+	pr := func(file, state, head, reviews, merge string) {
+		os.WriteFile(file, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":%q,"headRefOid":%q,
+		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":%s}`, state, head, reviews, merge)), 0o644)
+	}
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q", "--bare", filepath.Join(tmp, "origin.git"))
+	git("remote", "add", "origin", filepath.Join(tmp, "origin.git"))
+	git("push", "-q", "origin", "main")
+	merge := git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Merge PR one")
+	git("push", "-q", "origin", merge+":refs/heads/develop")
+
+	pr(ghFile, "OPEN", "aaa", "", "null")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval, e.ReleaseFetchInterval = 200*time.Millisecond, 200*time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	card := func(tasks []*store.Task) *store.Task {
+		if len(tasks) != 2 {
+			return &store.Task{PR: &store.PR{}}
+		}
+		return tasks[1]
+	}
+	waitForAll(t, e, "PR card waits in review", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "review" && c.Title == "PR one" && tasks[0].ColumnID == "exec"
+	})
+	idle := func(tasks []*store.Task) bool {
+		s := tasks[0].Sessions[store.MainSession]
+		return s.Activity == store.ActivityIdle && len(s.Pending) == 0
+	}
+
+	review := `{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`
+	pr(pushFile, "OPEN", "bbb", review, "null")
+	pr(ghFile, "OPEN", "aaa", review, "null")
+	waitForAll(t, e, "card sent back for fixes", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "exec" && c.PR.FixFrom == "aaa" && idle(tasks)
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := card(e.Snapshot().Tasks); c.ColumnID != "exec" {
+		t.Fatalf("card left %s before the agent pushed", c.ColumnID)
+	}
+	if err := e.Send(task.ID, "PUSH"); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "card back in review after the fix", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "review" && c.PR.FixFrom == ""
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := card(e.Snapshot().Tasks); c.ColumnID != "review" {
+		t.Fatalf("the same review sent the card to %s again", c.ColumnID)
+	}
+	if data, _ := os.ReadFile(log); strings.Count(string(data), "typed:FIX 1") != 1 {
+		t.Errorf("review message not delivered exactly once:\n%s", data)
+	}
+
+	pr(ghFile, "MERGED", "bbb", review, fmt.Sprintf(`{"oid":%q}`, merge))
+	waitForAll(t, e, "merged card in verify", func(tasks []*store.Task) bool { return card(tasks).ColumnID == "verify" })
+	time.Sleep(600 * time.Millisecond)
+	if c := card(e.Snapshot().Tasks); c.ColumnID != "verify" || c.PR.Released {
+		t.Fatalf("released before the merge reached main: %s %+v", c.ColumnID, c.PR)
+	}
+
+	git("push", "-q", "origin", merge+":refs/heads/main")
+	waitForAll(t, e, "released card done", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "done" && c.PR.Released
+	})
+	if tasks := e.Snapshot().Tasks; tasks[0].ColumnID != "exec" {
+		t.Errorf("session card moved to %s", tasks[0].ColumnID)
 	}
 }
 

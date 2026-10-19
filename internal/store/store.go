@@ -112,11 +112,17 @@ type Issue struct {
 
 // PR is a GitHub pull request the task's agent opened.
 type PR struct {
-	URL    string `json:"url"`
-	Number int    `json:"number"`
-	Title  string `json:"title,omitempty"`
-	Branch string `json:"branch,omitempty"`
-	State  string `json:"state,omitempty"`
+	URL            string    `json:"url"`
+	Number         int       `json:"number"`
+	Title          string    `json:"title,omitempty"`
+	Branch         string    `json:"branch,omitempty"`
+	State          string    `json:"state,omitempty"`
+	ReviewDecision string    `json:"reviewDecision,omitempty"`
+	MergeCommit    string    `json:"mergeCommit,omitempty"`
+	ChangesSeenAt  time.Time `json:"changesSeenAt,omitzero"`
+	FixFrom        string    `json:"fixFrom,omitempty"`
+	Released       bool      `json:"released,omitempty"`
+	Error          string    `json:"error,omitempty"`
 }
 
 // Pending is a message waiting for the session to become idle.

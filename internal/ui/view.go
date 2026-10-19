@@ -20,6 +20,7 @@ var (
 	bold       = lipgloss.NewStyle().Bold(true)
 	thinking   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
 	needsYou   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Bold(true)
+	alert      = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
 	idle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#10b981"))
 	muted      = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af"))
 	headerBar  = lipgloss.NewStyle().Background(lipgloss.Color("#1f2937")).Foreground(lipgloss.Color("#e5e7eb"))
@@ -364,13 +365,26 @@ func (m Model) groupMarker(t *store.Task) string {
 func (m Model) cardRef(t *store.Task) string {
 	if t.PR != nil {
 		ref := fmt.Sprintf("PR #%d", t.PR.Number)
-		if t.PR.State != "" && t.PR.State != "OPEN" {
+		switch {
+		case t.PR.Released:
+			ref += " released"
+		case t.PR.State != "" && t.PR.State != "OPEN":
 			ref += " " + strings.ToLower(t.PR.State)
 		}
 		if t.PR.Branch != "" {
 			ref += " " + t.PR.Branch
 		}
-		return dim.Render(ref)
+		badge := ""
+		switch {
+		case t.PR.Error != "":
+			badge = alert.Render("⚠ gh") + " "
+		case t.PR.State != "OPEN":
+		case t.PR.ReviewDecision == "APPROVED":
+			badge = idle.Render("✓ approved") + " "
+		case t.PR.ReviewDecision == "CHANGES_REQUESTED":
+			badge = alert.Render("✗ changes") + " "
+		}
+		return badge + dim.Render(ref)
 	}
 	if branch := store.Owner(m.snap.Tasks, t).Branch; branch != "" {
 		return dim.Render(branch)

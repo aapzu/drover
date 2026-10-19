@@ -84,3 +84,21 @@ func TestStartColumn(t *testing.T) {
 		t.Errorf("start column without agents = %s, want todo", got)
 	}
 }
+
+func TestPRFlow(t *testing.T) {
+	if err := Default().validate(); err != nil {
+		t.Fatalf("default board: %v", err)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":1,"columns":[{"id":"todo","name":"To Do","role":"todo"}],
+	  "prFlow":{"opened":"In Review"}}`), 0o644)
+	if _, _, err := Load(dir); err == nil {
+		t.Fatal("unknown prFlow column accepted")
+	}
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":1,"columns":[{"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"in-review","name":"In Review"}],"prFlow":{"opened":"in review"}}`), 0o644)
+	board, _, err := Load(dir)
+	if err != nil || board.PRFlow == nil || board.PRFlow.Opened != "in review" {
+		t.Fatalf("prFlow not loaded: %+v %v", board.PRFlow, err)
+	}
+}

@@ -200,7 +200,7 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	m := testModel(120, 40, 2, 0)
 	m.snap.Board.Columns[0].AutoSpawn = true
 	owner := &store.Task{ID: "owner", Number: 1, Title: "Refactor", ColumnID: "c1", ActiveCard: "split",
-		Branch: "refactor-1", PR: &store.PR{Number: 10},
+		Branch: "refactor-1", PR: &store.PR{Number: 10, State: "OPEN", ReviewDecision: "APPROVED"},
 		Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle}}}
 	split := &store.Task{ID: "split", Number: 2, Title: "PR two", ColumnID: "c0", GroupID: "owner",
 		PR: &store.PR{Number: 11, Branch: "two", State: "MERGED"}}
@@ -218,8 +218,18 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	// The owner sits in a plain column while the agent works for the split
 	// card, so it doesn't show the agent's activity.
 	ownerCard := ansi.Strip(m.renderCard(owner, 60, false, false))
-	if !strings.Contains(ownerCard, "⧉ 1/2") || strings.Contains(ownerCard, "idle") || !strings.Contains(ownerCard, "PR #10") {
+	if !strings.Contains(ownerCard, "⧉ 1/2") || strings.Contains(ownerCard, "idle") || !strings.Contains(ownerCard, "✓ approved PR #10") {
 		t.Errorf("owner card:\n%s", ownerCard)
+	}
+	for pr, want := range map[store.PR]string{
+		{Number: 12, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}: "✗ changes PR #12",
+		{Number: 13, State: "MERGED", Released: true}:                    "PR #13 released",
+		{Number: 14, State: "OPEN", Error: "gh pr view: timed out"}:      "⚠ gh PR #14",
+	} {
+		card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0", PR: &pr}
+		if got := ansi.Strip(m.renderCard(card, 60, false, false)); !strings.Contains(got, want) {
+			t.Errorf("card misses %q:\n%s", want, got)
+		}
 	}
 	for _, d := range []density{densityNormal, densityCompact, densityTall} {
 		m.prefs.Density = d

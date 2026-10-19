@@ -47,70 +47,44 @@ func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {
 	return card, owner, unlock
 }
 
-// addPRs records pull requests the owner's session opened. The first goes on
-// the card the session is working for; each later one becomes its own card in
-// that card's column. Called with mu held; returns lookups to run outside it.
-func (e *Engine) addPRs(owner *store.Task, urls []string) []func() {
+// addPRs records pull requests the owner's session opened. Each becomes its
+// own card in the group, in the prFlow's opened column, else in the column of
+// the card the session works for. Called with mu held.
+func (e *Engine) addPRs(owner *store.Task, urls []string) {
 	members := store.Members(e.state.Tasks, owner)
-	driver := store.Driver(e.state.Tasks, owner)
-	var out []func()
+	column := store.Driver(e.state.Tasks, owner).ColumnID
+	if f := e.board.PRFlow; f != nil {
+		if c, ok := e.board.Find(f.Opened); ok {
+			column = c.ID
+		}
+	}
 	for _, url := range urls {
 		if slices.ContainsFunc(members, func(m *store.Task) bool { return m.PR != nil && m.PR.URL == url }) {
 			continue
 		}
-		pr := &store.PR{URL: url, Number: gh.Number(url)}
-		card := driver
-		if driver.PR == nil {
-			driver.PR = pr
-			driver.AddLog(fmt.Sprintf("Opened PR #%d", pr.Number))
-		} else {
-			now := time.Now()
-			card = &store.Task{
-				ID:        uuid.NewString(),
-				Number:    e.state.NextNumber,
-				Title:     fmt.Sprintf("%s · PR #%d", owner.Title, pr.Number),
-				ColumnID:  driver.ColumnID,
-				PR:        pr,
-				GroupID:   owner.ID,
-				CreatedAt: now,
-				UpdatedAt: now,
-			}
-			if owner.Issue != nil {
-				issue := *owner.Issue
-				card.Issue = &issue
-			}
-			e.state.NextNumber++
-			card.AddLog(fmt.Sprintf("Split from #%d: its agent opened PR #%d", owner.Number, pr.Number))
-			owner.AddLog(fmt.Sprintf("Opened PR #%d, now card #%d", pr.Number, card.Number))
-			e.state.Tasks = append(e.state.Tasks, card)
-			e.notify("#%d opened PR #%d: new card #%d", owner.Number, pr.Number, card.Number)
+		now, n := time.Now(), gh.Number(url)
+		card := &store.Task{
+			ID:        uuid.NewString(),
+			Number:    e.state.NextNumber,
+			Title:     fmt.Sprintf("%s · PR #%d", owner.Title, n),
+			ColumnID:  column,
+			PR:        &store.PR{URL: url, Number: n},
+			GroupID:   owner.ID,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
+		if owner.Issue != nil {
+			issue := *owner.Issue
+			card.Issue = &issue
+		}
+		e.state.NextNumber++
+		card.AddLog(fmt.Sprintf("Split from #%d: its agent opened PR #%d", owner.Number, n))
+		owner.AddLog(fmt.Sprintf("Opened PR #%d, now card #%d", n, card.Number))
+		e.state.Tasks = append(e.state.Tasks, card)
+		e.notify("#%d opened PR #%d: new card #%d", owner.Number, n, card.Number)
 		members = append(members, card)
-		dir := owner.WorktreePath
-		if dir == "" {
-			dir = e.Root
-		}
-		retitle := card != owner && card.GroupID == owner.ID
-		out = append(out, func() { e.lookupPR(card, dir, retitle) })
 	}
-	return out
-}
-
-func (e *Engine) lookupPR(card *store.Task, dir string, retitle bool) {
-	e.mu.Lock()
-	url := card.PR.URL
-	e.mu.Unlock()
-	info, err := gh.View(dir, url)
-	e.with(func() {
-		if err != nil {
-			card.AddLog(fmt.Sprintf("Looking up PR #%d failed: %v", card.PR.Number, err))
-			return
-		}
-		card.PR.Title, card.PR.Branch, card.PR.State = info.Title, info.Branch, info.State
-		if retitle && info.Title != "" {
-			card.Title = info.Title
-		}
-	})
+	e.lastPRPoll = time.Time{}
 }
 
 // handOver makes heir the owner of old's group before old is deleted: it

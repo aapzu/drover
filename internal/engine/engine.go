@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,13 +34,19 @@ const DefaultMaxConcurrent = 8
 var ErrDirty = errors.New("worktree has uncommitted changes")
 
 type Engine struct {
-	Root          string
-	ProjectName   string
-	MaxConcurrent int
-	exe           string
-	isRepo        bool
-	linear        *linear.Client
-	lastPoll      time.Time
+	Root                 string
+	ProjectName          string
+	MaxConcurrent        int
+	PRPollInterval       time.Duration
+	ReleaseFetchInterval time.Duration
+	exe                  string
+	isRepo               bool
+	linear               *linear.Client
+	lastPoll             time.Time
+
+	lastPRPoll       time.Time
+	lastReleaseFetch time.Time
+	prPolling        atomic.Bool
 
 	mu         sync.Mutex
 	state      *store.State
@@ -71,15 +78,17 @@ func New(root string) (*Engine, error) {
 		return nil, fmt.Errorf("load task state: %w", err)
 	}
 	e := &Engine{
-		Root:          root,
-		ProjectName:   filepath.Base(root),
-		MaxConcurrent: DefaultMaxConcurrent,
-		exe:           exe,
-		isRepo:        gitx.HasCommits(root),
-		state:         state,
-		board:         board,
-		boardFound:    found,
-		notices:       make(chan string, 64),
+		Root:                 root,
+		ProjectName:          filepath.Base(root),
+		MaxConcurrent:        DefaultMaxConcurrent,
+		PRPollInterval:       time.Minute,
+		ReleaseFetchInterval: 5 * time.Minute,
+		exe:                  exe,
+		isRepo:               gitx.HasCommits(root),
+		state:                state,
+		board:                board,
+		boardFound:           found,
+		notices:              make(chan string, 64),
 	}
 	if info, err := os.Stat(filepath.Join(root, config.FileName)); err == nil {
 		e.boardMod = info.ModTime()

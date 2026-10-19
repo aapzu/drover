@@ -197,3 +197,38 @@ func DeleteBranch(root, branch string) error {
 	_, err := run(root, "branch", "-D", branch)
 	return err
 }
+
+// FetchRelease fetches the release branch from origin and returns its
+// remote-tracking ref. An empty branch tries master, then main.
+func FetchRelease(root, branch string) (string, error) {
+	candidates := []string{branch}
+	if branch == "" {
+		candidates = []string{"master", "main"}
+	}
+	var errs []error
+	for _, b := range candidates {
+		_, err := run(root, "fetch", "--quiet", "origin", b)
+		if err == nil {
+			return "refs/remotes/origin/" + b, nil
+		}
+		errs = append(errs, err)
+	}
+	return "", errors.Join(errs...)
+}
+
+// Contains reports whether commit is reachable from ref. A commit git doesn't
+// have is not reachable.
+func Contains(root, ref, commit string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", commit, ref)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.As(err, &exit) && exit.ExitCode() == 1,
+		strings.Contains(string(out), "Not a valid commit name"):
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %s", commit, ref, strings.TrimSpace(string(out)))
+}

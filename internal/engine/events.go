@@ -54,6 +54,7 @@ func (e *Engine) Tick() {
 			e.lastPoll = time.Now()
 			followUps = append(followUps, e.pollExternal()...)
 		}
+		followUps = append(followUps, e.pollPRs()...)
 	})
 
 	for _, fn := range followUps {
@@ -110,7 +111,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
 			if urls := ev.CreatedPRs(); len(urls) > 0 {
-				out = append(out, e.addPRs(t, urls)...)
+				e.addPRs(t, urls)
 			}
 		case "PermissionRequest":
 			s.Activity = store.ActivityPermission
