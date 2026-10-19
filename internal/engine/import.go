@@ -19,11 +19,12 @@ import (
 // ExternalError is returned for actions that would start a second copy of a
 // conversation that is still running in another terminal.
 type ExternalError struct {
+	ID          string
 	Number, PID int
 }
 
 func (e *ExternalError) Error() string {
-	return fmt.Sprintf("#%d is still running in another terminal (pid %d); exit it there first, then press r to resume it here", e.Number, e.PID)
+	return fmt.Sprintf("#%d is still running in another terminal (pid %d)", e.Number, e.PID)
 }
 
 func externalSession(t *store.Task) *store.Session {
@@ -149,9 +150,9 @@ func (e *Engine) externalCheck(t *store.Task) error {
 					t.AddLog(fmt.Sprintf("Session is running in another terminal (pid %d)", l.PID))
 				}
 				s.Status, s.PID = store.StatusExternal, l.PID
-				err = &ExternalError{Number: t.Number, PID: l.PID}
+				err = &ExternalError{ID: t.ID, Number: t.Number, PID: l.PID}
 			} else if s.Status == store.StatusExternal && claude.ProcessAlive(s.PID) {
-				err = &ExternalError{Number: t.Number, PID: s.PID}
+				err = &ExternalError{ID: t.ID, Number: t.Number, PID: s.PID}
 			}
 		}
 	})

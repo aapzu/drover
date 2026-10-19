@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -455,19 +456,76 @@ func (e *Engine) Start(id string) error {
 	if t == nil {
 		return errors.New("task not found")
 	}
-	e.mu.Lock()
-	col, _, _ := e.board.Column(t.ColumnID)
-	e.mu.Unlock()
 	if err := e.externalCheck(owner); err != nil {
 		return err
 	}
+	col, err := e.startColumn(t, owner)
+	if err != nil {
+		return err
+	}
+	return e.activate(t, col, col, "", false, true)
+}
+
+// TakeOver kills the process running the task's conversation in another
+// terminal and resumes the conversation on the board.
+func (e *Engine) TakeOver(id string) error {
+	t, owner, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	col, err := e.startColumn(t, owner)
+	if err != nil {
+		return err
+	}
+	for range 3 {
+		if e.externalCheck(owner) == nil {
+			return e.activate(t, col, col, "", false, true)
+		}
+		l, _ := e.externalLive(owner)
+		pid := l.PID
+		if pid != 0 {
+			if err := claude.Terminate(pid); err != nil {
+				e.logf(t, "Stopping agent in another terminal (pid %d) failed: %v", pid, err)
+				return err
+			}
+		}
+		e.with(func() {
+			if s := externalSession(owner); s != nil {
+				s.Status, s.Activity, s.Pending = store.StatusSuspended, store.ActivityIdle, nil
+			}
+			if pid != 0 {
+				t.AddLog(fmt.Sprintf("Stopped agent in another terminal (pid %d) to resume it here", pid))
+			}
+		})
+	}
+	return fmt.Errorf("#%d keeps restarting in another terminal; exit it there", t.Number)
+}
+
+// externalLive is the registry entry for t's external conversation. A pid the
+// board stored is not trusted: it may belong to another process by now.
+func (e *Engine) externalLive(t *store.Task) (claude.Live, bool) {
+	live := claude.Running()
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	if s := externalSession(t); s != nil {
+		l, ok := live[s.AgentSessionID]
+		return l, ok
+	}
+	return claude.Live{}, false
+}
+
+// startColumn returns the column t's agent would run in, or an error when the
+// column runs no agent. A scratch session runs in To Do too.
+func (e *Engine) startColumn(t, owner *store.Task) (config.Column, error) {
+	e.mu.Lock()
+	col, _, _ := e.board.Column(t.ColumnID)
 	scratch := scratchSession(owner)
 	e.mu.Unlock()
 	if (col.IsTodo() && scratch == nil) || col.IsDone() {
-		return fmt.Errorf("move the task out of %s to start an agent", col.Name)
+		return col, fmt.Errorf("move the task out of %s to start an agent", col.Name)
 	}
-	return e.activate(t, col, col, "", false, true)
+	return col, nil
 }
 
 // Suspend stops the task's agents but keeps their conversations to resume.
@@ -1136,6 +1194,33 @@ func (e *Engine) LiveSession(id string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ExternalAttach returns a command that opens the task's agent where it runs
+// outside the board, without stopping it: a Claude Code background session,
+// or a pane on your own tmux server. It reports false for an agent in a plain
+// terminal, which can only be taken over.
+func (e *Engine) ExternalAttach(id string) (*exec.Cmd, bool) {
+	var owner *store.Task
+	e.mu.Lock()
+	if card := e.find(id); card != nil {
+		owner = e.owner(card)
+	}
+	e.mu.Unlock()
+	if owner == nil {
+		return nil, false
+	}
+	l, ok := e.externalLive(owner)
+	if !ok {
+		return nil, false
+	}
+	if l.Background() {
+		return exec.Command("claude", "attach", l.SessionID), true
+	}
+	if pane, ok := tmux.PaneOf(l.PID); ok {
+		return tmux.AttachPaneCommand(pane), true
+	}
+	return nil, false
 }
 
 func bump(m map[string]int, key string) map[string]int {

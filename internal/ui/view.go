@@ -452,7 +452,7 @@ func (m Model) renderPreview(height int) string {
 	if t != nil {
 		title = fmt.Sprintf(" #%d %s ", t.Number, taskTitle(t))
 		if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
-			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d). Its latest reply:", s.PID)) + "\n\n" + s.LastReply
+			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d); press enter to open it or take it over. Its latest reply:", s.PID)) + "\n\n" + s.LastReply
 		} else if _, ok := m.eng.LiveSession(t.ID); !ok {
 			body = dim.Render("No running agent. Move the card into an agent column, or press r to resume.")
 			if s := m.sessionFor(t); s != nil && s.LastReply != "" {

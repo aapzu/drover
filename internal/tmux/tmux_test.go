@@ -87,3 +87,44 @@ func TestCaptureReturnsHistory(t *testing.T) {
 		t.Fatalf("got %d rows, want 30 of history plus 10 on screen:\n%s", rows, out)
 	}
 }
+
+func TestPaneOfFindsPaneByAncestor(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	socket := fmt.Sprintf("kt-tmux-user-%d", os.Getpid())
+	UserServer = []string{"-L", socket, "-f", "/dev/null"}
+	t.Cleanup(func() {
+		UserServer = nil
+		exec.Command("tmux", "-L", socket, "kill-server").Run()
+	})
+	if err := userCommand("new-session", "-d", "--", "sh", "-c", "sleep 60; true").Run(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := userCommand("list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shell int
+	var want string
+	fmt.Sscan(string(out), &shell, &want)
+	var child int
+	for range 50 {
+		out, _ := exec.Command("pgrep", "-P", fmt.Sprint(shell)).Output()
+		if fmt.Sscan(string(out), &child); child != 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if child == 0 {
+		t.Fatal("the pane's sleep never started")
+	}
+	for _, pid := range []int{shell, child} {
+		if got, ok := PaneOf(pid); !ok || got != want {
+			t.Errorf("PaneOf(%d) = %q, %v; want %q", pid, got, ok, want)
+		}
+	}
+	if _, ok := PaneOf(os.Getpid()); ok {
+		t.Error("a process outside the server matched a pane")
+	}
+}
