@@ -52,3 +52,25 @@ func TestWorkColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstAgentColumn(t *testing.T) {
+	plan := config.Column{ID: "plan", AutoSpawn: true, PermissionMode: "plan"}
+	isolated := config.Column{ID: "isolated", AutoSpawn: true, SessionTarget: "isolated"}
+	todo := config.Column{ID: "todo", Role: "todo", AutoSpawn: true}
+	review := config.Column{ID: "review"}
+	cases := []struct {
+		name  string
+		board *config.Board
+		want  string
+	}{
+		{"default board", config.Default(), "planning"},
+		{"skips isolated columns", &config.Board{Columns: []config.Column{todo, review, isolated, plan}}, "plan"},
+		{"no agent column", &config.Board{Columns: []config.Column{todo, review}}, ""},
+	}
+	for _, c := range cases {
+		got, ok := firstAgentColumn(c.board)
+		if got.ID != c.want || ok != (c.want != "") {
+			t.Errorf("%s: firstAgentColumn = %q, %v, want %q", c.name, got.ID, ok, c.want)
+		}
+	}
+}

@@ -131,7 +131,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 }
 
 // leaveScratch moves a card whose session still runs in the main checkout into
-// the board's work column once a turn that named it ends, which gives it a
+// the first agent column once a turn that named it ends, which gives it a
 // worktree and carries the conversation over. If the move fails before the
 // conversation leaves the main checkout, the card goes back to try again after
 // the next turn. The caller holds the task lock.
@@ -144,7 +144,7 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	due := s != nil && t.Title != "" &&
 		s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && len(s.Pending) == 0
 	e.mu.Unlock()
-	target, ok := workColumn(board)
+	target, ok := firstAgentColumn(board)
 	if !due || !ok {
 		return false
 	}
