@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gh"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gh"
+	"github.com/aapzu/drover/internal/gitx"
+	"github.com/aapzu/drover/internal/store"
 )
 
 const prLookups = 4
