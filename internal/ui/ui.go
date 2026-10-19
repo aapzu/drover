@@ -5,6 +5,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -50,6 +51,15 @@ type attachDoneMsg struct {
 	id       string
 	paneGone bool
 	err      error
+}
+type takeOverDoneMsg struct {
+	taskID string
+	err    error
+}
+type externalAttachMsg struct {
+	cmd         *exec.Cmd
+	id          string
+	number, pid int
 }
 type suspendAllMsg struct{}
 type sessionStartedMsg struct {
@@ -315,9 +325,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.confirmAction = msg.retryDone
 			return m, nil
 		}
+		var ext *engine.ExternalError
+		if errors.As(msg.err, &ext) {
+			m.confirmTakeOver(ext.ID, ext.Number, ext.PID)
+			return m, nil
+		}
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
 		}
+		return m, nil
+	case takeOverDoneMsg:
+		m.snap = m.eng.Snapshot()
+		if msg.err != nil {
+			m.setFlash("Error: " + msg.err.Error())
+			return m, nil
+		}
+		if cmd, ok := m.attach(msg.taskID); ok {
+			return m, cmd
+		}
+		m.setFlash("Stopped the other terminal's agent; it resumes here once a slot frees up")
+		return m, nil
+	case externalAttachMsg:
+		if msg.cmd != nil {
+			return m, attachExternal(msg.cmd)
+		}
+		m.confirmTakeOver(msg.id, msg.number, msg.pid)
 		return m, nil
 	case suspendAllMsg:
 		m.suspendAll = true
@@ -425,6 +457,22 @@ func (m Model) attach(id string) (tea.Cmd, bool) {
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
 		return attachDoneMsg{id: id, paneGone: !tmux.Has(name), err: err}
 	}), true
+}
+
+// confirmTakeOver asks to stop the task's agent in its other terminal, resume
+// it on the board and attach to it.
+func (m *Model) confirmTakeOver(id string, number, pid int) {
+	m.mode = modeConfirm
+	m.confirmText = fmt.Sprintf("#%d runs in another terminal (pid %d). Stop it there and resume it here? (y/N)", number, pid)
+	eng := m.eng
+	m.confirmAction = func() tea.Cmd {
+		return func() tea.Msg { return takeOverDoneMsg{taskID: id, err: eng.TakeOver(id)} }
+	}
+}
+
+// attachExternal opens an agent that runs outside the board.
+func attachExternal(cmd *exec.Cmd) tea.Cmd {
+	return tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 }
 
 func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
@@ -539,8 +587,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		cmd, ok := m.attach(t.ID)
 		if s := m.sessionFor(t); !ok && s != nil && s.Status == store.StatusExternal {
-			m.setFlash(fmt.Sprintf("#%d runs in another terminal (pid %d). Exit it there, then press r to resume it here.", t.Number, s.PID))
-			break
+			id, number, pid, eng := t.ID, t.Number, s.PID, m.eng
+			return m, func() tea.Msg {
+				cmd, _ := eng.ExternalAttach(id)
+				return externalAttachMsg{cmd: cmd, id: id, number: number, pid: pid}
+			}
 		}
 		if !ok {
 			m.setFlash("No running agent. Press r to start or resume it.")

@@ -82,21 +82,22 @@ func TestImportRunningAgentLifecycle(t *testing.T) {
 		return t.Sessions[store.MainSession].Status == store.StatusSuspended
 	})
 
-	// Resumed in another terminal after import: still no second copy.
 	other := exec.Command("sleep", "60")
 	other.Start()
-	otherRegistry := register(other.Process.Pid)
+	defer other.Process.Kill()
+	exited := make(chan struct{})
+	go func() { other.Wait(); close(exited) }()
+	register(other.Process.Pid)
 	if err := e.Start(task.ID); !errors.As(err, &ext) {
 		t.Errorf("start while resumed elsewhere: err = %v", err)
 	}
-	other.Process.Kill()
-	other.Wait()
-	os.Remove(otherRegistry)
-	waitFor(t, e, "second external run to be released", func(t *store.Task) bool {
-		return t.Sessions[store.MainSession].Status == store.StatusSuspended
-	})
-	if err := e.Start(task.ID); err != nil {
+	if err := e.TakeOver(task.ID); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("take over left the other terminal's agent running")
 	}
 	waitFor(t, e, "agent resumed with the imported id", func(*store.Task) bool {
 		return strings.Contains(readFile(log), "--resume\nabcdef12-live")

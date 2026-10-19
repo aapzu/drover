@@ -226,3 +226,57 @@ func AttachCommand(name string) *exec.Cmd {
 	run("set-option", "-w", "-t", "="+name+":", "window-size", "latest")
 	return command("attach-session", "-t", "="+name)
 }
+
+// UserServer holds the tmux flags that select your own tmux server, where
+// agents started outside the board may run; empty means tmux's default.
+var UserServer []string
+
+func userCommand(args ...string) *exec.Cmd {
+	return exec.Command("tmux", append(append([]string{}, UserServer...), args...)...)
+}
+
+// PaneOf returns the pane on your own tmux server whose process is pid or one
+// of its ancestors.
+func PaneOf(pid int) (string, bool) {
+	out, err := userCommand("list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
+	if err != nil {
+		return "", false
+	}
+	panes := map[int]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var panePID int
+		var id string
+		if _, err := fmt.Sscan(line, &panePID, &id); err == nil {
+			panes[panePID] = id
+		}
+	}
+	parents := map[int]int{}
+	out, _ = exec.Command("ps", "-A", "-o", "pid=,ppid=").Output()
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var child, parent int
+		if _, err := fmt.Sscan(line, &child, &parent); err == nil {
+			parents[child] = parent
+		}
+	}
+	for range 32 {
+		if id, ok := panes[pid]; ok {
+			return id, true
+		}
+		if pid <= 1 {
+			break
+		}
+		pid = parents[pid]
+	}
+	return "", false
+}
+
+// AttachPaneCommand returns a command that focuses pane on your own tmux
+// server and shows it: it switches the current client when the board runs
+// inside tmux, and attaches otherwise.
+func AttachPaneCommand(pane string) *exec.Cmd {
+	show := "attach-session"
+	if os.Getenv("TMUX") != "" {
+		show = "switch-client"
+	}
+	return userCommand("select-window", "-t", pane, ";", "select-pane", "-t", pane, ";", show, "-t", pane)
+}

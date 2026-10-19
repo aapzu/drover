@@ -948,6 +948,66 @@ func TestStopSessionsSparesKeptConversation(t *testing.T) {
 	}
 }
 
+func TestExternalAttachOpensBackgroundSessionsOnly(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	tmux.UserServer = []string{"-L", fmt.Sprintf("kt-no-server-%d", os.Getpid())}
+	t.Cleanup(func() { tmux.UserServer = nil })
+	for _, kind := range []string{"bg", "interactive"} {
+		id := "attach-" + kind
+		liveConversation(t, id, kind)
+		task := e.CreateTask(id, "")
+		e.with(func() {
+			task.Sessions = map[string]*store.Session{store.MainSession: {
+				Key: store.MainSession, AgentSessionID: id, Status: store.StatusExternal, Imported: true,
+			}}
+		})
+		cmd, ok := e.ExternalAttach(task.ID)
+		switch {
+		case kind == "bg" && (!ok || strings.Join(cmd.Args, " ") != "claude attach "+id):
+			t.Errorf("background session: cmd = %v, ok = %v", cmd, ok)
+		case kind == "interactive" && ok:
+			t.Errorf("a plain-terminal session got an attach command: %v", cmd.Args)
+		}
+	}
+}
+
+func TestTakeOverOnlyStopsRegisteredAgents(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	external := func(id string, pid int) *store.Task {
+		task := e.CreateTask(id, "")
+		e.with(func() {
+			task.Sessions = map[string]*store.Session{store.MainSession: {
+				Key: store.MainSession, AgentSessionID: id, Status: store.StatusExternal, Imported: true, PID: pid,
+			}}
+		})
+		return task
+	}
+
+	exited := liveConversation(t, "in-todo", "interactive")
+	if err := e.TakeOver(external("in-todo", 0).ID); err == nil {
+		t.Error("take over of a To Do card should fail")
+	}
+	select {
+	case <-exited:
+		t.Fatal("take over stopped an agent it could not resume")
+	default:
+	}
+
+	unrelated := exec.Command("sleep", "60")
+	if err := unrelated.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unrelated.Process.Kill() })
+	task := external("stale", unrelated.Process.Pid)
+	e.with(func() { task.ColumnID, task.WorktreePath = "exec", e.Root })
+	if err := e.TakeOver(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !claude.ProcessAlive(unrelated.Process.Pid) {
+		t.Fatal("take over killed a process the registry does not list")
+	}
+}
+
 func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
 	root, log := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
