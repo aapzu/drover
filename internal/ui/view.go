@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"hash/crc32"
 	"slices"
 	"strings"
 	"time"
@@ -304,14 +303,21 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	if t.Issue != nil {
 		title = fmt.Sprintf("#%d %s %s", t.Number, t.Issue.Key, taskTitle(t))
 	}
+	g := m.groupOf(t)
+	sibling := m.isSibling(g, t)
 	style := cardStyle
-	if active {
+	switch {
+	case active:
 		style = cardActive
+	case sibling:
+		style = style.Border(lipgloss.ThickBorder()).BorderForeground(g.color)
+	case g != nil:
+		style = style.BorderForeground(g.color)
 	}
 	if dragged {
 		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
 	}
-	group := m.groupMarker(t)
+	group := groupMarker(g, t, sibling)
 	if m.prefs.Density == densityCompact {
 		status := strings.TrimSpace(group + " " + m.status(t))
 		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
@@ -348,17 +354,48 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 
 var groupColors = []lipgloss.Color{"#22d3ee", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#facc15"}
 
-// groupMarker shows "⧉ 2/3" on cards that share one agent session, colored
-// per group so the cards of a group are easy to spot across columns.
-func (m Model) groupMarker(t *store.Task) string {
+// cardGroup is the set of cards that share one agent session.
+type cardGroup struct {
+	members []*store.Task
+	color   lipgloss.Color
+}
+
+// groupOf returns the group t belongs to, or nil for a card of its own.
+func (m Model) groupOf(t *store.Task) *cardGroup {
 	owner := store.Owner(m.snap.Tasks, t)
 	members := store.Members(m.snap.Tasks, owner)
 	if len(members) < 2 {
+		return nil
+	}
+	var before []string
+	for _, task := range m.snap.Tasks {
+		if task.GroupID == owner.ID {
+			break
+		}
+		if task.GroupID != "" && !slices.Contains(before, task.GroupID) {
+			before = append(before, task.GroupID)
+		}
+	}
+	return &cardGroup{members: members, color: groupColors[len(before)%len(groupColors)]}
+}
+
+// groupMarker shows "⧉ 2/3" on cards that share one agent session, in the
+// group's color; bold on the siblings of the selected card.
+func groupMarker(g *cardGroup, t *store.Task, sibling bool) string {
+	if g == nil {
 		return ""
 	}
-	pos := slices.Index(members, t) + 1
-	color := groupColors[int(crc32.ChecksumIEEE([]byte(owner.ID)))%len(groupColors)]
-	return lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("⧉ %d/%d", pos, len(members)))
+	pos := slices.Index(g.members, t) + 1
+	return lipgloss.NewStyle().Foreground(g.color).Bold(sibling).Render(fmt.Sprintf("⧉ %d/%d", pos, len(g.members)))
+}
+
+// isSibling reports whether t shares a session with the selected card.
+func (m Model) isSibling(g *cardGroup, t *store.Task) bool {
+	if g == nil {
+		return false
+	}
+	cur := m.current()
+	return cur != nil && cur != t && slices.Contains(g.members, cur)
 }
 
 // cardRef is the card's PR, or the branch its agent works on.

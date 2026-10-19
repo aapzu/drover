@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,51 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 		m.prefs.Density = d
 		if got := lipgloss.Height(m.renderCard(split, 30, false, false)); got != d.cardHeight() {
 			t.Fatalf("density %d: card is %d rows, want %d", d, got, d.cardHeight())
+		}
+	}
+}
+
+func TestSiblingsOfSelectedCardStandOut(t *testing.T) {
+	m := testModel(120, 40, 2, 0)
+	owner := &store.Task{ID: "owner", Number: 1, Title: "Refactor", ColumnID: "c1"}
+	split := &store.Task{ID: "split", Number: 2, Title: "PR two", ColumnID: "c0", GroupID: "owner"}
+	other := &store.Task{ID: "other", Number: 3, Title: "Other", ColumnID: "c0"}
+	m.snap.Tasks = []*store.Task{owner, split, other}
+	m.selectTask(owner)
+
+	if got := ansi.Strip(m.renderCard(split, 30, false, false)); !strings.HasPrefix(got, "┏") {
+		t.Errorf("sibling of the selected card isn't thick:\n%s", got)
+	}
+	if got := ansi.Strip(m.renderCard(other, 30, false, false)); !strings.HasPrefix(got, "╭") {
+		t.Errorf("ungrouped card changed border:\n%s", got)
+	}
+	m.selectTask(other)
+	if got := ansi.Strip(m.renderCard(split, 30, false, false)); !strings.HasPrefix(got, "╭") {
+		t.Errorf("group card is thick without a selected sibling:\n%s", got)
+	}
+}
+
+func TestGroupsGetDistinctColors(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	var owners, splits []*store.Task
+	for i := range len(groupColors) {
+		id := fmt.Sprintf("o%d", i)
+		owners = append(owners, &store.Task{ID: id, ColumnID: "c0"})
+		splits = append(splits, &store.Task{ID: id + "-a", ColumnID: "c0", GroupID: id}, &store.Task{ID: id + "-b", ColumnID: "c0", GroupID: id})
+	}
+	slices.Reverse(splits[:4])
+	m.snap.Tasks = append(owners, splits...)
+	seen := map[lipgloss.Color]string{}
+	for _, owner := range owners {
+		c := m.groupOf(owner).color
+		if other, ok := seen[c]; ok {
+			t.Fatalf("groups %s and %s share color %s", other, owner.ID, c)
+		}
+		seen[c] = owner.ID
+	}
+	for _, split := range splits {
+		if got, want := m.groupOf(split).color, m.groupOf(m.task(split.GroupID)).color; got != want {
+			t.Errorf("%s is %s, its owner %s", split.ID, got, want)
 		}
 	}
 }
