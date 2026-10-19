@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -217,6 +219,9 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 		return s != nil && s.PermissionMode == "acceptEdits" && !s.RespawnPending && s.Status == store.StatusRunning
 	})
 
+	waitForAll(t, e, "the respawned agent to start", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
 	argv, _ := os.ReadFile(log)
 	launches := strings.Split(strings.TrimSuffix(strings.TrimSpace(string(argv)), "---"), "---")
 	if len(launches) != 2 {
@@ -729,16 +734,43 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+=======
+// liveConversation starts a stand-in process and registers it with Claude
+// Code's registry as hosting conversation id. The channel closes when it exits.
+func liveConversation(t *testing.T, id, kind string) <-chan struct{} {
+	t.Helper()
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	dir := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "sessions")
+	os.MkdirAll(dir, 0o755)
+	b, _ := json.Marshal(claude.Live{PID: cmd.Process.Pid, SessionID: id, Kind: kind})
+	os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", cmd.Process.Pid)), b, 0o644)
+	return exited
+}
+
+// newEngineWithClaudeDir opens a test board whose Claude Code registry is empty.
+func newEngineWithClaudeDir(t *testing.T) *Engine {
+	t.Helper()
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+>>>>>>> c077f3b (Stop backgrounded agents when closing a card)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
+<<<<<<< HEAD
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go e.Run(ctx)
@@ -772,5 +804,103 @@ func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 		if h.Number != task.Number || h.Dir != task.WorktreePath || h.SessionID != s.AgentSessionID || !s.HandedOff {
 			t.Errorf("handoff %+v does not match #%d in %s (%s)", h, task.Number, task.WorktreePath, s.AgentSessionID)
 		}
+=======
+	return e
+}
+
+func exitsSoon(exited <-chan struct{}) bool {
+	select {
+	case <-exited:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+func TestClosingStopsBackgroundConversation(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	withSession := func(id string, status store.SessionStatus) *store.Task {
+		task := e.CreateTask("Imported "+id, "")
+		e.with(func() {
+			task.Sessions = map[string]*store.Session{store.MainSession: {
+				Key: store.MainSession, AgentSessionID: id, Tmux: e.tmuxName(task, store.MainSession),
+				Status: status, Started: true, Imported: true,
+			}}
+		})
+		return task
+	}
+
+	for _, status := range []store.SessionStatus{store.StatusSuspended, store.StatusRunning, store.StatusExternal} {
+		id := "bg-delete-" + string(status)
+		exited := liveConversation(t, id, "bg")
+		if err := e.DeleteTask(withSession(id, status).ID); err != nil {
+			t.Fatal(err)
+		}
+		if !exitsSoon(exited) {
+			t.Errorf("deleting a %s card left its background conversation running", status)
+		}
+	}
+
+	exited := liveConversation(t, "bg-suspend", "bg")
+	task := withSession("bg-suspend", store.StatusExternal)
+	e.Suspend(task.ID)
+	if !exitsSoon(exited) {
+		t.Error("suspending left the background conversation running")
+	}
+	if s := e.Snapshot(); s.Tasks[len(s.Tasks)-1].Sessions[store.MainSession].Status != store.StatusSuspended {
+		t.Error("session should be suspended")
+	}
+}
+
+func TestClosingLeavesTerminalConversationAndSaysSo(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	exited := liveConversation(t, "in-terminal", "interactive")
+	task := e.CreateTask("Imported", "")
+	e.with(func() {
+		task.Sessions = map[string]*store.Session{store.MainSession: {
+			Key: store.MainSession, AgentSessionID: "in-terminal", Tmux: e.tmuxName(task, store.MainSession),
+			Status: store.StatusExternal, Imported: true,
+		}}
+	})
+	e.Suspend(task.ID)
+	select {
+	case <-exited:
+		t.Fatal("a conversation running in your terminal was killed")
+	default:
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusExternal {
+		t.Errorf("status = %s, want it still followed as external", s.Status)
+	}
+	var notices []string
+	for len(e.Notices()) > 0 {
+		notices = append(notices, <-e.Notices())
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "another terminal") {
+		t.Errorf("notices = %q, want only the another-terminal one", notices)
+	}
+}
+
+func TestStopSessionsSparesKeptConversation(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	kept, other := liveConversation(t, "kept", "bg"), liveConversation(t, "other", "bg")
+	task := e.CreateTask("Two sessions", "")
+	e.with(func() {
+		task.Sessions = map[string]*store.Session{
+			store.MainSession: {Key: store.MainSession, AgentSessionID: "kept", Status: store.StatusExternal},
+			"review":          {Key: "review", AgentSessionID: "other", Status: store.StatusSuspended},
+		}
+	})
+	e.stopSessions(task, store.MainSession, store.StatusSuspended)
+	if !exitsSoon(other) {
+		t.Error("the other session's background conversation kept running")
+	}
+	select {
+	case <-kept:
+		t.Fatal("the kept conversation was stopped")
+	default:
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusExternal {
+		t.Errorf("kept status = %s", s.Status)
+>>>>>>> c077f3b (Stop backgrounded agents when closing a card)
 	}
 }

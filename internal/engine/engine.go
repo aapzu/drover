@@ -437,9 +437,14 @@ func (e *Engine) Start(id string) error {
 func (e *Engine) Suspend(id string) {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
-	if t != nil {
-		e.stopSessions(owner, "", store.StatusSuspended)
+	if t == nil {
+		return
+	}
+	stopped, leftRunning := e.stopSessions(owner, "", store.StatusSuspended)
+	if stopped > 0 {
 		e.logf(t, "Agent suspended")
+	} else if !leftRunning {
+		e.notify("#%d has no running agent", t.Number)
 	}
 }
 
@@ -592,25 +597,80 @@ func (e *Engine) removeWorktree(t *store.Task) error {
 	return nil
 }
 
-// stopSessions stops every live session except keep and marks it status.
-func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionStatus) {
+// stopSessions stops every session except keep and marks it status: the
+// board's own panes, and conversations Claude Code moved to a background
+// process whatever the session's status says. A conversation running in your
+// own terminal is left alone and reported. It returns how many sessions it
+// stopped and whether one was left running.
+func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionStatus) (stopped int, leftRunning bool) {
+	type candidate struct {
+		s           *store.Session
+		lastPID     int
+		paneStopped bool
+	}
 	var names []string
+	candidates := map[string]candidate{}
+	markStopped := func(s *store.Session) {
+		s.Status = status
+		s.Activity = store.ActivityIdle
+		s.Pending = nil
+		stopped++
+	}
 	e.with(func() {
 		for key, s := range t.Sessions {
-			if key == keep || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+			if key == keep {
 				continue
 			}
-			s.Status = status
-			s.Activity = store.ActivityIdle
-			s.Pending = nil
-			if s.Tmux != "" {
-				names = append(names, s.Tmux)
+			c := candidate{s: s}
+			switch s.Status {
+			case store.StatusRunning, store.StatusQueued:
+				markStopped(s)
+				if s.Tmux != "" {
+					names = append(names, s.Tmux)
+					c.paneStopped = true
+				}
+			case store.StatusExternal:
+				c.lastPID = s.PID
+			}
+			if s.AgentSessionID != "" {
+				candidates[s.AgentSessionID] = c
 			}
 		}
 	})
 	for _, name := range names {
 		tmux.Stop(name)
 	}
+	if len(candidates) == 0 {
+		return stopped, false
+	}
+
+	live := claude.Running()
+	for id, c := range candidates {
+		l, ok := live[id]
+		if !ok && claude.ProcessAlive(c.lastPID) {
+			l, ok = claude.Live{PID: c.lastPID}, true
+		}
+		if !ok {
+			continue
+		}
+		if !l.Background() && !c.paneStopped {
+			e.logf(t, "Session %s still runs in another terminal (pid %d)", claude.ShortID(id), l.PID)
+			e.notify("#%d still runs in another terminal (pid %d); exit it there", t.Number, l.PID)
+			leftRunning = true
+			continue
+		}
+		if err := claude.Terminate(l.PID); err != nil {
+			e.logf(t, "Stopping session %s failed: %v", claude.ShortID(id), err)
+			e.notify("#%d: stopping its agent (pid %d) failed: %v", t.Number, l.PID, err)
+			leftRunning = true
+			continue
+		}
+		if !c.paneStopped {
+			e.with(func() { markStopped(c.s) })
+			e.logf(t, "Stopped background session %s", claude.ShortID(id))
+		}
+	}
+	return stopped, leftRunning
 }
 
 // activate makes sure the agent for col is running in the task's worktree:
