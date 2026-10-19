@@ -247,7 +247,7 @@ func (e *Engine) flushPending(t *store.Task, key string) {
 	next := s.Pending[0]
 	s.Pending = s.Pending[1:]
 	e.mu.Unlock()
-	e.sendMessage(t, key, next.Text, false)
+	e.sendPending(t, key, next, false)
 }
 
 func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {

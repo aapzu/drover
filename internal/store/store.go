@@ -91,11 +91,14 @@ type Session struct {
 	// spawn can resume it instead of starting over.
 	Started     bool `json:"started"`
 	TurnInVisit bool `json:"turnInVisit"`
-	// RespawnPending restarts the agent with its column's settings once the
+	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
-	RespawnPending bool      `json:"respawnPending,omitempty"`
-	Pending        []Pending `json:"pending,omitempty"`
-	LastReply      string    `json:"lastReply,omitempty"`
+	RespawnPending bool `json:"respawnPending,omitempty"`
+	// Relocate is the worktree a running scratch agent was asked to move into,
+	// until its hooks report it there.
+	Relocate  string    `json:"relocate,omitempty"`
+	Pending   []Pending `json:"pending,omitempty"`
+	LastReply string    `json:"lastReply,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -138,7 +141,8 @@ type PR struct {
 
 // Pending is a message waiting for the session to become idle.
 type Pending struct {
-	Text string `json:"text"`
+	Text     string `json:"text"`
+	Relocate string `json:"relocate,omitempty"`
 }
 
 type LogEntry struct {

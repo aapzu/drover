@@ -128,3 +128,16 @@ func TestAsksForPR(t *testing.T) {
 		}
 	}
 }
+
+func TestScreenMode(t *testing.T) {
+	for screen, want := range map[string]string{
+		"> fix it\n\n  plan mode is great\n" + strings.Repeat("\n", 8) + "────\n> \n────\n  ⏸ plan mode on (shift+tab to cycle)\n\n": "plan",
+		"────\n> \n────\n  ⏵⏵ accept edits on (shift+tab to cycle)":                                                                  "acceptEdits",
+		"────\n> \n────\n  ⏸ manual mode on · ? for shortcuts":                                                                       "default",
+		"we discussed auto mode earlier\n" + strings.Repeat("line\n", 10) + "────\n> \n────\n  ? for shortcuts":                      "",
+	} {
+		if got := ScreenMode(screen); got != want {
+			t.Errorf("ScreenMode(%q) = %q, want %q", screen, got, want)
+		}
+	}
+}
