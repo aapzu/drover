@@ -948,6 +948,60 @@ func TestStopSessionsSparesKeptConversation(t *testing.T) {
 	}
 }
 
+func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
+	root, log := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	sid := ready.Sessions[store.MainSession].AgentSessionID
+	transcript := claude.TranscriptPath(sid, root)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"/help"}` + "\n")
+	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Help shown."}` + "\n")
+	waitFor(t, e, "slash command turn to end", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].LastReply == "Help shown."
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0]; got.ColumnID != "todo" {
+		t.Fatalf("a slash command turn moved the card to %s", got.ColumnID)
+	}
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
+	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Looking into it."}` + "\n")
+
+	waitFor(t, e, "card to move into Executing with a worktree", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.ColumnID == "exec" && t.WorktreePath != "" && s.Status == store.StatusRunning && !s.Scratch
+	})
+	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
+		return strings.Contains(readFile(log), "--resume\n"+sid)
+	})
+}
+
 func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	root, log := setupProject(t)
 	config := t.TempDir()

@@ -46,7 +46,11 @@ type actionDoneMsg struct {
 	err       error
 	retryDone func() tea.Cmd
 }
-type attachDoneMsg struct{ err error }
+type attachDoneMsg struct {
+	id       string
+	paneGone bool
+	err      error
+}
 type suspendAllMsg struct{}
 type sessionStartedMsg struct {
 	task *store.Task
@@ -62,11 +66,13 @@ type Model struct {
 	mode          mode
 	frame         int
 
-	col        int
-	selected   map[string]string // column id -> selected task id
-	previewFor string
-	previewTxt string
-	previewAt  time.Time
+	col         int
+	selected    map[string]string // column id -> selected task id
+	previewFor  string
+	previewTxt  string
+	previewAt   time.Time
+	follow      string
+	followUntil time.Time
 	// previewScroll is how many lines above the bottom the preview shows.
 	previewScroll  int
 	previewHistory int
@@ -259,6 +265,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
 		}
+		switch {
+		case m.follow == "":
+		case m.snap.Busy[m.follow] == "":
+			if cmd, ok := m.attach(m.follow); ok {
+				cmds = append(cmds, cmd)
+			}
+			m.follow = ""
+		case time.Now().After(m.followUntil):
+			m.follow = ""
+		}
 		return m, tea.Batch(cmds...)
 	case previewMsg:
 		if msg.at.Before(m.previewAt) {
@@ -323,11 +339,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Attach failed: " + msg.err.Error())
 		}
 		m.snap = m.eng.Snapshot()
+		var cmds []tea.Cmd
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
-			return m, tea.EnableMouseCellMotion
+			cmds = append(cmds, tea.EnableMouseCellMotion)
 		}
-		return m, nil
+		if msg.paneGone && m.snap.Busy[msg.id] != "" {
+			m.follow, m.followUntil = msg.id, time.Now().Add(time.Minute)
+		}
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		switch m.mode {
 		case modeForm:
@@ -402,7 +422,9 @@ func (m Model) attach(id string) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
-	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg { return attachDoneMsg{err} }), true
+	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+		return attachDoneMsg{id: id, paneGone: !tmux.Has(name), err: err}
+	}), true
 }
 
 func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {

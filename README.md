@@ -79,8 +79,11 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   `kangentic.local.json` can override `defaultBaseBranch`.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
-  becomes the card's title. Moving the card into an agent column creates its
-  worktree and branch and resumes the same conversation there.
+  becomes the card's title. When that turn ends, the card moves to the first
+  agent column that is neither in plan mode nor isolated (Executing by
+  default), which creates its worktree and branch and resumes the same
+  conversation there; if you're attached, you follow it. Move it yourself to
+  go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
   `.kangentic/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
