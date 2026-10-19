@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,7 +58,8 @@ type Task struct {
 	// GroupID is set on cards split off when one session opens several PRs.
 	// It names the owner task, which holds the sessions and the worktree
 	// that every card in the group shares.
-	GroupID string `json:"groupId,omitempty"`
+	GroupID string   `json:"groupId,omitempty"`
+	SeenPRs []string `json:"seenPRs,omitempty"`
 	// ActiveCard is the group card whose move last drove the shared session;
 	// its column decides the session's settings and turn-end automations.
 	ActiveCard     string              `json:"activeCard,omitempty"`
@@ -101,12 +103,12 @@ type Session struct {
 	Scratch   bool `json:"scratch,omitempty"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
-	Forked         bool   `json:"forked,omitempty"`
-	PID            int    `json:"pid,omitempty"`
-	TranscriptPath string `json:"transcriptPath,omitempty"`
-	// PRScan is how far the current transcript was searched for PRs.
-	PRScan    int64     `json:"prScan,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Forked         bool      `json:"forked,omitempty"`
+	PID            int       `json:"pid,omitempty"`
+	TranscriptPath string    `json:"transcriptPath,omitempty"`
+	PRScanPath     string    `json:"prScanPath,omitempty"`
+	PRScan         int64     `json:"prScan,omitempty"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // Issue links a task to a tracker issue, currently Linear.
@@ -166,6 +168,7 @@ func (t *Task) Clone() *Task {
 		c.AutomationRuns[k] = v
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)
+	c.SeenPRs = slices.Clone(t.SeenPRs)
 	if t.Issue != nil {
 		issue := *t.Issue
 		c.Issue = &issue

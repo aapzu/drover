@@ -47,6 +47,7 @@ type Engine struct {
 	lastPRPoll       time.Time
 	lastReleaseFetch time.Time
 	prPolling        atomic.Bool
+	prScanErrs       map[string]string
 
 	mu         sync.Mutex
 	state      *store.State
@@ -89,6 +90,7 @@ func New(root string) (*Engine, error) {
 		board:                board,
 		boardFound:           found,
 		notices:              make(chan string, 64),
+		prScanErrs:           map[string]string{},
 	}
 	if info, err := os.Stat(filepath.Join(root, config.FileName)); err == nil {
 		e.boardMod = info.ModTime()

@@ -81,9 +81,11 @@ func (e *Engine) addPRs(owner *store.Task, urls []string) {
 		}
 	}
 	for _, url := range urls {
-		if slices.ContainsFunc(members, func(m *store.Task) bool { return m.PR != nil && m.PR.URL == url }) {
+		if slices.Contains(owner.SeenPRs, url) ||
+			slices.ContainsFunc(members, func(m *store.Task) bool { return m.PR != nil && m.PR.URL == url }) {
 			continue
 		}
+		owner.SeenPRs = append(owner.SeenPRs, url)
 		now, n := time.Now(), gh.Number(url)
 		card := &store.Task{
 			ID:        uuid.NewString(),
@@ -120,7 +122,7 @@ func (e *Engine) handOver(old, heir *store.Task) {
 	}
 	heir.Sessions, old.Sessions = old.Sessions, nil
 	heir.WorktreePath, heir.Branch, heir.BaseBranch = old.WorktreePath, old.Branch, old.BaseBranch
-	heir.Visit = old.Visit
+	heir.Visit, heir.SeenPRs = old.Visit, old.SeenPRs
 	heir.ActiveCard = old.ActiveCard
 	if heir.ActiveCard == old.ID {
 		heir.ActiveCard = heir.ID

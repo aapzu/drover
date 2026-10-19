@@ -657,6 +657,58 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	}
 }
 
+func TestTranscriptPRBecomesCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(prBoard), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	task := e.CreateTask("Auth", "")
+	e.with(func() {
+		task.Sessions = map[string]*store.Session{store.MainSession: {
+			Key: store.MainSession, AgentSessionID: "sid", Status: store.StatusSuspended, Started: true,
+		}}
+	})
+	created := func(n int) string {
+		return fmt.Sprintf(`{"type":"user","toolUseResult":{"gitOperation":{"pr":{"url":"https://github.com/o/r/pull/%d","action":"created"}}}}`+"\n", n)
+	}
+	path := claude.TranscriptPath("sid", root)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte(created(1)), 0o644)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	waitForAll(t, e, "PR card from the transcript", func(tasks []*store.Task) bool {
+		return len(tasks) == 2 && tasks[1].GroupID == task.ID && tasks[1].Title == "PR one"
+	})
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.PRScanPath != path || s.PRScan != int64(len(created(1))) {
+		t.Fatalf("scan position %q %d", s.PRScanPath, s.PRScan)
+	}
+	if err := e.DeleteTask(e.Snapshot().Tasks[1].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	os.WriteFile(filepath.Join(filepath.Dir(path), "sid2.jsonl"), []byte(created(1)+created(2)), 0o644)
+	e.with(func() {
+		s := task.Sessions[store.MainSession]
+		s.TranscriptPath, s.AgentSessionID = path, "sid2"
+	})
+	waitForAll(t, e, "only the new PR split off", func(tasks []*store.Task) bool {
+		return len(tasks) == 2 && tasks[1].Title == "PR two"
+	})
+	time.Sleep(3 * e.PRPollInterval)
+	if n := len(e.Snapshot().Tasks); n != 2 {
+		t.Errorf("deleted PR card came back: %d cards", n)
+	}
+}
+
 func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) bool) {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)

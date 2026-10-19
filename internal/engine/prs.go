@@ -67,6 +67,7 @@ func (e *Engine) pollPRs() []func() {
 			})
 		}
 		wg.Wait()
+		e.scanTranscripts(scans)
 		if len(merged) == 0 {
 			return
 		}
@@ -100,7 +101,11 @@ func (e *Engine) prScans() []prScan {
 			if path == "" {
 				continue
 			}
-			scans = append(scans, prScan{owner: t.ID, key: key, path: path, offset: s.PRScan})
+			offset := s.PRScan
+			if s.PRScanPath != path {
+				offset = 0
+			}
+			scans = append(scans, prScan{owner: t.ID, key: key, path: path, offset: offset})
 		}
 	}
 	return scans
@@ -127,12 +132,13 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 		prScan
 		urls []string
 		next int64
+		err  error
 	}
 	var results []found
 	for _, sc := range scans {
 		urls, next, err := claude.TranscriptPRs(sc.path, sc.offset)
-		if err == nil && next != sc.offset {
-			results = append(results, found{sc, urls, next})
+		if err != nil || next != sc.offset {
+			results = append(results, found{sc, urls, next, err})
 		}
 	}
 	if len(results) == 0 {
@@ -141,10 +147,19 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 	e.with(func() {
 		for _, r := range results {
 			t := e.find(r.owner)
-			if t == nil || t.Sessions[r.key] == nil || t.Sessions[r.key].PRScan != r.offset {
+			if t == nil || t.Sessions[r.key] == nil || e.transcriptOf(t, t.Sessions[r.key]) != r.path {
 				continue
 			}
-			t.Sessions[r.key].PRScan = r.next
+			s := t.Sessions[r.key]
+			if r.err != nil {
+				if e.prScanErrs[r.path] != r.err.Error() {
+					t.AddLog(fmt.Sprintf("Looking for PRs in the conversation failed: %v", r.err))
+				}
+				e.prScanErrs[r.path] = r.err.Error()
+				continue
+			}
+			delete(e.prScanErrs, r.path)
+			s.PRScanPath, s.PRScan = r.path, r.next
 			if len(r.urls) > 0 {
 				e.addPRs(t, r.urls)
 			}
