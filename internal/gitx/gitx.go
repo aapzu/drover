@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -30,6 +31,22 @@ func run(dir string, args ...string) (string, error) {
 }
 
 func Toplevel(dir string) (string, error) { return run(dir, "rev-parse", "--show-toplevel") }
+
+// MainRoot is the main checkout of the repository dir belongs to, so every
+// linked worktree resolves to the same project.
+func MainRoot(dir string) (string, error) {
+	out, err := run(dir, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", err
+	}
+	main, _, _ := strings.Cut(out, "\n\n")
+	lines := strings.Split(main, "\n")
+	path, ok := strings.CutPrefix(lines[0], "worktree ")
+	if !ok || slices.Contains(lines, "bare") {
+		return Toplevel(dir)
+	}
+	return path, nil
+}
 
 func HasCommits(root string) bool {
 	_, err := run(root, "rev-parse", "--verify", "HEAD")

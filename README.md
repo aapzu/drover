@@ -62,7 +62,7 @@ drover
 With the mouse on, drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to
 resize, and click the preview to type into the agent. Layout is saved in
-`.kangentic/tui/ui.json`.
+`ui.json` in the project's state directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
 `esc` and `ctrl+c` included. `ctrl+q` returns to the board.
@@ -97,8 +97,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   `{{baseBranch}}` and `{{agentReply}}`. `planExitTarget` moves a card once
   its plan is approved.
 - **Activity.** A `--settings` file adds Claude Code hooks that append events
-  to `.kangentic/tui/sessions/…/events.jsonl`. The board reads them to show
-  working, idle and needs-you states and to run turn-end automations.
+  to `sessions/…/events.jsonl` in the state directory. The board reads them
+  to show working, idle and needs-you states and to run turn-end automations.
 
 ## One card per pull request
 
@@ -185,8 +185,12 @@ fetches any issue by key or URL.
 
 ## Differences from the desktop app
 
-- Tasks live in `.kangentic/tui/state.json`, not in the desktop app's
-  database, so the two apps don't share tasks. They do share the board.
+- Tasks live in `$XDG_STATE_HOME/drover/<repo>-<hash>/state.json`
+  (default `~/.local/state`), outside the repo so they can't be committed.
+  Every worktree of a repo opens the same board. The desktop app keeps tasks
+  in its own database, so the two apps don't share tasks. They do share the
+  board. State from older versions in `.kangentic/tui/` is moved there on
+  first launch.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.

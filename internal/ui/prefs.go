@@ -26,7 +26,7 @@ func (d density) cardHeight() int {
 	return 5
 }
 
-// prefs is the board layout, kept per repo in .kangentic/tui/ui.json.
+// prefs is the board layout, kept per repo in the store's ui.json.
 type prefs struct {
 	// PreviewHeight is in rows; 0 means the default share of the screen.
 	PreviewHeight int            `json:"previewHeight,omitempty"`

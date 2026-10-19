@@ -90,6 +90,7 @@ func setupProject(t *testing.T) (root, log string) {
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_LOG", log)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
 	tmux.Socket = fmt.Sprintf("kt-test-%d", os.Getpid())
 	t.Cleanup(func() { exec.Command("tmux", "-L", tmux.Socket, "kill-server").Run() })
 

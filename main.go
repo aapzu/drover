@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -84,18 +83,15 @@ func run(dir string) error {
 	return err
 }
 
-// projectRoot resolves the repository root, stepping out of a task worktree
-// so the board always opens on the main checkout.
+// projectRoot resolves the repository root, stepping out of any linked
+// worktree so the board always opens on the main checkout.
 func projectRoot(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
-	if top, err := gitx.Toplevel(abs); err == nil {
-		abs = top
-	}
-	if i := strings.Index(abs, string(filepath.Separator)+filepath.Join(".kangentic", "worktrees")); i >= 0 {
-		abs = abs[:i]
+	if main, err := gitx.MainRoot(abs); err == nil {
+		abs = main
 	}
 	return abs, nil
 }
