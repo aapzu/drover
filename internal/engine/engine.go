@@ -340,6 +340,8 @@ type MoveOptions struct {
 	// evict marks a move you made, which may suspend an idle agent to free a
 	// slot; automation moves queue instead.
 	evict bool
+	// skipEnter leaves out the target's enter group.
+	skipEnter bool
 }
 
 // Move transitions a task into the column with id targetID.
@@ -439,7 +441,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
 		return nil
 	default:
-		return e.activate(t, target, from, opts.Message, true, opts.evict)
+		return e.activate(t, target, from, opts.Message, !opts.skipEnter, opts.evict)
 	}
 }
 

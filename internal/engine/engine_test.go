@@ -34,11 +34,15 @@ done
 events="$(dirname "$settings")/events.jsonl"
 emit() { printf '%s\n' "$1" >> "$events"; }
 turn() {
-  emit '{"hook_event_name":"UserPromptSubmit"}'
+  case "$1" in
+    *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
+    *) emit '{"hook_event_name":"UserPromptSubmit"}';;
+  esac
   sleep 0.2
   case "$1" in
     *PLAN*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}'; sleep 1;;
     *SLOW*) sleep 3;;
+    *"open a PR"*) sleep 1;;
     *PRS*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/2\\n"}}';;
@@ -321,6 +325,43 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	}
 	if want := []string{"Moved To Do → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
 		t.Errorf("moves = %v, want %v", moves, want)
+	}
+}
+
+func TestPRRequestMovesCard(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"self","name":"Self-review","autoSpawn":true,
+	   "automations":{"onEnter":[{"type":"send_message","message":"/code-review"}],
+	    "onTurnEnd":[{"type":"move_to_column","finalLine":"Findings: applied","targetColumn":"Done"}]}},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"requested":"self"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if err := e.Send(task.ID, "Looks good, open a PR"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "PR request to move the card via Self-review to Done", func(t *store.Task) bool {
+		return t.ColumnID == "done"
+	})
+	if strings.Contains(readFile(log), "/code-review") {
+		t.Error("Self-review's enter group ran on a PR request")
 	}
 }
 

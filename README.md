@@ -133,6 +133,7 @@ board uses:
 
 ```json
 "prFlow": {
+  "requested": "self-review",
   "opened": "in-review",
   "changesRequested": "executing",
   "changesRequestedMessage": "PR #{{prNumber}} got review comments…",
@@ -141,6 +142,11 @@ board uses:
 }
 ```
 
+- **requested:** a prompt asking the agent to open a PR, like "open a PR" or
+  "create pull requests", moves its card here from an earlier agent column.
+  Negated asks ("don't open a PR yet") are ignored. The column must have
+  `autoSpawn`. Its enter automations are skipped, as the agent is already on
+  it, but its turn-end automations run when that turn ends.
 - **opened:** where a new PR card goes.
 - **changesRequested:** a new review requesting changes moves a card from
   `opened` here and sends the agent `changesRequestedMessage`. Once the agent

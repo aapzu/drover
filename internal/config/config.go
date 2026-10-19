@@ -24,6 +24,7 @@ type Board struct {
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
 // target is a column id or name; an empty one leaves cards where they are.
 type PRFlow struct {
+	Requested               string `json:"requested,omitempty"`
 	Opened                  string `json:"opened,omitempty"`
 	ChangesRequested        string `json:"changesRequested,omitempty"`
 	ChangesRequestedMessage string `json:"changesRequestedMessage,omitempty"`
@@ -74,6 +75,9 @@ type Automation struct {
 func (c Column) IsTodo() bool { return c.Role == "todo" }
 func (c Column) IsDone() bool { return c.Role == "done" }
 
+// IsAgent columns run an agent for the cards in them.
+func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
+
 // Isolated columns run their own agent session instead of the task's main one.
 func (c Column) Isolated() bool { return c.SessionTarget == "isolated" }
 
@@ -122,10 +126,13 @@ func (b *Board) validate() error {
 		seen[c.ID] = true
 	}
 	if f := b.PRFlow; f != nil {
-		for _, ref := range []string{f.Opened, f.ChangesRequested, f.Merged, f.Released} {
+		for _, ref := range []string{f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released} {
 			if _, ok := b.Find(ref); ref != "" && !ok {
 				return fmt.Errorf("%s: prFlow names unknown column %q", FileName, ref)
 			}
+		}
+		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
+			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
 		}
 	}
 	return nil
@@ -197,6 +204,7 @@ func Default() *Board {
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},
 		PRFlow: &PRFlow{
+			Requested:        "self-review",
 			Opened:           "in-review",
 			ChangesRequested: "executing",
 			ChangesRequestedMessage: "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` " +

@@ -3,9 +3,11 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/gh"
 	"github.com/aapzu/drover/internal/gitx"
@@ -43,7 +45,8 @@ func (e *Engine) pollPRs() []func() {
 	} else {
 		e.lastReleaseFetch = time.Now()
 	}
-	if len(open) == 0 && len(merged) == 0 {
+	scans := e.prScans()
+	if len(open) == 0 && len(merged) == 0 && len(scans) == 0 {
 		return nil
 	}
 	branch := ""
@@ -53,6 +56,7 @@ func (e *Engine) pollPRs() []func() {
 	e.prPolling.Store(true)
 	return []func(){func() {
 		defer e.prPolling.Store(false)
+		e.scanTranscripts(scans)
 		var wg sync.WaitGroup
 		slots := make(chan struct{}, prLookups)
 		for _, id := range open {
@@ -75,6 +79,77 @@ func (e *Engine) pollPRs() []func() {
 			e.checkRelease(id, ref)
 		}
 	}}
+}
+
+// prScan is a transcript to search for PRs its session created.
+type prScan struct {
+	owner, key, path string
+	offset           int64
+}
+
+// prScans lists the transcripts of the sessions of cards not in Done.
+// Called with mu held.
+func (e *Engine) prScans() []prScan {
+	var scans []prScan
+	for _, t := range e.state.Tasks {
+		if col, _, _ := e.board.Column(t.ColumnID); t.GroupID != "" || col.IsDone() {
+			continue
+		}
+		for key, s := range t.Sessions {
+			path := e.transcriptOf(t, s)
+			if path == "" {
+				continue
+			}
+			scans = append(scans, prScan{owner: t.ID, key: key, path: path, offset: s.PRScan})
+		}
+	}
+	return scans
+}
+
+// transcriptOf is where s's current conversation is recorded. Called with mu held.
+func (e *Engine) transcriptOf(t *store.Task, s *store.Session) string {
+	if s.AgentSessionID == "" {
+		return ""
+	}
+	if s.TranscriptPath != "" {
+		return filepath.Join(filepath.Dir(s.TranscriptPath), s.AgentSessionID+".jsonl")
+	}
+	dir := t.WorktreePath
+	if dir == "" {
+		dir = e.Root
+	}
+	return claude.TranscriptPath(s.AgentSessionID, dir)
+}
+
+// scanTranscripts adds the PRs sessions created since the last scan.
+func (e *Engine) scanTranscripts(scans []prScan) {
+	type found struct {
+		prScan
+		urls []string
+		next int64
+	}
+	var results []found
+	for _, sc := range scans {
+		urls, next, err := claude.TranscriptPRs(sc.path, sc.offset)
+		if err == nil && next != sc.offset {
+			results = append(results, found{sc, urls, next})
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+	e.with(func() {
+		for _, r := range results {
+			t := e.find(r.owner)
+			if t == nil || t.Sessions[r.key] == nil || t.Sessions[r.key].PRScan != r.offset {
+				continue
+			}
+			t.Sessions[r.key].PRScan = r.next
+			if len(r.urls) > 0 {
+				e.addPRs(t, r.urls)
+			}
+		}
+	})
 }
 
 // refreshPR updates an open PR's card from GitHub and moves it along the

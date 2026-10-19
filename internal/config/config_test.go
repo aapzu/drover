@@ -91,4 +91,9 @@ func TestPRFlow(t *testing.T) {
 	if err != nil || board.PRFlow == nil || board.PRFlow.Opened != "in review" {
 		t.Fatalf("prFlow not loaded: %+v %v", board.PRFlow, err)
 	}
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":1,"columns":[{"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`), 0o644)
+	if _, _, err := Load(dir); err == nil {
+		t.Fatal("prFlow.requested without autoSpawn accepted")
+	}
 }
