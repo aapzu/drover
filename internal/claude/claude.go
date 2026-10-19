@@ -214,13 +214,15 @@ func readLines(path string, offset int64, fn func([]byte)) (int64, error) {
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadBytes('\n')
+		if err == io.EOF {
+			return offset, nil
+		}
 		if err != nil {
-			break
+			return offset, err
 		}
 		offset += int64(len(line))
 		fn(line)
 	}
-	return offset, nil
 }
 
 // Reply returns the agent's final message for a Stop event, falling back to
