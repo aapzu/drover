@@ -33,6 +33,8 @@ set -g mouse on
 set -g history-limit 20000
 set -g window-size latest
 set -g escape-time 10
+set -s extended-keys on
+set -as terminal-features '*:extkeys'
 set -g remain-on-exit off
 bind -n C-q detach-client
 `
