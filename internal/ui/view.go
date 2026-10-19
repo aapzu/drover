@@ -159,7 +159,7 @@ func (m Model) renderBoard(l layout) string {
 func columnSummary(c config.Column) string {
 	switch {
 	case c.IsTodo():
-		return "backlog"
+		return "sessions · main checkout"
 	case c.IsDone():
 		return "archived · worktree removed"
 	case !c.AutoSpawn:
@@ -300,9 +300,9 @@ func stuckStarting(s *store.Session) bool {
 // card is drawn faint where it came from.
 func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string {
 	content := width - 4
-	title := fmt.Sprintf("#%d %s", t.Number, t.Title)
+	title := fmt.Sprintf("#%d %s", t.Number, taskTitle(t))
 	if t.Issue != nil {
-		title = fmt.Sprintf("#%d %s %s", t.Number, t.Issue.Key, t.Title)
+		title = fmt.Sprintf("#%d %s %s", t.Number, t.Issue.Key, taskTitle(t))
 	}
 	style := cardStyle
 	if active {
@@ -413,7 +413,7 @@ func (m Model) renderPreview(height int) string {
 	title := " no task selected "
 	body := ""
 	if t != nil {
-		title = fmt.Sprintf(" #%d %s ", t.Number, t.Title)
+		title = fmt.Sprintf(" #%d %s ", t.Number, taskTitle(t))
 		if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
 			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d). Its latest reply:", s.PID)) + "\n\n" + s.LastReply
 		} else if _, ok := m.eng.LiveSession(t.ID); !ok {
@@ -476,12 +476,8 @@ func previewWindow(s string, n, scroll int) string {
 }
 
 func (m Model) renderForm() string {
-	heading := "New task"
-	if m.editingID != "" {
-		heading = "Edit task"
-	}
 	return modalStyle.Width(min(104, m.width-4)).Render(strings.Join([]string{
-		bold.Render(heading),
+		bold.Render("Edit task"),
 		"",
 		muted.Render("Title"),
 		m.titleInput.View(),
@@ -518,7 +514,7 @@ func (m Model) renderHelp() string {
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
 		{"m 1-9", "move card to column"},
-		{"n", "new task (starts an agent)"},
+		{"n", "new Claude session (no branch until moved right)"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal (Ctrl-q returns)"},
@@ -566,10 +562,18 @@ func (m Model) renderHelp() string {
 	return modalStyle.Render(body + "\n\n" + footer)
 }
 
+// taskTitle stands in for a session that has not been sent a message yet.
+func taskTitle(t *store.Task) string {
+	if t.Title == "" {
+		return "New session"
+	}
+	return t.Title
+}
+
 func (m Model) renderDetail(t *store.Task) string {
 	col, _, _ := m.snap.Board.Column(t.ColumnID)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n", bold.Render(fmt.Sprintf("#%d %s", t.Number, t.Title)))
+	fmt.Fprintf(&b, "%s\n\n", bold.Render(fmt.Sprintf("#%d %s", t.Number, taskTitle(t))))
 	field := func(k, v string) {
 		if v != "" {
 			fmt.Fprintf(&b, "%s %s\n", muted.Render(fmt.Sprintf("%-10s", k)), v)

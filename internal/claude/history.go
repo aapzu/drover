@@ -126,6 +126,42 @@ func projectDirName(path string) string {
 	return b.String()
 }
 
+// projectDir is where Claude Code keeps the transcripts of conversations
+// started in dir.
+func projectDir(dir string) string {
+	return filepath.Join(ConfigDir(), "projects", projectDirName(dir))
+}
+
+// TranscriptPath is where Claude Code records a conversation started in dir.
+func TranscriptPath(sessionID, dir string) string {
+	return filepath.Join(projectDir(dir), sessionID+".jsonl")
+}
+
+// MoveTranscript moves the transcript at path, with the directory beside it
+// that holds subagent and tool output, into toDir's project so
+// `claude --resume` finds it when run from toDir. moved is false when there
+// is no transcript at path; it is true with an error when only the
+// directory failed to move.
+func MoveTranscript(path, toDir string) (moved bool, err error) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	to := projectDir(toDir)
+	if err := os.MkdirAll(to, 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Rename(path, filepath.Join(to, filepath.Base(path))); err != nil {
+		return false, err
+	}
+	side := strings.TrimSuffix(path, ".jsonl")
+	if err := os.Rename(side, filepath.Join(to, filepath.Base(side))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, err
+	}
+	return true, nil
+}
+
 // Discover lists conversations started in root or any directory below it
 // (such as worktrees), running ones first, then the most recent up to limit.
 // skip holds session ids that are already on the board.
@@ -185,7 +221,7 @@ func Discover(root string, skip map[string]bool, limit int) []Found {
 	out := make([]Found, 0, len(byID))
 	for _, f := range byID {
 		if f.Title == "" {
-			f.Title = firstLine(f.FirstPrompt)
+			f.Title = FirstLine(f.FirstPrompt)
 		}
 		if f.Title == "" {
 			f.Title = "Session " + ShortID(f.SessionID)
@@ -321,7 +357,7 @@ func tagValue(s, tag string) (string, bool) {
 	return strings.TrimSpace(value), ok
 }
 
-func firstLine(s string) string {
+func FirstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
 	if len(line) > 80 {
 		line = line[:77] + "…"

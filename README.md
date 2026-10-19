@@ -7,8 +7,8 @@ starts. It began as a terminal version of
 
 ```
  ▦ drover     my-app on main                                              ⠧ 1 working  ◆ 1 need you
- 1 To Do 2              2 Planning 1             3 Executing 1            4 Code Review 0
- backlog                plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · isolated · ⚡2
+ 1 Sessions 2           2 Planning 1             3 Executing 1            4 Code Review 0
+ sessions · main check… plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · isolated · ⚡2
 ╭──────────────────────╮╭──────────────────────╮╭──────────────────────╮
 │ #3 Upgrade React     ││ #1 Fix the login bug ││ #2 Add dark mode     │
 │                      ││                      ││ to settings page     │
@@ -46,7 +46,7 @@ drover
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m` then `1`–`9` | move card to a column |
-| `n`, `e`, `x` | new task (starts in the first agent column), edit, delete task |
+| `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
@@ -74,9 +74,13 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 
 - **Same board file.** Columns come from `kangentic.json` at the repo root,
   in the desktop app's format, so you and your teammates share one board. With
-  no file it uses a built-in default (To Do, Planning, Executing,
+  no file it uses a built-in default (Sessions, Planning, Executing,
   Self-review, In review, Verify in develop, Done); press `W` to write it out.
   `kangentic.local.json` can override `defaultBaseBranch`.
+- **Sessions first, branches later.** `n` opens a Claude session in the main
+  checkout, on a card in the first (To Do role) column. Your first message
+  becomes the card's title. Moving the card into an agent column creates its
+  worktree and branch and resumes the same conversation there.
 - **Worktree per task.** Entering an agent column creates
   `.kangentic/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the

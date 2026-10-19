@@ -98,6 +98,7 @@ type Session struct {
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
 	HandedOff bool `json:"handedOff,omitempty"`
+	Scratch   bool `json:"scratch,omitempty"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool      `json:"forked,omitempty"`

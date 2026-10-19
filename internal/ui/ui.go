@@ -48,6 +48,10 @@ type actionDoneMsg struct {
 }
 type attachDoneMsg struct{ err error }
 type suspendAllMsg struct{}
+type sessionStartedMsg struct {
+	task *store.Task
+	err  error
+}
 
 type Model struct {
 	eng    *engine.Engine
@@ -302,6 +306,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case suspendAllMsg:
 		m.suspendAll = true
 		return m, tea.Quit
+	case sessionStartedMsg:
+		m.snap = m.eng.Snapshot()
+		m.selectTask(msg.task)
+		if msg.err != nil {
+			m.setFlash("Error: " + msg.err.Error())
+			return m, nil
+		}
+		if cmd, ok := m.attach(msg.task.ID); ok {
+			m.setFlash("")
+			return m, cmd
+		}
+		return m, nil
 	case attachDoneMsg:
 		if msg.err != nil {
 			m.setFlash("Attach failed: " + msg.err.Error())
@@ -378,6 +394,15 @@ func (m Model) hasLiveSession(id string) bool {
 
 func (m Model) action(fn func() error) tea.Cmd {
 	return func() tea.Msg { return actionDoneMsg{err: fn()} }
+}
+
+// attach opens the task's live agent terminal; Ctrl-q returns to the board.
+func (m Model) attach(id string) (tea.Cmd, bool) {
+	name, ok := m.eng.LiveSession(id)
+	if !ok {
+		return nil, false
+	}
+	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg { return attachDoneMsg{err} }), true
 }
 
 func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
@@ -465,8 +490,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.modalTask = t.ID
 		}
 	case "n":
-		m.openForm(nil)
-		return m, textinput.Blink
+		m.setFlash("Starting a new session…")
+		return m, func() tea.Msg {
+			t, err := m.eng.NewSession()
+			return sessionStartedMsg{task: t, err: err}
+		}
 	case "e":
 		if t != nil {
 			m.openForm(t)
@@ -478,16 +506,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		id := t.ID
 		m.mode = modeConfirm
-		m.confirmText = fmt.Sprintf("Delete #%d %q? Its agent is stopped and worktree removed; the branch is kept. (y/N)", t.Number, t.Title)
+		m.confirmText = fmt.Sprintf("Delete #%d %q? Its agent is stopped and worktree removed; the branch is kept. (y/N)", t.Number, taskTitle(t))
 		if len(store.Members(m.snap.Tasks, store.Owner(m.snap.Tasks, t))) > 1 {
-			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, t.Title)
+			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, taskTitle(t))
 		}
 		m.confirmAction = func() tea.Cmd { return m.action(func() error { return m.eng.DeleteTask(id) }) }
 	case "enter", "a":
 		if t == nil {
 			break
 		}
-		name, ok := m.eng.LiveSession(t.ID)
+		cmd, ok := m.attach(t.ID)
 		if s := m.sessionFor(t); !ok && s != nil && s.Status == store.StatusExternal {
 			m.setFlash(fmt.Sprintf("#%d runs in another terminal (pid %d). Exit it there, then press r to resume it here.", t.Number, s.PID))
 			break
@@ -496,7 +524,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("No running agent. Press r to start or resume it.")
 			break
 		}
-		return m, tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg { return attachDoneMsg{err} })
+		return m, cmd
 	case "s":
 		if t == nil {
 			break
@@ -593,14 +621,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) openForm(t *store.Task) {
 	m.mode = modeForm
 	m.formFocus = 0
-	m.editingID = ""
-	m.titleInput.Reset()
-	m.promptInput.Reset()
-	if t != nil {
-		m.editingID = t.ID
-		m.titleInput.SetValue(t.Title)
-		m.promptInput.SetValue(t.Prompt)
-	}
+	m.editingID = t.ID
+	m.titleInput.SetValue(t.Title)
+	m.promptInput.SetValue(t.Prompt)
 	m.titleInput.Focus()
 	m.promptInput.Blur()
 }
@@ -633,21 +656,7 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("A task needs a title")
 			return m, nil
 		}
-		prompt := strings.TrimSpace(m.promptInput.Value())
-		if m.editingID != "" {
-			m.eng.EditTask(m.editingID, title, prompt)
-		} else {
-			t := m.eng.CreateTask(title, prompt)
-			m.snap = m.eng.Snapshot()
-			m.mode = modeBoard
-			if start := m.snap.Board.StartColumn(); start.ID != t.ColumnID {
-				_, m.col, _ = m.snap.Board.Column(start.ID)
-				m.selected[start.ID] = t.ID
-				return m, m.moveCmd(t, start)
-			}
-			m.selectTask(t)
-			m.setFlash(fmt.Sprintf("Created #%d. Move it right (L) to start an agent.", t.Number))
-		}
+		m.eng.EditTask(m.editingID, title, strings.TrimSpace(m.promptInput.Value()))
 		m.snap = m.eng.Snapshot()
 		m.mode = modeBoard
 		return m, nil
