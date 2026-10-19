@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aapzu/drover/internal/claude"
@@ -103,6 +104,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityThinking
 			s.Started = true
 			s.TurnInVisit = true
+			if prompt := strings.TrimSpace(ev.Prompt); t.Title == "" && prompt != "" && !strings.HasPrefix(prompt, "/") {
+				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
+			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
@@ -298,15 +302,19 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 		Model:          col.ModelOverride,
 		Effort:         col.EffortOverride,
 	}
+	scratch := s.Scratch
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, t.ID)
-	if err != nil {
-		e.with(func() {
-			s.Status = store.StatusExited
-			s.Activity = store.ActivityIdle
-			t.AddLog(fmt.Sprintf("Worktree failed: %v", err))
-		})
-		return
+	worktree := e.Root
+	if !scratch {
+		var err error
+		if worktree, err = e.ensureWorktree(t, t.ID); err != nil {
+			e.with(func() {
+				s.Status = store.StatusExited
+				s.Activity = store.ActivityIdle
+				t.AddLog(fmt.Sprintf("Worktree failed: %v", err))
+			})
+			return
+		}
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)

@@ -183,21 +183,11 @@ func (b *Board) TodoColumn() Column {
 	return b.Columns[0]
 }
 
-// StartColumn is where new tasks begin: the first column that spawns an agent.
-func (b *Board) StartColumn() Column {
-	for _, c := range b.Columns {
-		if c.AutoSpawn && !c.IsTodo() && !c.IsDone() {
-			return c
-		}
-	}
-	return b.TodoColumn()
-}
-
 func Default() *Board {
 	return &Board{
 		Version: 1,
 		Columns: []Column{
-			{ID: "todo", Name: "To Do", Role: "todo", Color: "#6b7280"},
+			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
 			{ID: "self-review", Name: "Self-review", Color: "#06b6d4", AutoSpawn: true,

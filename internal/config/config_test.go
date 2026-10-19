@@ -75,16 +75,6 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	}
 }
 
-func TestStartColumn(t *testing.T) {
-	if got := Default().StartColumn().ID; got != "planning" {
-		t.Errorf("default start column = %s, want planning", got)
-	}
-	manual := &Board{Columns: []Column{{ID: "todo", Role: "todo"}, {ID: "review"}, {ID: "done", Role: "done"}}}
-	if got := manual.StartColumn().ID; got != "todo" {
-		t.Errorf("start column without agents = %s, want todo", got)
-	}
-}
-
 func TestPRFlow(t *testing.T) {
 	if err := Default().validate(); err != nil {
 		t.Fatalf("default board: %v", err)

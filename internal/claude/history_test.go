@@ -79,3 +79,29 @@ func TestProjectDirName(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+func TestMoveTranscript(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	writeTranscript(t, config, "/repo", "abc", "fix the thing")
+	from := TranscriptPath("abc", "/repo")
+	if err := os.MkdirAll(filepath.Join(strings.TrimSuffix(from, ".jsonl"), "subagents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if moved, err := MoveTranscript(from, "/repo/.kangentic/worktrees/1"); err != nil || !moved {
+		t.Fatalf("moved=%v err=%v", moved, err)
+	}
+	to := TranscriptPath("abc", "/repo/.kangentic/worktrees/1")
+	for _, p := range []string{to, filepath.Join(strings.TrimSuffix(to, ".jsonl"), "subagents")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s not moved: %v", p, err)
+		}
+	}
+	if _, err := os.Stat(from); !os.IsNotExist(err) {
+		t.Errorf("transcript still in the old project: %v", err)
+	}
+	if moved, err := MoveTranscript(TranscriptPath("missing", "/repo"), "/elsewhere"); err != nil || moved {
+		t.Errorf("missing transcript: moved=%v err=%v", moved, err)
+	}
+}

@@ -251,6 +251,36 @@ func (e *Engine) CreateTask(title, prompt string) *store.Task {
 	return task
 }
 
+// NewSession adds a card whose agent starts right away in the main checkout.
+// Your first message names the card; moving it into an agent column gives it
+// a worktree and carries the conversation over.
+func (e *Engine) NewSession() (*store.Task, error) {
+	task := e.CreateTask("", "")
+	_, _, unlock := e.lockGroup(task.ID)
+	err := e.startScratch(task, true)
+	unlock()
+	if err != nil {
+		e.DeleteTask(task.ID)
+		return task, fmt.Errorf("starting session: %w", err)
+	}
+	return task, nil
+}
+
+// startScratch runs t's conversation in the main checkout. The caller holds
+// the task lock.
+func (e *Engine) startScratch(t *store.Task, fresh bool) error {
+	e.mu.Lock()
+	col := e.board.TodoColumn()
+	e.mu.Unlock()
+	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", true)
+	e.with(func() {
+		if s := t.Sessions[store.MainSession]; s != nil {
+			s.Scratch = true
+		}
+	})
+	return err
+}
+
 func (e *Engine) EditTask(id, title, prompt string) {
 	e.with(func() {
 		if t := e.find(id); t != nil {
@@ -427,7 +457,10 @@ func (e *Engine) Start(id string) error {
 	if err := e.externalCheck(owner); err != nil {
 		return err
 	}
-	if col.IsTodo() || col.IsDone() {
+	e.mu.Lock()
+	scratch := scratchSession(owner)
+	e.mu.Unlock()
+	if (col.IsTodo() && scratch == nil) || col.IsDone() {
 		return fmt.Errorf("move the task out of %s to start an agent", col.Name)
 	}
 	return e.activate(t, col, col, "", false, true)
@@ -577,6 +610,40 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 	return path, nil
 }
 
+// adoptScratch moves a conversation from the main checkout into worktree so
+// the agent resumes it there. One that never got a message starts fresh.
+func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) {
+	e.mu.Lock()
+	path, started := s.TranscriptPath, s.Started
+	if path == "" {
+		path = claude.TranscriptPath(s.AgentSessionID, e.Root)
+	}
+	e.mu.Unlock()
+	moved, err := claude.MoveTranscript(path, worktree)
+	switch {
+	case moved && err != nil:
+		e.logf(t, "Moved the conversation into the worktree, but not its subagent output: %v", err)
+	case moved:
+		e.logf(t, "Moved the conversation into the worktree")
+	case err != nil:
+		e.logf(t, "Moving the conversation into the worktree failed, starting over: %v", err)
+		e.notify("#%d: couldn't move the conversation into the worktree, starting a new one: %v", t.Number, err)
+	case started:
+		e.logf(t, "No conversation found at %s, starting over", path)
+		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
+	}
+	e.with(func() { s.Started, s.TranscriptPath, s.Scratch = moved, "", false })
+}
+
+// scratchSession returns t's conversation while it still runs in the main
+// checkout. Called with mu held.
+func scratchSession(t *store.Task) *store.Session {
+	if s := t.Sessions[store.MainSession]; s != nil && s.Scratch {
+		return s
+	}
+	return nil
+}
+
 func (e *Engine) removeWorktree(t *store.Task) error {
 	e.mu.Lock()
 	path := t.WorktreePath
@@ -684,12 +751,20 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	defer e.setBusy(card.ID, "")
 	e.mu.Lock()
 	t := e.owner(card)
+	scratch := scratchSession(t)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, card.ID)
-	if err != nil {
-		e.logf(card, "Worktree failed: %v", err)
-		e.notify("#%d: %v", card.Number, err)
-		return err
+	worktree := e.Root
+	if scratch == nil || !col.IsTodo() {
+		var err error
+		if worktree, err = e.ensureWorktree(t, card.ID); err != nil {
+			e.logf(card, "Worktree failed: %v", err)
+			e.notify("#%d: %v", card.Number, err)
+			return err
+		}
+		if scratch != nil {
+			e.stopSessions(t, "", store.StatusSuspended)
+			e.adoptScratch(t, scratch, worktree)
+		}
 	}
 	e.with(func() { t.ActiveCard = card.ID })
 	key := sessionKey(col)
@@ -783,6 +858,9 @@ func (e *Engine) initialPrompt(t *store.Task, col config.Column, enter []config.
 	defer e.mu.Unlock()
 	if strings.TrimSpace(t.Prompt) == "" {
 		return t.Title, enter
+	}
+	if strings.HasPrefix(t.Prompt, t.Title) {
+		return t.Prompt, enter
 	}
 	return t.Title + "\n\n" + t.Prompt, enter
 }

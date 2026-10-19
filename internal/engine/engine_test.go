@@ -735,43 +735,16 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
-=======
-// liveConversation starts a stand-in process and registers it with Claude
-// Code's registry as hosting conversation id. The channel closes when it exits.
-func liveConversation(t *testing.T, id, kind string) <-chan struct{} {
-	t.Helper()
-	cmd := exec.Command("sleep", "60")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill() })
-	exited := make(chan struct{})
-	go func() { cmd.Wait(); close(exited) }()
-	dir := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "sessions")
-	os.MkdirAll(dir, 0o755)
-	b, _ := json.Marshal(claude.Live{PID: cmd.Process.Pid, SessionID: id, Kind: kind})
-	os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", cmd.Process.Pid)), b, 0o644)
-	return exited
-}
-
-// newEngineWithClaudeDir opens a test board whose Claude Code registry is empty.
-func newEngineWithClaudeDir(t *testing.T) *Engine {
-	t.Helper()
-	root, _ := setupProject(t)
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
->>>>>>> c077f3b (Stop backgrounded agents when closing a card)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-<<<<<<< HEAD
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go e.Run(ctx)
@@ -805,7 +778,36 @@ func newEngineWithClaudeDir(t *testing.T) *Engine {
 		if h.Number != task.Number || h.Dir != task.WorktreePath || h.SessionID != s.AgentSessionID || !s.HandedOff {
 			t.Errorf("handoff %+v does not match #%d in %s (%s)", h, task.Number, task.WorktreePath, s.AgentSessionID)
 		}
-=======
+	}
+}
+
+// liveConversation starts a stand-in process and registers it with Claude
+// Code's registry as hosting conversation id. The channel closes when it exits.
+func liveConversation(t *testing.T, id, kind string) <-chan struct{} {
+	t.Helper()
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill() })
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	dir := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "sessions")
+	os.MkdirAll(dir, 0o755)
+	b, _ := json.Marshal(claude.Live{PID: cmd.Process.Pid, SessionID: id, Kind: kind})
+	os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.json", cmd.Process.Pid)), b, 0o644)
+	return exited
+}
+
+// newEngineWithClaudeDir opens a test board whose Claude Code registry is empty.
+func newEngineWithClaudeDir(t *testing.T) *Engine {
+	t.Helper()
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return e
 }
 
@@ -902,6 +904,63 @@ func TestStopSessionsSparesKeptConversation(t *testing.T) {
 	}
 	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusExternal {
 		t.Errorf("kept status = %s", s.Status)
->>>>>>> c077f3b (Stop backgrounded agents when closing a card)
 	}
+}
+
+func TestNewSessionMovesIntoWorktree(t *testing.T) {
+	root, log := setupProject(t)
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	if ready.WorktreePath != "" || ready.ColumnID != "todo" || !ready.Sessions[store.MainSession].Scratch {
+		t.Fatalf("scratch session should run in To Do without a worktree: %+v", ready)
+	}
+	sid := ready.Sessions[store.MainSession].AgentSessionID
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug\nIt fails on Safari"}` + "\n")
+	events.Close()
+	waitFor(t, e, "title from the first prompt", func(t *store.Task) bool { return t.Title == "Fix the login bug" })
+
+	transcript := claude.TranscriptPath(sid, root)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	moved := waitFor(t, e, "agent resumed in a worktree", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.WorktreePath != "" && s.Status == store.StatusRunning && !s.Scratch
+	})
+	if !strings.HasPrefix(moved.Branch, "fix-the-login-bug-") {
+		t.Errorf("branch = %s, want it named after the first prompt", moved.Branch)
+	}
+	if _, err := os.Stat(claude.TranscriptPath(sid, moved.WorktreePath)); err != nil {
+		t.Errorf("transcript not moved into the worktree's project: %v", err)
+	}
+	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
+		return strings.Contains(readFile(log), "--resume\n"+sid)
+	})
 }

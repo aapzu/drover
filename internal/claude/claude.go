@@ -108,6 +108,7 @@ type Event struct {
 	ToolName             string `json:"tool_name"`
 	NotificationType     string `json:"notification_type"`
 	Message              string `json:"message"`
+	Prompt               string `json:"prompt"`
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	ToolInput            struct {
