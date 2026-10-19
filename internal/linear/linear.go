@@ -35,7 +35,7 @@ func FromEnv() (*Client, bool) {
 
 // SyncEnabled reports whether moving a task into an agent column should
 // also move its Linear issue to a started state.
-func SyncEnabled() bool { return os.Getenv("KANGENTIC_LINEAR_SYNC") == "1" }
+func SyncEnabled() bool { return os.Getenv("DROVER_LINEAR_SYNC") == "1" }
 
 type Issue struct {
 	ID          string `json:"id"`

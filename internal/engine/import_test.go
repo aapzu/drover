@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/linear"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/linear"
+	"github.com/aapzu/drover/internal/store"
 )
 
 // An agent imported while it runs in another terminal is mirrored, never

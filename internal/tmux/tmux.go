@@ -13,12 +13,12 @@ import (
 	"time"
 )
 
-// Socket names the private tmux server; KANGENTIC_TUI_TMUX_SOCKET overrides it.
+// Socket names the private tmux server; DROVER_TMUX_SOCKET overrides it.
 var Socket = func() string {
-	if s := os.Getenv("KANGENTIC_TUI_TMUX_SOCKET"); s != "" {
+	if s := os.Getenv("DROVER_TMUX_SOCKET"); s != "" {
 		return s
 	}
-	return "kangentic-tui"
+	return "drover"
 }()
 
 // DetachKey returns from an attached session to the board.
@@ -42,7 +42,7 @@ func confPath() string {
 	if err != nil {
 		dir = os.TempDir()
 	}
-	return filepath.Join(dir, "kangentic-tui", "tmux.conf")
+	return filepath.Join(dir, "drover", "tmux.conf")
 }
 
 func ensureConf() string {

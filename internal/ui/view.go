@@ -10,8 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/store"
 )
 
 var (
@@ -92,7 +92,7 @@ func (m Model) renderHeader() string {
 			}
 		}
 	}
-	left := bold.Render(" ▦ kangentic") + "  " + m.eng.ProjectName
+	left := bold.Render(" ▦ drover") + "  " + m.eng.ProjectName
 	if m.branch != "" {
 		left += dim.Render(" on ") + m.branch
 	}

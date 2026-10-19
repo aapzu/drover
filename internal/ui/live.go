@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 // liveExitKey is the only key live mode keeps; it matches tmux.DetachKey.

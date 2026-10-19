@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/linear"
+	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/linear"
 )
 
 var activeTab = lipgloss.NewStyle().Bold(true).Background(accent).Foreground(lipgloss.Color("#ffffff")).Padding(0, 1)

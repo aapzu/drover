@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gh"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gh"
+	"github.com/aapzu/drover/internal/store"
 )
 
 // A session that opens several pull requests is split into one card per PR.

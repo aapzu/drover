@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/store"
 )
 
 type density int

@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/aapelihaanpuu/kangentic-tui/internal/store"
+import "github.com/aapzu/drover/internal/store"
 
 const (
 	headerHeight       = 1

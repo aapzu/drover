@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
+	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 // Run polls hook events and tmux until ctx is done. Automations only run

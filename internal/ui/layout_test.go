@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/engine"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/engine"
+	"github.com/aapzu/drover/internal/store"
 )
 
 func testModel(width, height, columns int, tasksPerColumn int) Model {

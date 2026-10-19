@@ -9,11 +9,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/linear"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
+	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gitx"
+	"github.com/aapzu/drover/internal/linear"
+	"github.com/aapzu/drover/internal/store"
 )
 
 // ExternalError is returned for actions that would start a second copy of an
@@ -312,7 +312,7 @@ func (e *Engine) ImportIssues(issues []linear.Issue) int {
 }
 
 // syncIssueStarted moves the task's Linear issue to a started state when an
-// agent starts on it. Opt-in with KANGENTIC_LINEAR_SYNC=1.
+// agent starts on it. Opt-in with DROVER_LINEAR_SYNC=1.
 func (e *Engine) syncIssueStarted(t *store.Task) {
 	e.mu.Lock()
 	var issueID, key string

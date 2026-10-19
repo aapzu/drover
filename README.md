@@ -1,10 +1,12 @@
-# kangentic-tui
+# drover
 
-A terminal version of [Kangentic](https://github.com/Kangentic/kangentic): a
-kanban board for AI coding agents. Move a card, an agent starts.
+A kanban board for AI coding agents, in your terminal. Move a card, an agent
+starts. It began as a terminal version of
+[Kangentic](https://github.com/Kangentic/kangentic) and still reads its
+`kangentic.json`.
 
 ```
- ▦ kangentic  my-app on main                                              ⠧ 1 working  ◆ 1 need you
+ ▦ drover     my-app on main                                              ⠧ 1 working  ◆ 1 need you
  1 To Do 2              2 Planning 1             3 Executing 1            4 Code Review 0
  backlog                plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · isolated · ⚡2
 ╭──────────────────────╮╭──────────────────────╮╭──────────────────────╮
@@ -24,9 +26,9 @@ kanban board for AI coding agents. Move a card, an agent starts.
 ## Install
 
 ```sh
-go install github.com/aapelihaanpuu/kangentic-tui@latest
+go install github.com/aapzu/drover@latest
 # or, from a checkout:
-go build -o ~/.local/bin/kangentic-tui .
+go build -o ~/.local/bin/drover .
 ```
 
 Install the binary somewhere permanent. Claude's hooks call it to report
@@ -36,7 +38,7 @@ activity, so don't run it with `go run`.
 
 ```sh
 cd your-repo
-kangentic-tui
+drover
 ```
 
 | Key | Action |
@@ -144,16 +146,24 @@ fetches any issue by key or URL.
 - The worktree uses Linear's branch name (for example
   `you/dx-123-fix-login`), so pull requests link back to the issue.
 - `{{issueKey}}` and `{{issueUrl}}` work in automations.
-- With `KANGENTIC_LINEAR_SYNC=1`, starting an agent on an unstarted issue
+- With `DROVER_LINEAR_SYNC=1`, starting an agent on an unstarted issue
   moves it to the team's first "started" state, such as In Progress.
 
 ## Differences from the desktop app
 
 - Tasks live in `.kangentic/tui/state.json`, not in the desktop app's
   database, so the two apps don't share tasks. They do share the board.
-- Agents run in a private tmux server (`tmux -L kangentic-tui ls`) and keep
+- Agents run in a private tmux server (`tmux -L drover ls`) and keep
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only. Not yet
   supported: workflows, the MCP board tools, live PR status, and multi-project
   view.
+
+## Migrating from kangentic-tui
+
+- Running sessions call the old binary from their hooks, so keep
+  `kangentic-tui` installed until they have restarted.
+- Agents started by kangentic-tui are on its tmux server. Run
+  `DROVER_TMUX_SOCKET=kangentic-tui drover` until they finish, or suspend and
+  resume them.

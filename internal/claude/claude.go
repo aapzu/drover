@@ -80,7 +80,7 @@ func WriteSettings(settingsPath, exe, eventsPath string) error {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// RecordHook is the body of `kangentic-tui hook <file>`: it appends the hook
+// RecordHook is the body of `drover hook <file>`: it appends the hook
 // payload from stdin as one JSON line. It never blocks Claude on failure.
 func RecordHook(eventsPath string, stdin io.Reader) {
 	raw, err := io.ReadAll(stdin)

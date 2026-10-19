@@ -14,11 +14,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/config"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/engine"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/engine"
+	"github.com/aapzu/drover/internal/gitx"
+	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 type mode int

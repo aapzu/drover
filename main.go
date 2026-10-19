@@ -1,4 +1,4 @@
-// Command kangentic-tui is a terminal front end for Kangentic-style agent
+// Command drover is a terminal front end for Kangentic-style agent
 // boards: drag a card, an agent starts.
 package main
 
@@ -12,18 +12,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/claude"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/engine"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/gitx"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/ui"
+	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/engine"
+	"github.com/aapzu/drover/internal/gitx"
+	"github.com/aapzu/drover/internal/tmux"
+	"github.com/aapzu/drover/internal/ui"
 )
 
-const usage = `kangentic-tui: a kanban board for AI coding agents, in your terminal.
+const usage = `drover: a kanban board for AI coding agents, in your terminal.
 
 Usage:
-  kangentic-tui [project-dir]   open the board for a git repository (default: .)
-  kangentic-tui hook <file>     internal: record a Claude Code hook event
+  drover [project-dir]          open the board for a git repository (default: .)
+  drover hook <file>            internal: record a Claude Code hook event
 
 The board is read from kangentic.json at the repo root, the same file the
 Kangentic desktop app uses. Agents run in tmux and keep running after you quit.
@@ -46,7 +46,7 @@ func main() {
 		dir = args[0]
 	}
 	if err := run(dir); err != nil {
-		fmt.Fprintln(os.Stderr, "kangentic-tui:", err)
+		fmt.Fprintln(os.Stderr, "drover:", err)
 		os.Exit(1)
 	}
 }

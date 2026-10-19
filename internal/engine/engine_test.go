@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aapelihaanpuu/kangentic-tui/internal/store"
-	"github.com/aapelihaanpuu/kangentic-tui/internal/tmux"
+	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 // fakeClaude stands in for the claude CLI: it records its argv and writes the

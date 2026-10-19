@@ -1,4 +1,4 @@
-module github.com/aapelihaanpuu/kangentic-tui
+module github.com/aapzu/drover
 
 go 1.27.2
 
