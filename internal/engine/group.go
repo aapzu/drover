@@ -39,6 +39,17 @@ func workColumn(board *config.Board) (config.Column, bool) {
 	return config.Column{}, false
 }
 
+// firstAgentColumn is where a card's work starts: the first agent column that
+// doesn't run its own session.
+func firstAgentColumn(board *config.Board) (config.Column, bool) {
+	for _, c := range board.Columns {
+		if isAgentColumn(c) && !c.Isolated() {
+			return c, true
+		}
+	}
+	return config.Column{}, false
+}
+
 // lockGroup takes the lock shared by every card of id's group and returns the
 // card, its owner and the unlock function. card is nil if id is unknown.
 func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {
