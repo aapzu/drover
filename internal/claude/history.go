@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,10 +45,15 @@ type Live struct {
 	Name      string `json:"name"`
 	Status    string `json:"status"`
 	Spare     bool   `json:"spare"`
+	Kind      string `json:"kind"`
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
 func (l Live) Busy() bool { return l.Status == "busy" }
+
+// Background reports whether Claude Code hosts the conversation in a
+// background process rather than in a terminal.
+func (l Live) Background() bool { return l.Kind == "bg" }
 
 // Running returns the live Claude processes by session id. The registry is
 // an internal Claude Code file, so unreadable entries are skipped.
@@ -73,6 +79,25 @@ func ShortID(id string) string { return id[:min(8, len(id))] }
 
 // ProcessAlive reports whether pid exists, even when owned by another user.
 func ProcessAlive(pid int) bool { return processAlive(pid) }
+
+// Terminate asks pid to exit and kills it if it is still alive after 2s.
+func Terminate(pid int) error {
+	exited := func(tries int) bool {
+		for i := 0; i < tries && processAlive(pid); i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+		return !processAlive(pid)
+	}
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if err := syscall.Kill(pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+		if exited(20) {
+			return nil
+		}
+	}
+	return fmt.Errorf("pid %d did not exit", pid)
+}
 
 func processAlive(pid int) bool {
 	if pid <= 0 {
