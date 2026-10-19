@@ -56,15 +56,11 @@ func (e *Engine) DiscoverSessions() []claude.Found {
 	return out
 }
 
-// importColumn puts a running agent in the first agent column that is not a
-// plan column, so the card shows where the work is; others go to To Do.
+// importColumn puts a running agent in the work column, so the card shows
+// where the work is; others go to To Do.
 func importColumn(board *config.Board, running bool) config.Column {
-	if running {
-		for _, c := range board.Columns {
-			if c.AutoSpawn && board.PermissionMode(c) != "plan" && !c.Isolated() {
-				return c
-			}
-		}
+	if c, ok := workColumn(board); running && ok {
+		return c
 	}
 	return board.TodoColumn()
 }

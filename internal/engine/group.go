@@ -28,6 +28,17 @@ func (e *Engine) sessionColumn(owner *store.Task) config.Column {
 
 func isAgentColumn(c config.Column) bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
 
+// workColumn is where the work happens: the first agent column that is
+// neither a plan column nor runs its own session.
+func workColumn(board *config.Board) (config.Column, bool) {
+	for _, c := range board.Columns {
+		if isAgentColumn(c) && board.PermissionMode(c) != "plan" && !c.Isolated() {
+			return c, true
+		}
+	}
+	return config.Column{}, false
+}
+
 // lockGroup takes the lock shared by every card of id's group and returns the
 // card, its owner and the unlock function. card is nil if id is unknown.
 func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {

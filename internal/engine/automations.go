@@ -120,10 +120,45 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			} else {
 				e.logf(t, "Automation %q: move to %s failed: %v", rowName(row), target.Name, err)
 			}
-			break
+			e.flushPending(owner, sessKey)
+			return
 		}
 	}
+	if e.leaveScratch(t, owner, col, board) {
+		return
+	}
 	e.flushPending(owner, sessKey)
+}
+
+// leaveScratch moves a card whose session still runs in the main checkout into
+// the board's work column once a turn that named it ends, which gives it a
+// worktree and carries the conversation over. If the move fails before the
+// conversation leaves the main checkout, the card goes back to try again after
+// the next turn. The caller holds the task lock.
+func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board) bool {
+	if !col.IsTodo() {
+		return false
+	}
+	e.mu.Lock()
+	s := scratchSession(owner)
+	due := s != nil && t.Title != "" &&
+		s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && len(s.Pending) == 0
+	e.mu.Unlock()
+	target, ok := workColumn(board)
+	if !due || !ok {
+		return false
+	}
+	e.logf(t, "First turn done, moving to %s", target.Name)
+	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
+		e.logf(t, "Move to %s failed: %v", target.Name, err)
+		e.with(func() {
+			if scratchSession(owner) != nil {
+				t.ColumnID = col.ID
+			}
+		})
+		return false
+	}
+	return true
 }
 
 func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column, bool) {
