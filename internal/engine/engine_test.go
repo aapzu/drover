@@ -608,3 +608,49 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 }
+
+func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	for _, title := range []string{"First", "Second"} {
+		task := e.CreateTask(title, "")
+		if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitForAll(t, e, "both agents to start", func(tasks []*store.Task) bool {
+		started := 0
+		for _, task := range tasks {
+			if s := task.Sessions[store.MainSession]; s != nil && s.Started {
+				started++
+			}
+		}
+		return started == 2
+	})
+
+	handoff := e.SuspendAll()
+	if len(handoff) != 2 {
+		t.Fatalf("want 2 handoffs, got %+v", handoff)
+	}
+	for i, task := range e.Snapshot().Tasks {
+		s := task.Sessions[store.MainSession]
+		if s.Status != store.StatusSuspended || tmux.Has(s.Tmux) {
+			t.Errorf("#%d: status %s, tmux alive %v", task.Number, s.Status, tmux.Has(s.Tmux))
+		}
+		h := handoff[i]
+		if h.Number != task.Number || h.Dir != task.WorktreePath || h.SessionID != s.AgentSessionID || !s.HandedOff {
+			t.Errorf("handoff %+v does not match #%d in %s (%s)", h, task.Number, task.WorktreePath, s.AgentSessionID)
+		}
+	}
+}

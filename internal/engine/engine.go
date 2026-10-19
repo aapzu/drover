@@ -397,7 +397,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.stopSessions(owner, "", store.StatusSuspended)
 		return nil
 	case external != nil:
-		e.logf(t, "Not starting an agent: the imported one is still running in its own terminal")
+		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
 		return nil
 	default:
 		return e.activate(t, target, from, opts.Message, true, opts.evict)
@@ -432,6 +432,59 @@ func (e *Engine) Suspend(id string) {
 		e.stopSessions(owner, "", store.StatusSuspended)
 		e.logf(t, "Agent suspended")
 	}
+}
+
+// Handoff is an agent SuspendAll stopped. SessionID is the conversation to
+// continue with `claude --resume`, or empty if the agent never started one.
+type Handoff struct {
+	Number    int
+	Title     string
+	Dir       string
+	SessionID string
+}
+
+// SuspendAll suspends every running or queued agent at once and returns the
+// conversations to resume elsewhere, which externalCheck then guards.
+func (e *Engine) SuspendAll() []Handoff {
+	var owners []string
+	var out []Handoff
+	e.mu.Lock()
+	for _, t := range e.state.Tasks {
+		if e.owner(t) != t {
+			continue
+		}
+		dir := t.WorktreePath
+		if dir == "" {
+			dir = e.Root
+		}
+		active := false
+		for _, s := range t.Sessions {
+			if s.Status != store.StatusRunning && s.Status != store.StatusQueued {
+				continue
+			}
+			active = true
+			h := Handoff{Number: t.Number, Title: t.Title, Dir: dir}
+			if s.Started {
+				h.SessionID = s.AgentSessionID
+				s.HandedOff = true
+			}
+			out = append(out, h)
+		}
+		if active {
+			owners = append(owners, t.ID)
+		}
+	}
+	e.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, id := range owners {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e.Suspend(id)
+		}()
+	}
+	wg.Wait()
+	return out
 }
 
 func sessionKey(col config.Column) string {

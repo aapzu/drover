@@ -91,7 +91,8 @@ type Session struct {
 	LastReply      string    `json:"lastReply,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
-	Imported bool `json:"imported,omitempty"`
+	Imported  bool `json:"imported,omitempty"`
+	HandedOff bool `json:"handedOff,omitempty"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool      `json:"forked,omitempty"`

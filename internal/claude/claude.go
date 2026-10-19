@@ -58,7 +58,7 @@ var hookEvents = []string{
 // WriteSettings writes a settings file whose hooks append every event to
 // eventsPath through `<exe> hook`. Claude merges it with the user's settings.
 func WriteSettings(settingsPath, exe, eventsPath string) error {
-	command := fmt.Sprintf("%s hook %s", shellQuote(exe), shellQuote(eventsPath))
+	command := fmt.Sprintf("%s hook %s", ShellQuote(exe), ShellQuote(eventsPath))
 	hook := []map[string]any{{"type": "command", "command": command, "timeout": 10}}
 	hooks := map[string]any{}
 	for _, name := range hookEvents {
@@ -78,7 +78,8 @@ func WriteSettings(settingsPath, exe, eventsPath string) error {
 	return os.WriteFile(settingsPath, data, 0o644)
 }
 
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+// ShellQuote single-quotes s for a POSIX shell.
+func ShellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // RecordHook is the body of `drover hook <file>`: it appends the hook
 // payload from stdin as one JSON line. It never blocks Claude on failure.

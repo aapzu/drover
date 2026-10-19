@@ -57,6 +57,7 @@ drover
 | `p`, `i`, `?` | toggle preview, task details and log, help |
 | `M` | toggle mouse capture (off lets the terminal select text) |
 | `q` | quit (agents keep running) |
+| `Q` | suspend every agent and quit, printing a `claude --resume` command for each |
 
 With the mouse on, drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to
@@ -132,6 +133,9 @@ Past sessions follow, newest first.
   `r` and the board resumes the conversation with `claude --resume` in the
   agent's original directory.
 - **Past sessions** land in To Do. Moving one into an agent column resumes it.
+- **Board conversations you resume yourself**, for example with the commands
+  `Q` prints, are tracked the same way. The board won't start them again
+  until you exit them.
 - The board never deletes a directory it didn't create. Imported sessions
   that live in the main checkout or in another tool's worktree keep their
   directory.

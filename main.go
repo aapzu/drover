@@ -70,7 +70,17 @@ func run(dir string) error {
 	defer cancel()
 	go eng.Run(ctx)
 
-	_, err = tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
+	if m, ok := final.(ui.Model); ok && m.SuspendAllRequested() {
+		fmt.Println("Suspending all agents…")
+		for _, h := range eng.SuspendAll() {
+			if h.SessionID == "" {
+				fmt.Printf("#%d %s\n  not started yet; press r on the board to start it\n", h.Number, h.Title)
+				continue
+			}
+			fmt.Printf("#%d %s\n  cd %s && claude --resume %s\n", h.Number, h.Title, claude.ShellQuote(h.Dir), h.SessionID)
+		}
+	}
 	return err
 }
 

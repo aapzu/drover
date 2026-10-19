@@ -16,8 +16,8 @@ import (
 	"github.com/aapzu/drover/internal/store"
 )
 
-// ExternalError is returned for actions that would start a second copy of an
-// imported agent that is still running in another terminal.
+// ExternalError is returned for actions that would start a second copy of a
+// conversation that is still running in another terminal.
 type ExternalError struct {
 	Number, PID int
 }
@@ -128,14 +128,14 @@ func (e *Engine) ImportSessions(found []claude.Found) int {
 	return added
 }
 
-// externalCheck refuses to start an imported conversation that is running in
-// another terminal, even one resumed there after it was imported. Sessions
-// the board runs itself are skipped. Call without mu held.
+// externalCheck refuses to start an imported or handed-off conversation that
+// is running in another terminal. Sessions the board runs itself are skipped.
+// Call without mu held.
 func (e *Engine) externalCheck(t *store.Task) error {
 	e.mu.Lock()
 	imported := false
 	for _, s := range t.Sessions {
-		imported = imported || s.Imported
+		imported = imported || s.Imported || s.HandedOff
 	}
 	e.mu.Unlock()
 	if !imported {
@@ -145,7 +145,7 @@ func (e *Engine) externalCheck(t *store.Task) error {
 	var err error
 	e.with(func() {
 		for _, s := range t.Sessions {
-			if !s.Imported || s.Status == store.StatusRunning || s.Status == store.StatusQueued {
+			if !(s.Imported || s.HandedOff) || s.Status == store.StatusRunning || s.Status == store.StatusQueued {
 				continue
 			}
 			if l, ok := live[s.AgentSessionID]; ok {
