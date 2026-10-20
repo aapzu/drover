@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// upstream is the kangentic.json from the Kangentic repository itself.
-const upstream = `{
+const sample = `{
   "version": 1,
   "columns": [
     {"id": "e6350e8a", "name": "To Do", "role": "todo", "icon": "layers", "color": "#6b7280"},
@@ -26,10 +25,10 @@ const upstream = `{
   "_modifiedBy": "7ef4fd0cb484"
 }`
 
-func TestLoadUpstreamBoard(t *testing.T) {
+func TestLoadSampleBoard(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(upstream), 0o644)
-	os.WriteFile(filepath.Join(dir, "kangentic.local.json"), []byte(`{"defaultBaseBranch":"develop"}`), 0o644)
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	os.WriteFile(filepath.Join(dir, "drover.local.json"), []byte(`{"defaultBaseBranch":"develop"}`), 0o644)
 
 	board, found, err := Load(dir)
 	if err != nil || !found {

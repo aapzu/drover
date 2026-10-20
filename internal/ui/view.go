@@ -567,7 +567,7 @@ func (m Model) renderHelp() string {
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
-		{"W", "write the default board to kangentic.json"},
+		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},
 	}

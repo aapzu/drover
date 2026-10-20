@@ -1,5 +1,5 @@
-// Package gitx creates and removes the per-task worktrees, using the same
-// layout as Kangentic: <repo>/.kangentic/worktrees/<task number>.
+// Package gitx creates and removes the per-task worktrees under
+// <repo>/.drover/worktrees/<task number>.
 package gitx
 
 import (
@@ -88,9 +88,9 @@ func BranchName(title, taskID string) string {
 	return slug + "-" + taskID[:8]
 }
 
-func WorktreesDir(root string) string { return filepath.Join(root, ".kangentic", "worktrees") }
+func WorktreesDir(root string) string { return filepath.Join(root, ".drover", "worktrees") }
 
-// EnsureExcluded keeps .kangentic/ out of git status without touching the
+// EnsureExcluded keeps .drover/ out of git status without touching the
 // tracked .gitignore.
 func EnsureExcluded(root string) error {
 	commonDir, err := run(root, "rev-parse", "--git-common-dir")
@@ -103,7 +103,7 @@ func EnsureExcluded(root string) error {
 	exclude := filepath.Join(commonDir, "info", "exclude")
 	data, _ := os.ReadFile(exclude)
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == "/.kangentic/" || strings.TrimSpace(line) == ".kangentic/" {
+		if strings.TrimSpace(line) == "/.drover/" || strings.TrimSpace(line) == ".drover/" {
 			return nil
 		}
 	}
@@ -118,12 +118,12 @@ func EnsureExcluded(root string) error {
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
 		f.WriteString("\n")
 	}
-	_, err = f.WriteString("/.kangentic/\n")
+	_, err = f.WriteString("/.drover/\n")
 	return err
 }
 
 // CreateWorktree checks out branch (creating it from base if needed) into
-// .kangentic/worktrees/<folder>. An existing worktree is reused.
+// .drover/worktrees/<folder>. An existing worktree is reused.
 func CreateWorktree(root, folder, branch, base string) (string, error) {
 	path := filepath.Join(WorktreesDir(root), folder)
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {

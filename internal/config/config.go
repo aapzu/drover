@@ -1,5 +1,4 @@
-// Package config loads the board definition from kangentic.json, the same
-// file the Kangentic desktop app keeps at the repo root.
+// Package config loads the board definition from drover.json at the repo root.
 package config
 
 import (
@@ -11,7 +10,7 @@ import (
 	"strings"
 )
 
-const FileName = "kangentic.json"
+const FileName = "drover.json"
 
 type Board struct {
 	Version               int      `json:"version"`
@@ -83,7 +82,7 @@ func (c Column) Isolated() bool { return c.SessionTarget == "isolated" }
 
 func (c Column) AlwaysSpawnNew() bool { return c.SessionSpawnStrategy == "always_spawn_new" }
 
-// Load reads kangentic.json and applies kangentic.local.json on top of it.
+// Load reads drover.json and applies drover.local.json on top of it.
 // A missing file yields the default board and found=false.
 func Load(root string) (board *Board, found bool, err error) {
 	data, err := os.ReadFile(filepath.Join(root, FileName))
@@ -97,7 +96,7 @@ func Load(root string) (board *Board, found bool, err error) {
 	if err := json.Unmarshal(data, board); err != nil {
 		return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
 	}
-	if local, err := os.ReadFile(filepath.Join(root, "kangentic.local.json")); err == nil {
+	if local, err := os.ReadFile(filepath.Join(root, "drover.local.json")); err == nil {
 		var override struct {
 			DefaultBaseBranch string `json:"defaultBaseBranch"`
 		}

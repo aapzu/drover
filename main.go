@@ -1,5 +1,5 @@
-// Command drover is a terminal front end for Kangentic-style agent
-// boards: drag a card, an agent starts.
+// Command drover is a terminal kanban board for coding agents: drag a card,
+// an agent starts.
 package main
 
 import (
@@ -24,8 +24,8 @@ Usage:
   drover [project-dir]          open the board for a git repository (default: .)
   drover hook <file>            internal: record a Claude Code hook event
 
-The board is read from kangentic.json at the repo root, the same file the
-Kangentic desktop app uses. Agents run in tmux and keep running after you quit.
+The board is read from drover.json at the repo root. Agents run in tmux and
+keep running after you quit.
 `
 
 func main() {

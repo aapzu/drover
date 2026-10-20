@@ -338,7 +338,7 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	cmd.Dir = vars["worktreePath"]
 	cmd.Env = os.Environ()
 	for k, v := range vars {
-		cmd.Env = append(cmd.Env, "KANGENTIC_"+strings.ToUpper(k)+"="+v)
+		cmd.Env = append(cmd.Env, "DROVER_"+strings.ToUpper(k)+"="+v)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

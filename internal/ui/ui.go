@@ -139,7 +139,7 @@ func New(eng *engine.Engine) Model {
 		imp:         newImportState(),
 	}
 	if !m.snap.BoardFound {
-		m.setFlash("No kangentic.json found, using the default board (press W to write it)")
+		m.setFlash("No drover.json found, using the default board (press W to write it)")
 	}
 	return m
 }
@@ -185,7 +185,7 @@ func (m Model) tasksIn(colID string) []*store.Task {
 	return out
 }
 
-// orphans are tasks whose column no longer exists in kangentic.json; they are
+// orphans are tasks whose column no longer exists in drover.json; they are
 // shown in the first column so they can be moved somewhere valid.
 func (m Model) tasksForColumn(i int) []*store.Task {
 	col := m.columns()[i]
@@ -685,7 +685,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + err.Error())
 		} else {
 			m.snap = m.eng.Snapshot()
-			m.setFlash("Wrote kangentic.json")
+			m.setFlash("Wrote drover.json")
 		}
 	}
 	return m, nil
