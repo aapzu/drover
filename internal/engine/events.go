@@ -35,6 +35,9 @@ func (e *Engine) Tick() {
 
 	e.with(func() {
 		for _, t := range e.state.Tasks {
+			if t.PRMovePending && !agentRunning(t) {
+				followUps = append(followUps, func() { e.shipTask(t) })
+			}
 			for key, s := range t.Sessions {
 				if s.Status != store.StatusRunning {
 					continue
@@ -143,7 +146,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			reply := ev.Reply()
 			s.LastReply = reply
-			next := func() { e.flushPending(e.taskByID(taskID), key) }
+			next := func() {
+				if owner := e.taskByID(taskID); !e.shipTask(owner) {
+					e.flushPending(owner, key)
+				}
+			}
 			if s.TurnInVisit {
 				s.TurnInVisit = false
 				next = func() { e.runTurnEnd(taskID, key, visit, reply) }
@@ -218,6 +225,60 @@ func (e *Engine) planExit(taskID string, visit int) {
 			s.RespawnPending = false
 		}
 	})
+}
+
+// shipTask runs shipOpenedPR under the task lock, if a move is pending.
+func (e *Engine) shipTask(t *store.Task) bool {
+	e.mu.Lock()
+	pending := t.PRMovePending
+	e.mu.Unlock()
+	if !pending {
+		return false
+	}
+	unlock := e.lockTask(t.ID)
+	defer unlock()
+	return e.shipOpenedPR(t)
+}
+
+// shipOpenedPR moves the card that took its session's first PR to the
+// prFlow's opened column once the agent is idle, unless you moved it first.
+// A card whose agent runs outside drover never moves. It reports whether it
+// moved the card. The caller holds the task lock.
+func (e *Engine) shipOpenedPR(t *store.Task) bool {
+	e.mu.Lock()
+	pending := t.PRMovePending
+	e.mu.Unlock()
+	if !pending {
+		return false
+	}
+	var target config.Column
+	e.with(func() {
+		if !agentIdle(t) || hasExternal(t) {
+			return
+		}
+		t.PRMovePending = false
+		col, _, _ := e.board.Column(t.ColumnID)
+		if f := e.board.PRFlow; f != nil {
+			target = e.flowColumn(f.Opened)
+		}
+		switch {
+		case target.ID == "" || target.ID == col.ID:
+			target = config.Column{}
+		case !isAgentColumn(col):
+			t.AddLog(fmt.Sprintf("PR opened, not moving to %s: the card is in %s", target.Name, col.Name))
+			target = config.Column{}
+		}
+	})
+	if target.ID == "" {
+		return false
+	}
+	e.logf(t, "PR opened, moving to %s", target.Name)
+	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
+		e.logf(t, "PR-opened move failed: %v", err)
+		e.notify("#%d: moving to %s failed: %v", t.Number, target.Name, err)
+		return false
+	}
+	return true
 }
 
 // prRequested moves the card the agent works for to the prFlow's requested

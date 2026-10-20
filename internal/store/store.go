@@ -63,6 +63,7 @@ type Task struct {
 	// ActiveCard is the group card whose move last drove the shared session;
 	// its column decides the session's settings and turn-end automations.
 	ActiveCard     string              `json:"activeCard,omitempty"`
+	PRMovePending  bool                `json:"prMovePending,omitempty"`
 	BaseBranch     string              `json:"baseBranch,omitempty"`
 	Branch         string              `json:"branch,omitempty"`
 	WorktreePath   string              `json:"worktreePath,omitempty"`

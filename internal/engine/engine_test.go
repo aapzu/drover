@@ -45,6 +45,9 @@ turn() {
     *PLAN*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}'; sleep 1;;
     *SLOW*) sleep 3;;
     *"open a PR"*) sleep 1;;
+    *LATEPR*)
+      emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
+      sleep 2;;
     *PRS*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}'
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/2\\n"}}';;
@@ -482,21 +485,22 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var owner, one, two *store.Task
-	waitForAll(t, e, "PR cards titled by gh, owner shipped to review", func(tasks []*store.Task) bool {
-		if len(tasks) != 3 {
+	var owner, two *store.Task
+	waitForAll(t, e, "second PR split off and titled by gh, owner shipped to review", func(tasks []*store.Task) bool {
+		if len(tasks) != 2 {
 			return false
 		}
-		owner, one, two = tasks[0], tasks[1], tasks[2]
-		return owner.ColumnID == "review" && one.Title == "PR one" && two.Title == "PR two"
+		owner, two = tasks[0], tasks[1]
+		return owner.ColumnID == "review" && two.Title == "PR two"
 	})
-	if owner.PR != nil || one.PR == nil || one.PR.Number != 1 || two.PR == nil || two.PR.Number != 2 || two.PR.Branch != "two" {
-		t.Fatalf("PRs: owner %+v, one %+v, two %+v", owner.PR, one.PR, two.PR)
+	if owner.PR == nil || owner.PR.Number != 1 || two.PR == nil || two.PR.Number != 2 || two.PR.Branch != "two" {
+		t.Fatalf("PRs: owner %+v, two %+v", owner.PR, two.PR)
 	}
-	for _, card := range []*store.Task{one, two} {
-		if card.GroupID != owner.ID || card.ColumnID != "exec" || len(card.Sessions) != 0 {
-			t.Fatalf("PR card: group %q column %q sessions %d", card.GroupID, card.ColumnID, len(card.Sessions))
-		}
+	if owner.Title != "Refactor auth" {
+		t.Errorf("owner retitled to %q", owner.Title)
+	}
+	if two.GroupID != owner.ID || two.ColumnID != "exec" || len(two.Sessions) != 0 {
+		t.Fatalf("PR card: group %q column %q sessions %d", two.GroupID, two.ColumnID, len(two.Sessions))
 	}
 	if owner.ActiveCard != two.ID {
 		t.Errorf("active card = %q, want PR two's", owner.ActiveCard)
@@ -510,26 +514,21 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	waitForAll(t, e, "agent idle", func(tasks []*store.Task) bool {
 		return tasks[0].Sessions[store.MainSession].Activity == store.ActivityIdle
 	})
-	if err := e.Send(one.ID, "hello"); err != nil {
+	if err := e.Send(owner.ID, "hello"); err != nil {
 		t.Fatal(err)
 	}
-	waitForAll(t, e, "PR two shipped too", func(tasks []*store.Task) bool { return tasks[2].ColumnID == "review" })
+	waitForAll(t, e, "PR two shipped too", func(tasks []*store.Task) bool { return tasks[1].ColumnID == "review" })
 	if data, _ := os.ReadFile(log); !strings.Contains(string(data), "typed:hello") {
 		t.Errorf("message not delivered:\n%s", data)
 	}
-	if err := e.Move(one.ID, "review", MoveOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusSuspended {
-		t.Fatalf("agent %s with no card in an agent column", s.Status)
-	}
+	waitForAll(t, e, "agent suspended with no card in an agent column", func(tasks []*store.Task) bool {
+		return tasks[0].Sessions[store.MainSession].Status == store.StatusSuspended
+	})
 
 	// The worktree stays until every card is done.
 	worktree := e.Snapshot().Tasks[0].WorktreePath
-	for _, id := range []string{owner.ID, one.ID} {
-		if err := e.Move(id, "done", MoveOptions{}); err != nil {
-			t.Fatal(err)
-		}
+	if err := e.Move(owner.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(worktree); err != nil {
 		t.Fatalf("worktree removed while a card is still in review: %v", err)
@@ -545,12 +544,124 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	tasks := e.Snapshot().Tasks
-	if len(tasks) != 2 || tasks[0].ID != one.ID || tasks[0].GroupID != "" || tasks[1].GroupID != one.ID ||
+	if len(tasks) != 1 || tasks[0].ID != two.ID || tasks[0].GroupID != "" ||
 		tasks[0].Sessions[store.MainSession] == nil {
 		t.Fatalf("after deleting the owner: %+v", tasks)
 	}
 	if dir := tasks[0].Sessions[store.MainSession].Dir; !strings.Contains(dir, owner.ID) {
 		t.Errorf("session dir = %q, want the original owner's", dir)
+	}
+}
+
+const openedBoard = `{
+  "version": 1,
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "exec2", "name": "Executing too", "autoSpawn": true},
+    {"id": "review", "name": "In review"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ],
+  "prFlow": {"opened": "In review"}
+}`
+
+// startWithBoard runs an engine on a fresh project with board and a gh that
+// reports every PR as open.
+func startWithBoard(t *testing.T, board string) *Engine {
+	t.Helper()
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(board), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go e.Run(ctx)
+	return e
+}
+
+func TestFirstPRMovesSessionCardAfterTheTurn(t *testing.T) {
+	e := startWithBoard(t, openedBoard)
+	task := e.CreateTask("Auth", "LATEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the card to take the PR and wait for the turn to end", func(t *store.Task) bool {
+		return t.PR != nil && t.PRMovePending
+	})
+	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].ColumnID != "exec" {
+		t.Fatalf("PR split off or card moved mid-turn: %+v", tasks)
+	}
+	waitFor(t, e, "the card in review once the turn ended", func(t *store.Task) bool { return t.ColumnID == "review" })
+	got := e.Snapshot().Tasks
+	if len(got) != 1 || got[0].PRMovePending || got[0].PR.Number != 1 || got[0].Title != "Auth" {
+		t.Fatalf("after the move: %+v", got)
+	}
+	waitFor(t, e, "the agent suspended in review", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Status == store.StatusSuspended
+	})
+}
+
+func TestMovingTheCardByHandCancelsTheOpenedMove(t *testing.T) {
+	e := startWithBoard(t, openedBoard)
+	task := e.CreateTask("Auth", "LATEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the card to take the PR", func(t *store.Task) bool { return t.PRMovePending })
+	if err := e.Move(task.ID, "exec2", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the agent to finish its turn in the other column", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning && s.Started && s.Activity == store.ActivityIdle
+	})
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0]; got.ColumnID != "exec2" || got.PRMovePending {
+		t.Fatalf("card in %s, pending %v", got.ColumnID, got.PRMovePending)
+	}
+}
+
+func TestPendingPRMoveShipsWhenNoAgentIsRunning(t *testing.T) {
+	e := startWithBoard(t, openedBoard)
+	task := e.CreateTask("Auth", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	e.Suspend(task.ID)
+	e.with(func() {
+		card := e.find(task.ID)
+		card.PR = &store.PR{URL: "https://github.com/o/r/pull/1", Number: 1}
+		card.PRMovePending = true
+	})
+	waitFor(t, e, "the card in review without a turn end", func(t *store.Task) bool {
+		return t.ColumnID == "review" && !t.PRMovePending
+	})
+}
+
+func TestFirstPRStaysPutWithoutAnOpenedColumn(t *testing.T) {
+	e := startWithBoard(t, `{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the card to take the PR and the turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.PR != nil && s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	time.Sleep(time.Second)
+	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].ColumnID != "exec" || tasks[0].PRMovePending {
+		t.Fatalf("cards: %+v", tasks)
 	}
 }
 
@@ -610,15 +721,18 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	card := func(tasks []*store.Task) *store.Task {
-		if len(tasks) != 2 {
+		if len(tasks) != 1 {
 			return &store.Task{PR: &store.PR{}}
 		}
-		return tasks[1]
+		return tasks[0]
 	}
-	waitForAll(t, e, "PR card waits in review", func(tasks []*store.Task) bool {
+	waitForAll(t, e, "the session card, holding its PR, waits in review", func(tasks []*store.Task) bool {
 		c := card(tasks)
-		return c.ColumnID == "review" && c.Title == "PR one" && tasks[0].ColumnID == "exec"
+		return c.ColumnID == "review" && c.PR.Title == "PR one"
 	})
+	if c := card(e.Snapshot().Tasks); c.Title != "Auth" || c.PR.Number != 1 || c.GroupID != "" {
+		t.Fatalf("session card: %q %+v", c.Title, c.PR)
+	}
 	idle := func(tasks []*store.Task) bool {
 		s := tasks[0].Sessions[store.MainSession]
 		return s.Activity == store.ActivityIdle && len(s.Pending) == 0
@@ -662,12 +776,9 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 		c := card(tasks)
 		return c.ColumnID == "done" && c.PR.Released
 	})
-	if tasks := e.Snapshot().Tasks; tasks[0].ColumnID != "exec" {
-		t.Errorf("session card moved to %s", tasks[0].ColumnID)
-	}
 }
 
-func TestTranscriptPRBecomesCard(t *testing.T) {
+func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(prBoard), 0o644)
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
@@ -695,14 +806,11 @@ func TestTranscriptPRBecomesCard(t *testing.T) {
 	defer cancel()
 	go e.Run(ctx)
 
-	waitForAll(t, e, "PR card from the transcript", func(tasks []*store.Task) bool {
-		return len(tasks) == 2 && tasks[1].GroupID == task.ID && tasks[1].Title == "PR one"
+	waitForAll(t, e, "the session card to take the PR from the transcript", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR != nil && tasks[0].PR.Title == "PR one"
 	})
 	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.PRScanPath != path || s.PRScan != int64(len(created(1))) {
 		t.Fatalf("scan position %q %d", s.PRScanPath, s.PRScan)
-	}
-	if err := e.DeleteTask(e.Snapshot().Tasks[1].ID); err != nil {
-		t.Fatal(err)
 	}
 
 	os.WriteFile(filepath.Join(filepath.Dir(path), "sid2.jsonl"), []byte(created(1)+created(2)), 0o644)
@@ -714,8 +822,8 @@ func TestTranscriptPRBecomesCard(t *testing.T) {
 		return len(tasks) == 2 && tasks[1].Title == "PR two"
 	})
 	time.Sleep(3 * e.PRPollInterval)
-	if n := len(e.Snapshot().Tasks); n != 2 {
-		t.Errorf("deleted PR card came back: %d cards", n)
+	if tasks := e.Snapshot().Tasks; len(tasks) != 2 || tasks[0].PR.Number != 1 {
+		t.Errorf("PR one got a card of its own: %+v", tasks)
 	}
 }
 

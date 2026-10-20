@@ -144,6 +144,7 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 	if len(results) == 0 {
 		return
 	}
+	var ship []*store.Task
 	e.with(func() {
 		for _, r := range results {
 			t := e.find(r.owner)
@@ -162,9 +163,15 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 			s.PRScanPath, s.PRScan = r.path, r.next
 			if len(r.urls) > 0 {
 				e.addPRs(t, r.urls)
+				if t.PRMovePending && agentIdle(t) {
+					ship = append(ship, t)
+				}
 			}
 		}
 	})
+	for _, t := range ship {
+		e.shipTask(t)
+	}
 }
 
 // refreshPR updates an open PR's card from GitHub and moves it along the
@@ -335,6 +342,26 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 	if step.to.IsDone() {
 		e.notifyAllReleased(owner)
 	}
+}
+
+// agentRunning reports whether any of the owner's sessions is running, queued
+// or run outside drover, so that a turn end may still come.
+func agentRunning(owner *store.Task) bool {
+	for _, s := range owner.Sessions {
+		if s.Status == store.StatusRunning || s.Status == store.StatusQueued || s.Status == store.StatusExternal {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExternal(owner *store.Task) bool {
+	for _, s := range owner.Sessions {
+		if s.Status == store.StatusExternal {
+			return true
+		}
+	}
+	return false
 }
 
 func agentIdle(owner *store.Task) bool {
