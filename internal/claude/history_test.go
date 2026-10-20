@@ -74,8 +74,8 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestProjectDirName(t *testing.T) {
-	got := projectDirName("/Users/me/dev/kangentic-tui/.claude/worktrees/aapeli+kangentic-tui")
-	if want := "-Users-me-dev-kangentic-tui--claude-worktrees-aapeli-kangentic-tui"; got != want {
+	got := projectDirName("/Users/me/dev/drover/.claude/worktrees/aapeli+drover")
+	if want := "-Users-me-dev-drover--claude-worktrees-aapeli-drover"; got != want {
 		t.Errorf("got %s", got)
 	}
 }
@@ -89,10 +89,10 @@ func TestMoveTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if moved, err := MoveTranscript(from, "/repo/.kangentic/worktrees/1"); err != nil || !moved {
+	if moved, err := MoveTranscript(from, "/repo/.drover/worktrees/1"); err != nil || !moved {
 		t.Fatalf("moved=%v err=%v", moved, err)
 	}
-	to := TranscriptPath("abc", "/repo/.kangentic/worktrees/1")
+	to := TranscriptPath("abc", "/repo/.drover/worktrees/1")
 	for _, p := range []string{to, filepath.Join(strings.TrimSuffix(to, ".jsonl"), "subagents")} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s not moved: %v", p, err)

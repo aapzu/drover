@@ -1,9 +1,7 @@
 # drover
 
 A kanban board for AI coding agents, in your terminal. Move a card, an agent
-starts. It began as a terminal version of
-[Kangentic](https://github.com/Kangentic/kangentic) and still reads its
-`kangentic.json`.
+starts.
 
 ```
  ▦ drover     my-app on main                                              ⠧ 1 working  ◆ 1 need you
@@ -70,13 +68,13 @@ In live mode (`tab` or a click on the preview) every key goes to the agent,
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. Typing in live mode jumps back to the bottom.
 
-## How it maps to Kangentic
+## How it works
 
-- **Same board file.** Columns come from `kangentic.json` at the repo root,
-  in the desktop app's format, so you and your teammates share one board. With
+- **Shared board file.** Columns come from `drover.json` at the repo root, so
+  you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
   Self-review, In review, Verify in develop, Done); press `W` to write it out.
-  `kangentic.local.json` can override `defaultBaseBranch`.
+  `drover.local.json` can override `defaultBaseBranch`.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
   becomes the card's title. When that turn ends, the card moves to the first
@@ -84,7 +82,7 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   worktree and branch and resumes the same conversation there; if you're
   attached, you follow it. Move it yourself to go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
-  `.kangentic/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
+  `.drover/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
   agent and removes the worktree, asking first if there are uncommitted
   changes. Branches are never deleted.
@@ -130,7 +128,7 @@ the same color on every card of the group.
 
 ### Following a PR to release
 
-`prFlow` in `kangentic.json` moves PR cards as their PR progresses. Targets are
+`prFlow` in `drover.json` moves PR cards as their PR progresses. Targets are
 column ids or names; leave one out to keep cards where they are. The default
 board uses:
 
@@ -197,24 +195,12 @@ fetches any issue by key or URL.
 - With `DROVER_LINEAR_SYNC=1`, starting an agent on an unstarted issue
   moves it to the team's first "started" state, such as In Progress.
 
-## Differences from the desktop app
+## Notes
 
 - Tasks live in `$XDG_STATE_HOME/drover/<repo>-<hash>/state.json`
   (default `~/.local/state`), outside the repo so they can't be committed.
-  Every worktree of a repo opens the same board. The desktop app keeps tasks
-  in its own database, so the two apps don't share tasks. They do share the
-  board. State from older versions in `.kangentic/tui/` is moved there on
-  first launch.
+  Every worktree of a repo opens the same board.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
   running after you quit. Automations only run while the board is open.
   Events that arrive while it's closed are processed when you reopen it.
-- Only Claude Code is supported. Issues import from Linear only. Not yet
-  supported: workflows, the MCP board tools and multi-project view.
-
-## Migrating from kangentic-tui
-
-- Running sessions call the old binary from their hooks, so keep
-  `kangentic-tui` installed until they have restarted.
-- Agents started by kangentic-tui are on its tmux server. Run
-  `DROVER_TMUX_SOCKET=kangentic-tui drover` until they finish, or suspend and
-  resume them.
+- Only Claude Code is supported. Issues import from Linear only.

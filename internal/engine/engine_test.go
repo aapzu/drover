@@ -123,7 +123,7 @@ func setupProject(t *testing.T) (root, log string) {
 			t.Fatalf("git %v: %s", args, out)
 		}
 	}
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(testBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(testBoard), 0o644)
 	return root, log
 }
 
@@ -161,7 +161,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := e.Snapshot().Tasks[0]
-	if moved.WorktreePath != filepath.Join(root, ".kangentic", "worktrees", "1") {
+	if moved.WorktreePath != filepath.Join(root, ".drover", "worktrees", "1") {
 		t.Errorf("worktree path = %q", moved.WorktreePath)
 	}
 	if !strings.HasPrefix(moved.Branch, "fix-the-login-bug-") {
@@ -175,7 +175,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 		}
 		t.Errorf("worktree not removed: %s", done.WorktreePath)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".kangentic", "worktrees", "1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, ".drover", "worktrees", "1")); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still exists")
 	}
 	for key, s := range done.Sessions {
@@ -205,7 +205,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 
 func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
@@ -252,7 +252,7 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 
 func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -284,7 +284,7 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 		t.Errorf("typed message arrived garbled:\n%s", typed)
 	}
 
-	os.WriteFile(filepath.Join(root, ".kangentic", "worktrees", "1", "wip.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(root, ".drover", "worktrees", "1", "wip.txt"), []byte("x"), 0o644)
 	if err := e.Move(task.ID, "done", MoveOptions{}); err != ErrDirty {
 		t.Fatalf("move to Done with dirty worktree: err = %v, want ErrDirty", err)
 	}
@@ -309,7 +309,7 @@ func readFile(path string) string {
 // turn's end must run the target column's automations.
 func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits",
@@ -343,7 +343,7 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 
 func TestPRRequestMovesCard(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"self","name":"Self-review","autoSpawn":true,
@@ -382,7 +382,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 // start once a slot frees up instead of being dropped.
 func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
@@ -469,7 +469,7 @@ esac
 
 func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(prBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	e, err := New(root)
@@ -570,7 +570,7 @@ const openedBoard = `{
 func startWithBoard(t *testing.T, board string) *Engine {
 	t.Helper()
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(board), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	e, err := New(root)
@@ -681,7 +681,7 @@ const flowBoard = `{
 func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	root, log := setupProject(t)
 	tmp := filepath.Dir(root)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(flowBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(flowBoard), 0o644)
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
 	ghFile, pushFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "pushed.json")
@@ -780,7 +780,7 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 
 func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(prBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -847,7 +847,7 @@ func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) b
 
 func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
@@ -948,7 +948,7 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -1295,7 +1295,7 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 
 func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","modelOverride":"opus"},
@@ -1360,7 +1360,7 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 			if stays {
 				t.Setenv("FAKE_STAY", "1")
 			}
-			os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 			  {"id":"todo","name":"To Do","role":"todo"},
 			  {"id":"exec","name":"Executing","autoSpawn":true},
 			  {"id":"opus","name":"Opus","autoSpawn":true,"modelOverride":"opus"},

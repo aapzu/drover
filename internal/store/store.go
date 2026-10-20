@@ -1,7 +1,6 @@
 // Package store persists tasks and sessions for one project in
 // $XDG_STATE_HOME/drover/<project>-<hash>/state.json, outside the repo so it
-// can never be committed. The desktop app keeps its own SQLite database; the
-// two do not share task data.
+// can never be committed.
 package store
 
 import (
@@ -9,11 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"time"
 )
 
@@ -237,14 +234,9 @@ func Dir(root string) string {
 	return filepath.Join(base, "drover", filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
 }
 
-func legacyDir(root string) string { return filepath.Join(root, ".kangentic", "tui") }
-
 func stateFile(dir string) string { return filepath.Join(dir, "state.json") }
 
 func Load(root string) (*State, error) {
-	if err := migrateLegacy(root); err != nil {
-		return nil, fmt.Errorf("move state out of %s: %w", legacyDir(root), err)
-	}
 	data, err := os.ReadFile(stateFile(Dir(root)))
 	if errors.Is(err, os.ErrNotExist) {
 		return &State{NextNumber: 1}, nil
@@ -263,9 +255,8 @@ func Load(root string) (*State, error) {
 }
 
 // Save writes atomically so a crash never leaves a truncated state file.
-func (s *State) Save(root string) error { return s.saveIn(Dir(root)) }
-
-func (s *State) saveIn(dir string) error {
+func (s *State) Save(root string) error {
+	dir := Dir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -278,48 +269,4 @@ func (s *State) saveIn(dir string) error {
 		return err
 	}
 	return os.Rename(file+".tmp", file)
-}
-
-// migrateLegacy moves state kept inside the repo by older versions to Dir.
-func migrateLegacy(root string) error {
-	old, dir := legacyDir(root), Dir(root)
-	if _, err := os.Stat(stateFile(dir)); !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	data, err := os.ReadFile(stateFile(old))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	s := &State{}
-	if err := json.Unmarshal(data, s); err != nil {
-		return err
-	}
-	for _, t := range s.Tasks {
-		for _, sess := range t.Sessions {
-			if rest, ok := strings.CutPrefix(sess.Dir, old); ok {
-				sess.Dir = dir + rest
-			}
-		}
-	}
-	if err := s.saveIn(old); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return err
-	}
-	// Only an empty dir is replaced; CopyFS refuses to overwrite anything else.
-	os.Remove(dir)
-	if err := os.Rename(old, dir); err != nil {
-		if err := os.CopyFS(dir, os.DirFS(old)); err != nil {
-			return err
-		}
-		if err := os.RemoveAll(old); err != nil {
-			return err
-		}
-	}
-	// Agents still running write events through hook paths under old.
-	return os.Symlink(dir, old)
 }

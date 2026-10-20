@@ -1,5 +1,5 @@
 // Package claude launches Claude Code and turns its hook events into session
-// activity, the same signals Kangentic relies on.
+// activity.
 package claude
 
 import (

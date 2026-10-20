@@ -1,4 +1,4 @@
-// Package engine owns the board state and implements Kangentic's transition
+// Package engine owns the board state and implements the transition
 // rules: moving a card creates its worktree, starts or resumes its agent, and
 // runs the column's automations.
 //
@@ -194,7 +194,7 @@ func (e *Engine) WriteDefaultBoard() error {
 	return nil
 }
 
-// reloadBoard picks up edits to kangentic.json made while the TUI runs.
+// reloadBoard picks up edits to drover.json made while the TUI runs.
 func (e *Engine) reloadBoard() {
 	info, err := os.Stat(filepath.Join(e.Root, config.FileName))
 	if err != nil {
@@ -214,9 +214,9 @@ func (e *Engine) reloadBoard() {
 	}
 	e.mu.Unlock()
 	if err != nil {
-		e.notify("kangentic.json: %v", err)
+		e.notify("drover.json: %v", err)
 	} else {
-		e.notify("Reloaded kangentic.json")
+		e.notify("Reloaded drover.json")
 	}
 }
 
@@ -1225,9 +1225,9 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	env := map[string]string{
-		"KANGENTIC_TASK_ID":     t.ID,
-		"KANGENTIC_TASK_NUMBER": fmt.Sprint(t.Number),
-		"KANGENTIC_TASK_TITLE":  t.Title,
+		"DROVER_TASK_ID":     t.ID,
+		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),
+		"DROVER_TASK_TITLE":  t.Title,
 	}
 	e.mu.Unlock()
 	tmux.Kill(name)
