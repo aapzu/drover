@@ -157,7 +157,9 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	e.mu.Lock()
 	s := scratchSession(owner)
 	idle := s != nil && s.Activity == store.ActivityIdle && len(s.Pending) == 0
-	due := s != nil && t.Title != "" && s.Status == store.StatusRunning && (working || idle)
+	// A review waiting for gh to confirm its PR moves the card itself.
+	held := t.PR.IsReview() && t.PRMovePending
+	due := s != nil && t.Title != "" && !held && s.Status == store.StatusRunning && (working || idle)
 	e.mu.Unlock()
 	target, ok := firstAgentColumn(board)
 	// A column that always spawns a new agent would kill a busy one mid-turn.
@@ -171,14 +173,20 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	e.logf(t, "%s, moving to %s", why, target.Name)
 	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(t, "Move to %s failed: %v", target.Name, err)
-		e.with(func() {
-			if scratchSession(owner) != nil {
-				t.ColumnID = col.ID
-			}
-		})
+		e.restoreScratch(t, owner, col)
 		return false
 	}
 	return true
+}
+
+// restoreScratch puts t back in col after a failed move, if its conversation
+// is still in the main checkout.
+func (e *Engine) restoreScratch(t, owner *store.Task, col config.Column) {
+	e.with(func() {
+		if scratchSession(owner) != nil {
+			t.ColumnID = col.ID
+		}
+	})
 }
 
 func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column, bool) {

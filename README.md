@@ -162,6 +162,50 @@ Moves only happen when the PR changes, so a card you move by hand stays put,
 including before the session card's move to `opened`. You get a notice once all
 the session's PRs are released.
 
+## Reviewing other people's PRs
+
+Ask an agent to review a PR by its URL, for example
+`/code-review https://github.com/o/r/pull/12`, and its card tracks that PR.
+Any URL after a slash command with `review` in its name counts. In a plain
+prompt a URL counts when "review" or "reviewing" comes shortly before it in the
+same sentence, unless it is negated ("don't review") or reads "review
+comments". `gh` then confirms the PR isn't yours. If it is, drover forgets it
+again.
+
+A session that is still in To Do takes the PR on its own card. One already
+working on something gets a separate card for it.
+
+drover itself never posts a review. Nothing stops the agent from posting if you
+ask it to, for example with `--comment`.
+
+The card shows `review PR #12 @author` once gh has confirmed it, and
+`✓ you approved`, `✗ you requested changes` or `✓ you reviewed` once you have
+reviewed it. `↻ new commits` replaces that when the author has pushed since.
+`reviewFlow` in `drover.json` moves the card as the PR changes, with the
+same column targets as `prFlow`:
+
+```json
+"reviewFlow": {
+  "started": "reviewing",
+  "reviewed": "waiting-on-author",
+  "updated": "reviewing",
+  "done": "done"
+}
+```
+
+- **started:** where the card goes once the agent's turn ends and gh has
+  confirmed the PR isn't yours, from To Do or an agent column.
+- **reviewed:** where it goes, from any column, when a review of yours shows up
+  on the PR once the agent is idle. A review already there when drover first
+  sees the PR is only recorded.
+- **updated:** you get a notice when the author pushes after your review. A
+  card in `reviewed` also moves here.
+- **done:** where it goes once the PR merges or closes. A PR that was already
+  merged or closed when drover first sees it moves nothing.
+
+Your own review is never sent to the agent as feedback to address, and review
+cards don't follow a PR to release.
+
 ## Importing Claude Code agents
 
 `I` lists Claude Code conversations started in this repo or any directory

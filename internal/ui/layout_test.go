@@ -241,6 +241,40 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	}
 }
 
+func TestReviewCardsShowYourReview(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	review := func(pr store.PR) store.PR {
+		pr.Number, pr.Review, pr.State = 7, true, "OPEN"
+		return pr
+	}
+	for _, tc := range []struct {
+		pr           store.PR
+		want, absent []string
+	}{
+		{review(store.PR{}), []string{"review PR #7"}, []string{"@", "you"}},
+		{review(store.PR{Author: "them"}), []string{"review PR #7 @them"}, nil},
+		{review(store.PR{Author: "them", MyReview: "APPROVED", HeadSHA: "a", ReviewedSHA: "a"}), []string{"✓ you approved"}, []string{"new commits"}},
+		{review(store.PR{Author: "them", MyReview: "CHANGES_REQUESTED", HeadSHA: "a", ReviewedSHA: "a"}), []string{"✗ you requested changes"}, nil},
+		{review(store.PR{Author: "them", MyReview: "COMMENTED", HeadSHA: "a", ReviewedSHA: "a"}), []string{"✓ you reviewed"}, nil},
+		{review(store.PR{Author: "them", MyReview: "APPROVED", HeadSHA: "b", ReviewedSHA: "a"}), []string{"↻ new commits"}, []string{"you approved"}},
+		{review(store.PR{Author: "them", ReviewDecision: "APPROVED"}), nil, []string{"✓ approved"}},
+		{review(store.PR{Author: "them", Error: "gh pr view: timed out"}), []string{"⚠ gh"}, nil},
+	} {
+		card := &store.Task{ID: "pr", Number: 3, Title: "Review", ColumnID: "c0", PR: &tc.pr}
+		got := ansi.Strip(m.renderCard(card, 80, false, false))
+		for _, want := range tc.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%+v misses %q:\n%s", tc.pr, want, got)
+			}
+		}
+		for _, absent := range tc.absent {
+			if strings.Contains(got, absent) {
+				t.Errorf("%+v shows %q:\n%s", tc.pr, absent, got)
+			}
+		}
+	}
+}
+
 func TestSiblingsOfSelectedCardStandOut(t *testing.T) {
 	m := testModel(120, 40, 2, 0)
 	owner := &store.Task{ID: "owner", Number: 1, Title: "Refactor", ColumnID: "c1"}

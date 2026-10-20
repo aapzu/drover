@@ -51,6 +51,10 @@ type Engine struct {
 	lastReleaseFetch time.Time
 	prPolling        atomic.Bool
 	prScanErrs       map[string]string
+	meMu             sync.Mutex
+	me               string
+	meErr            error
+	meFailedAt       time.Time
 
 	mu         sync.Mutex
 	state      *store.State

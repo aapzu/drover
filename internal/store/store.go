@@ -122,7 +122,8 @@ type Issue struct {
 	State    string `json:"state,omitempty"`
 }
 
-// PR is a GitHub pull request the task's agent opened.
+// PR is a GitHub pull request the task's agent opened, or one you asked it to
+// review (Review).
 type PR struct {
 	URL            string    `json:"url"`
 	Number         int       `json:"number"`
@@ -134,8 +135,20 @@ type PR struct {
 	ChangesSeenAt  time.Time `json:"changesSeenAt,omitzero"`
 	FixFrom        string    `json:"fixFrom,omitempty"`
 	Released       bool      `json:"released,omitempty"`
-	Error          string    `json:"error,omitempty"`
+	// Review is set when you ask the agent to review the PR, and dropped
+	// again if gh shows you wrote it. Until gh has answered, State is empty.
+	Review     bool      `json:"review,omitempty"`
+	Author     string    `json:"author,omitempty"`
+	HeadSHA    string    `json:"headSha,omitempty"`
+	MyReview   string    `json:"myReview,omitempty"`
+	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
+	// ReviewedSHA is the commit your latest review was on.
+	ReviewedSHA string `json:"reviewedSha,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
+
+// IsReview reports whether p is a PR you review, and is safe on nil.
+func (p *PR) IsReview() bool { return p != nil && p.Review }
 
 // Pending is a message waiting for the session to become idle.
 type Pending struct {

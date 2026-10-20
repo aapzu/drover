@@ -22,6 +22,20 @@ func TestChangesRequestedAt(t *testing.T) {
 	if got := (PR{}).ChangesRequestedAt(); !got.IsZero() {
 		t.Errorf("no reviews: %v", got)
 	}
+	mine := func(login, state, when string) Review {
+		return Review{Author: Author{Login: login}, State: state, SubmittedAt: at(when)}
+	}
+	reviewed := PR{LatestReviews: []Review{
+		mine("them", "APPROVED", "2026-10-05T10:00:00Z"),
+		mine("me", "COMMENTED", "2026-10-01T10:00:00Z"),
+		mine("me", "CHANGES_REQUESTED", "2026-10-02T10:00:00Z"),
+	}}
+	if got := reviewed.ReviewedBy("me"); got.State != "CHANGES_REQUESTED" {
+		t.Errorf("ReviewedBy = %+v, want my newest review", got)
+	}
+	if got := reviewed.ReviewedBy("nobody"); !got.SubmittedAt.IsZero() {
+		t.Errorf("ReviewedBy without a review: %+v", got)
+	}
 	if (PR{}).MergeOID() != "" {
 		t.Error("MergeOID without a merge commit")
 	}
