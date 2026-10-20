@@ -124,31 +124,51 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			return
 		}
 	}
-	if e.shipOpenedPR(owner) || e.leaveScratch(t, owner, col, board) {
+	if e.shipOpenedPR(owner) || e.leaveScratch(t, owner, col, board, false) {
 		return
 	}
 	e.flushPending(owner, sessKey)
 }
 
+// leaveScratchWorking moves a named card out of To Do as soon as its agent
+// starts a turn.
+func (e *Engine) leaveScratchWorking(taskID string) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	owner := e.find(taskID)
+	if owner == nil {
+		e.mu.Unlock()
+		return
+	}
+	t := store.Driver(e.state.Tasks, owner)
+	col := e.sessionColumn(owner)
+	board := e.board
+	e.mu.Unlock()
+	e.leaveScratch(t, owner, col, board, true)
+}
+
 // leaveScratch moves a card whose session still runs in the main checkout into
-// the first agent column once a turn that named it ends, which gives it a
-// worktree and carries the conversation over. If the move fails before the
-// conversation leaves the main checkout, the card goes back to try again after
-// the next turn. The caller holds the task lock.
-func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board) bool {
+// the first agent column.
+func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board, working bool) bool {
 	if !col.IsTodo() {
 		return false
 	}
 	e.mu.Lock()
 	s := scratchSession(owner)
-	due := s != nil && t.Title != "" &&
-		s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && len(s.Pending) == 0
+	idle := s != nil && s.Activity == store.ActivityIdle && len(s.Pending) == 0
+	due := s != nil && t.Title != "" && s.Status == store.StatusRunning && (working || idle)
 	e.mu.Unlock()
 	target, ok := firstAgentColumn(board)
-	if !due || !ok {
+	// A column that always spawns a new agent would kill a busy one mid-turn.
+	if !due || !ok || (working && target.AlwaysSpawnNew()) {
 		return false
 	}
-	e.logf(t, "First turn done, moving to %s", target.Name)
+	why := "First turn done"
+	if working {
+		why = "Agent is working"
+	}
+	e.logf(t, "%s, moving to %s", why, target.Name)
 	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(t, "Move to %s failed: %v", target.Name, err)
 		e.with(func() {

@@ -257,8 +257,6 @@ func (e *Engine) CreateTask(title, prompt string) *store.Task {
 }
 
 // NewSession adds a card whose agent starts right away in the main checkout.
-// Your first message names the card; once that turn ends the card moves into
-// an agent column, which gives it a worktree and carries the conversation over.
 func (e *Engine) NewSession() (*store.Task, error) {
 	task := e.CreateTask("", "")
 	_, _, unlock := e.lockGroup(task.ID)

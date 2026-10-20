@@ -120,6 +120,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if prompt := strings.TrimSpace(ev.Prompt); t.Title == "" && prompt != "" && !strings.HasPrefix(prompt, "/") {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
 			}
+			if s.Scratch && t.Title != "" {
+				out = append(out, func() { e.leaveScratchWorking(taskID) })
+			}
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
