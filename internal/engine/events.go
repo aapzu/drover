@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aapzu/drover/internal/claude"
@@ -53,6 +54,7 @@ func (e *Engine) Tick() {
 				}
 			}
 		}
+		followUps = append(followUps, e.checkInterrupted()...)
 		followUps = append(followUps, e.dequeue()...)
 		if time.Since(e.lastPoll) > 1500*time.Millisecond {
 			e.lastPoll = time.Now()
@@ -160,6 +162,53 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				next = func() { e.respawnPending(taskID, key); then() }
 			}
 			out = append(out, next)
+		}
+	}
+	return out
+}
+
+// checkInterrupted returns follow-ups that find working sessions whose turn
+// you interrupted.
+func (e *Engine) checkInterrupted() []func() {
+	var out []func()
+	for _, t := range e.state.Tasks {
+		for key, s := range t.Sessions {
+			working := s.Activity == store.ActivityThinking || s.Activity == store.ActivityPermission
+			if s.Status != store.StatusRunning || !working {
+				continue
+			}
+			path := e.transcriptOf(t, s)
+			if path == "" {
+				continue
+			}
+			taskID, name, offset, since := t.ID, s.Tmux, s.EventsOffset, s.UpdatedAt
+			out = append(out, func() {
+				if !claude.Interrupted(path, since) {
+					return
+				}
+				var task *store.Task
+				e.with(func() {
+					task = e.find(taskID)
+					if task == nil || task.Sessions[key] != s || s.Status != store.StatusRunning || s.EventsOffset != offset {
+						task = nil
+						return
+					}
+					// sendMessage interrupts on purpose and types the next prompt.
+					if typing, ok := e.typing.Load(name); ok {
+						if !typing.(*sync.Mutex).TryLock() {
+							task = nil
+							return
+						}
+						typing.(*sync.Mutex).Unlock()
+					}
+					s.Activity = store.ActivityIdle
+					s.TurnInVisit = false
+					task.AddLog("Turn interrupted")
+				})
+				if task != nil {
+					e.flushPending(task, key)
+				}
+			})
 		}
 	}
 	return out

@@ -313,3 +313,57 @@ func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, err
 	answer := strings.ToUpper(strings.TrimSpace(string(out)))
 	return strings.HasPrefix(answer, "YES"), nil
 }
+
+// Interrupted reports whether the transcript's last conversation entry is the
+// record of you interrupting a turn after the given time, which Claude Code
+// leaves without firing a Stop hook. The time keeps an earlier turn's
+// interrupt from counting while the next prompt is not recorded yet.
+func Interrupted(transcriptPath string, after time.Time) bool {
+	const tail = 32 << 10
+	marker := []byte("[Request interrupted by user")
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	start := max(0, info.Size()-tail)
+	data := make([]byte, info.Size()-start)
+	if _, err := f.ReadAt(data, start); err != nil && err != io.EOF {
+		return false
+	}
+	// A line still being written is unsettled; the next poll sees it whole.
+	if !bytes.Contains(data, marker) || !bytes.HasSuffix(data, []byte("\n")) {
+		return false
+	}
+	data = bytes.TrimSuffix(data, []byte("\n"))
+	for len(data) > 0 {
+		var line []byte
+		if i := bytes.LastIndexByte(data, '\n'); i >= 0 {
+			line, data = data[i+1:], data[:i]
+		} else {
+			line, data = data, nil
+		}
+		var entry struct {
+			Type        string          `json:"type"`
+			IsSidechain bool            `json:"isSidechain"`
+			Timestamp   string          `json:"timestamp"`
+			Message     json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal(line, &entry) != nil || entry.IsSidechain || (entry.Type != "user" && entry.Type != "assistant") {
+			continue
+		}
+		if entry.Type == "assistant" {
+			return false
+		}
+		if text, _ := promptText(entry.Message); !bytes.HasPrefix([]byte(text), marker) {
+			return false
+		}
+		at, err := time.Parse(time.RFC3339, entry.Timestamp)
+		return err != nil || at.After(after)
+	}
+	return false
+}
