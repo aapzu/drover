@@ -85,6 +85,9 @@ type Session struct {
 	Effort         string        `json:"effort,omitempty"`
 	PermissionMode string        `json:"permissionMode,omitempty"`
 	EventsOffset   int64         `json:"eventsOffset"`
+	// ModeInherited is set when drover left the mode to Claude Code, which
+	// PermissionMode cannot show once hooks report it. Older sessions count as forced.
+	ModeInherited bool `json:"modeInherited,omitempty"`
 	// Started is set once the agent has recorded a conversation, so a later
 	// spawn can resume it instead of starting over.
 	Started     bool `json:"started"`
@@ -110,6 +113,12 @@ type Session struct {
 	PRScanPath     string    `json:"prScanPath,omitempty"`
 	PRScan         int64     `json:"prScan,omitempty"`
 	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
+// SetMode records the mode drover launched or switched the agent to; "" leaves
+// the choice to Claude Code.
+func (s *Session) SetMode(mode string) {
+	s.PermissionMode, s.ModeInherited = mode, mode == ""
 }
 
 // Issue links a task to a tracker issue, currently Linear.

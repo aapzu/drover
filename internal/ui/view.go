@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -277,7 +278,7 @@ func (m Model) status(t *store.Task) string {
 		pending = dim.Render(fmt.Sprintf(" +%d queued", len(s.Pending)))
 	}
 	if col, _, ok := m.snap.Board.Column(driver.ColumnID); ok && s.RespawnPending {
-		pending += dim.Render(" → " + col.PermissionMode + " next turn")
+		pending += dim.Render(" → " + cmp.Or(m.snap.Board.PermissionMode(col), "default") + " next turn")
 	}
 	if stuckStarting(s) {
 		return needsYou.Render("◆ waiting to start") + pending

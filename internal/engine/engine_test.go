@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -261,6 +262,117 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 	if !strings.Contains(launches[1], "--permission-mode\nacceptEdits") || !strings.Contains(launches[1], "--resume") {
 		t.Errorf("respawn should resume in the board's default mode:\n%s", launches[1])
+	}
+}
+
+func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"Review","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Inherit", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && s.Started
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart without a forced mode", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	launches := strings.Split(readFile(log), "---")
+	if !strings.Contains(launches[0], "--permission-mode\nplan") {
+		t.Errorf("planning launch should force plan mode:\n%s", launches[0])
+	}
+	if !strings.Contains(launches[1], "--resume") || strings.Contains(launches[1], "--permission-mode") {
+		t.Errorf("restart should resume with Claude's own mode:\n%s", launches[1])
+	}
+
+	waitFor(t, e, "the restarted agent to settle", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning || strings.Count(readFile(log), "---") != 2 {
+		t.Errorf("moving between inheriting columns should not restart the agent: status=%s\n%s", s.Status, readFile(log))
+	}
+}
+
+func TestSettingsDiffer(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		s    store.Session
+		col  config.Column
+		mode string
+		want bool
+	}{
+		{"inherited, hooks report a mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "", false},
+		{"forced plan leaving for inherited", store.Session{PermissionMode: "plan"}, config.Column{}, "", true},
+		{"saved before ModeInherited", store.Session{PermissionMode: "auto"}, config.Column{}, "", true},
+		{"same forced mode", store.Session{PermissionMode: "acceptEdits"}, config.Column{}, "acceptEdits", false},
+		{"inherited entering a forced mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "plan", true},
+		{"model differs", store.Session{PermissionMode: "plan", Model: "opus"}, config.Column{ModelOverride: "sonnet"}, "plan", true},
+	} {
+		if got := settingsDiffer(&tc.s, tc.col, tc.mode); got != tc.want {
+			t.Errorf("%s: settingsDiffer = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"review","name":"Review","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Round trip", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && s.Started
+	})
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(log); strings.Count(got, "---") != 1 || !strings.Contains(got, "typed:/plan") {
+		t.Fatalf("want /plan typed into the running agent:\n%s", got)
+	}
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart without a forced mode", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || strings.Contains(l, "--permission-mode") {
+		t.Errorf("restart should resume with Claude's own mode:\n%s", l)
 	}
 }
 
