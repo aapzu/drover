@@ -1429,3 +1429,67 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 		})
 	}
 }
+
+func TestInterruptedTurnGoesIdle(t *testing.T) {
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	transcript := claude.TranscriptPath(ready.Sessions[store.MainSession].AgentSessionID, root)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(lines ...string) {
+		if err := os.WriteFile(transcript, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prompt := `{"type":"user","message":{"content":"Fix the login bug"}}`
+	reply := `{"type":"assistant","message":{"content":[{"type":"text","text":"On it"}]}}`
+	var interrupt string
+	write(prompt, reply)
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
+	waitFor(t, e, "turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession].Activity; got != store.ActivityThinking {
+		t.Fatalf("a running turn became %s", got)
+	}
+
+	interrupt = `{"type":"user","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	write(prompt, reply, interrupt)
+	waitFor(t, e, "interrupted turn to go idle", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+
+	// The next prompt's hook can arrive before Claude Code records the prompt,
+	// while the transcript still ends with the earlier interrupt.
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"try again"}` + "\n")
+	waitFor(t, e, "second turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession].Activity; got != store.ActivityThinking {
+		t.Fatalf("an earlier turn's interrupt ended the new turn: %s", got)
+	}
+}

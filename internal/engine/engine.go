@@ -1289,6 +1289,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immedia
 	if p.Relocate != "" {
 		s.Relocate = p.Relocate
 	}
+	s.UpdatedAt = time.Now()
 	e.mu.Unlock()
 
 	defer e.lockTyping(name)()
@@ -1296,13 +1297,16 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immedia
 		tmux.Interrupt(name)
 		time.Sleep(700 * time.Millisecond)
 	}
-	if err := tmux.SendText(name, p.Text); err != nil {
-		e.with(func() {
+	err := tmux.SendText(name, p.Text)
+	e.with(func() {
+		// An interrupt before this point belongs to the turn that was cut off.
+		s.UpdatedAt = time.Now()
+		if err != nil {
 			s.Activity = store.ActivityIdle
 			s.Relocate = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
-		})
-	}
+		}
+	})
 }
 
 // lockTyping serializes typing into the tmux session name.

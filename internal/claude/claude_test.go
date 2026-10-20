@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadEventsKeepsPartialLine(t *testing.T) {
@@ -139,5 +140,46 @@ func TestScreenMode(t *testing.T) {
 		if got := ScreenMode(screen); got != want {
 			t.Errorf("ScreenMode(%q) = %q, want %q", screen, got, want)
 		}
+	}
+}
+
+func TestInterrupted(t *testing.T) {
+	turnStart := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	interrupt := func(at string) string {
+		return `{"type":"user","timestamp":"` + at + `","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	}
+	fresh, stale := interrupt("2026-10-19T12:00:05.000Z"), interrupt("2026-10-19T11:59:00.000Z")
+	cases := []struct {
+		name    string
+		lines   []string
+		partial string
+		want    bool
+	}{
+		{"interrupted", []string{`{"type":"assistant","message":{"content":[]}}`, fresh, `{"type":"file-history-snapshot"}`, `{"type":"last-prompt"}`}, "", true},
+		{"tool use", []string{`{"type":"user","message":{"content":[{"type":"tool_result","content":"x"},{"type":"text","text":"[Request interrupted by user for tool use]"}]}}`}, "", true},
+		{"no timestamp", []string{`{"type":"user","message":{"content":"[Request interrupted by user]"}}`}, "", true},
+		{"left over from an earlier turn", []string{stale}, "", false},
+		{"new prompt", []string{fresh, `{"type":"user","message":{"content":"go on"}}`}, "", false},
+		{"new reply", []string{fresh, `{"type":"assistant","message":{"content":[]}}`}, "", false},
+		{"tool result", []string{fresh, `{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}`}, "", false},
+		{"sidechain", []string{fresh, `{"type":"assistant","isSidechain":true,"message":{"content":[]}}`}, "", true},
+		{"reply being written", []string{fresh}, `{"type":"assistant","mess`, false},
+		{"empty", nil, "", false},
+	}
+	for _, c := range cases {
+		path := filepath.Join(t.TempDir(), "t.jsonl")
+		data := strings.Join(c.lines, "\n")
+		if len(c.lines) > 0 {
+			data += "\n"
+		}
+		if err := os.WriteFile(path, []byte(data+c.partial), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := Interrupted(path, turnStart); got != c.want {
+			t.Errorf("%s: Interrupted = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if Interrupted(filepath.Join(t.TempDir(), "missing.jsonl"), turnStart) {
+		t.Error("a missing transcript is not interrupted")
 	}
 }
