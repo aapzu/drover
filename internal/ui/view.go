@@ -402,6 +402,12 @@ func (m Model) isSibling(g *cardGroup, t *store.Task) bool {
 func (m Model) cardRef(t *store.Task) string {
 	if t.PR != nil {
 		ref := fmt.Sprintf("PR #%d", t.PR.Number)
+		if t.PR.IsReview() {
+			ref = "review " + ref
+			if t.PR.Author != "" {
+				ref += " @" + t.PR.Author
+			}
+		}
 		switch {
 		case t.PR.Released:
 			ref += " released"
@@ -416,6 +422,8 @@ func (m Model) cardRef(t *store.Task) string {
 		case t.PR.Error != "":
 			badge = alert.Render("⚠ gh") + " "
 		case t.PR.State != "OPEN":
+		case t.PR.Review:
+			badge = reviewBadge(t.PR)
 		case t.PR.ReviewDecision == "APPROVED":
 			badge = idle.Render("✓ approved") + " "
 		case t.PR.ReviewDecision == "CHANGES_REQUESTED":
@@ -425,6 +433,21 @@ func (m Model) cardRef(t *store.Task) string {
 	}
 	if branch := store.Owner(m.snap.Tasks, t).Branch; branch != "" {
 		return dim.Render(branch)
+	}
+	return ""
+}
+
+// reviewBadge shows where your review of a PR stands.
+func reviewBadge(pr *store.PR) string {
+	switch {
+	case pr.ReviewedSHA != "" && pr.HeadSHA != pr.ReviewedSHA:
+		return alert.Render("↻ new commits") + " "
+	case pr.MyReview == "APPROVED":
+		return idle.Render("✓ you approved") + " "
+	case pr.MyReview == "CHANGES_REQUESTED":
+		return alert.Render("✗ you requested changes") + " "
+	case pr.MyReview != "":
+		return idle.Render("✓ you reviewed") + " "
 	}
 	return ""
 }
@@ -622,6 +645,9 @@ func (m Model) renderDetail(t *store.Task) string {
 	}
 	if t.PR != nil {
 		field("PR", strings.TrimSpace(fmt.Sprintf("#%d  %s  %s  %s", t.PR.Number, t.PR.State, t.PR.Branch, t.PR.URL)))
+		if t.PR.Review && t.PR.Author != "" {
+			field("Reviewing", "@"+t.PR.Author)
+		}
 	}
 	owner := store.Owner(m.snap.Tasks, t)
 	field("Branch", owner.Branch)

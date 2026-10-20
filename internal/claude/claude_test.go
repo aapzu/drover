@@ -153,6 +153,32 @@ func TestAsksForPR(t *testing.T) {
 	}
 }
 
+func TestReviewedPRs(t *testing.T) {
+	const a, b = "https://github.com/o/r/pull/12", "https://github.com/o/r/pull/13"
+	for prompt, want := range map[string][]string{
+		"/code-review " + a: {a},
+		"/pr-review-toolkit:review-pr " + a + " " + b + " " + a: {a, b},
+		"review " + a + " please":                               {a},
+		"Reviewing " + a:                                        {a},
+		"don't review " + a + " yet":                            nil,
+		"/code-review":                                          nil,
+		"review the PR comments":                                nil,
+		"/simplify " + a:                                        nil,
+		"open a PR for " + a:                                    nil,
+		"PR " + a + " got review comments":                      nil,
+		"address the review comments on " + a:                   nil,
+		"please review the diff in " + a:                        {a},
+		"review " + a + " and " + b:                             {a, b},
+		"see how " + a + " was reviewed":                        nil,
+		"review the plan. Then look at " + a:                    nil,
+		"open a PR, then review " + b:                           {b},
+	} {
+		if got := ReviewedPRs(prompt); !slices.Equal(got, want) {
+			t.Errorf("ReviewedPRs(%q) = %v, want %v", prompt, got, want)
+		}
+	}
+}
+
 func TestScreenMode(t *testing.T) {
 	for screen, want := range map[string]string{
 		"> fix it\n\n  plan mode is great\n" + strings.Repeat("\n", 8) + "────\n> \n────\n  ⏸ plan mode on (shift+tab to cycle)\n\n": "plan",

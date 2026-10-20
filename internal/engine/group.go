@@ -69,26 +69,47 @@ func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {
 	return card, owner, unlock
 }
 
+// startRef is where a PR's card goes once it is taken up: the reviewFlow's
+// started column for a PR you review, else the prFlow's opened column. It is
+// empty when that flow doesn't say.
+func (e *Engine) startRef(review bool) string {
+	switch {
+	case review && e.board.ReviewFlow != nil:
+		return e.board.ReviewFlow.Started
+	case !review && e.board.PRFlow != nil:
+		return e.board.PRFlow.Opened
+	}
+	return ""
+}
+
 // addPRs records pull requests the owner's session opened. The first goes on
 // the owner's own card, which moves to the prFlow's opened column once the
 // agent's turn ends. Each further PR becomes its own card in the group, in
 // the opened column, else in the column of the card the session works for.
+// With review set the PRs are ones you asked the agent to review. They are
+// marked as such and use the reviewFlow's started column instead. The owner's
+// card takes the first only while it is still in To Do, and a further card
+// starts in that column straight away, before gh has confirmed the PR isn't
+// yours; if it is yours, the card is removed again.
 // Called with mu held.
-func (e *Engine) addPRs(owner *store.Task, urls []string) {
+func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 	members := store.Members(e.state.Tasks, owner)
 	column := store.Driver(e.state.Tasks, owner).ColumnID
-	hasOpened := false
-	if f := e.board.PRFlow; f != nil {
-		if c, ok := e.board.Find(f.Opened); ok {
-			column, hasOpened = c.ID, true
-		}
+	hasTarget := false
+	if c, ok := e.board.Find(e.startRef(review)); ok {
+		column, hasTarget = c.ID, true
 	}
-	if owner.PR == nil && len(members) == 1 && len(urls) > 0 {
+	logText, verb := "Opened PR #%d", "opened"
+	if review {
+		logText, verb = "Reviewing PR #%d", "is reviewing"
+	}
+	col, _, _ := e.board.Column(owner.ColumnID)
+	if owner.PR == nil && len(members) == 1 && len(urls) > 0 && (!review || col.IsTodo()) {
 		n := gh.Number(urls[0])
-		owner.PR = &store.PR{URL: urls[0], Number: n}
-		owner.PRMovePending = hasOpened
-		owner.AddLog(fmt.Sprintf("Opened PR #%d", n))
-		e.notify("#%d opened PR #%d", owner.Number, n)
+		owner.PR = &store.PR{URL: urls[0], Number: n, Review: review}
+		owner.PRMovePending = hasTarget
+		owner.AddLog(fmt.Sprintf(logText, n))
+		e.notify("#%d %s PR #%d", owner.Number, verb, n)
 		urls = urls[1:]
 	}
 	for _, url := range urls {
@@ -103,7 +124,7 @@ func (e *Engine) addPRs(owner *store.Task, urls []string) {
 			Number:    e.state.NextNumber,
 			Title:     fmt.Sprintf("%s · PR #%d", owner.Title, n),
 			ColumnID:  column,
-			PR:        &store.PR{URL: url, Number: n},
+			PR:        &store.PR{URL: url, Number: n, Review: review},
 			GroupID:   owner.ID,
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -113,10 +134,10 @@ func (e *Engine) addPRs(owner *store.Task, urls []string) {
 			card.Issue = &issue
 		}
 		e.state.NextNumber++
-		card.AddLog(fmt.Sprintf("Split from #%d: its agent opened PR #%d", owner.Number, n))
-		owner.AddLog(fmt.Sprintf("Opened PR #%d, now card #%d", n, card.Number))
+		card.AddLog(fmt.Sprintf("Split from #%d: its agent %s PR #%d", owner.Number, verb, n))
+		owner.AddLog(fmt.Sprintf(logText+", now card #%d", n, card.Number))
 		e.state.Tasks = append(e.state.Tasks, card)
-		e.notify("#%d opened PR #%d: new card #%d", owner.Number, n, card.Number)
+		e.notify("#%d %s PR #%d: new card #%d", owner.Number, verb, n, card.Number)
 		members = append(members, card)
 	}
 	e.lastPRPoll = time.Time{}

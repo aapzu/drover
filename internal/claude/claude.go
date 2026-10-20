@@ -127,6 +127,7 @@ var (
 	prCommand = regexp.MustCompile(`\bgh\s+(pr\s+create|stack)\b`)
 	prURL     = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
 	prAsk     = regexp.MustCompile(`(?i)\b(open|create|raise|submit|put up|make)\s+(((a|an|new|draft)\s+)+(pr|pull request)s?|prs|pull requests)\b`)
+	prReview  = regexp.MustCompile(`(?i)\breview(?:ing)?\b(\s+(?:comments?|feedback|changes|threads?)\b)?`)
 	prNegated = regexp.MustCompile(`(?i)\b(don['’]?t|do not|not|never|no need to|without|before|until)\b[^.?!\n]{0,30}$`)
 )
 
@@ -138,12 +139,68 @@ func AsksForPR(prompt string) bool {
 		return false
 	}
 	for _, m := range prAsk.FindAllStringIndex(prompt, -1) {
-		if !prNegated.MatchString(prompt[max(0, m[0]-64):m[0]]) {
+		if !negatedBefore(prompt, m[0]) {
 			return true
 		}
 	}
 	return false
 }
+
+// negatedBefore reports whether the words just before at are a negation, like
+// "don't" or "before".
+func negatedBefore(prompt string, at int) bool {
+	return prNegated.MatchString(prompt[max(0, at-64):at])
+}
+
+// ReviewedPRs returns the pull request URLs in a prompt that asks for a
+// review: any URL after a slash command with "review" in its name, like
+// `/code-review`, or a URL that follows the word "review" or "reviewing"
+// closely, in the same sentence. "Review comments" and "review feedback" don't
+// count, nor does a negated "don't review".
+func ReviewedPRs(prompt string) []string {
+	prompt = strings.TrimSpace(prompt)
+	locs := prURL.FindAllStringIndex(prompt, -1)
+	if len(locs) == 0 {
+		return nil
+	}
+	slash := strings.HasPrefix(prompt, "/")
+	if slash {
+		command, _, _ := strings.Cut(prompt, " ")
+		if !strings.Contains(strings.ToLower(command), "review") {
+			return nil
+		}
+	}
+	var anchors []int
+	if !slash {
+		for _, m := range prReview.FindAllStringSubmatchIndex(prompt, -1) {
+			if m[2] == -1 && !negatedBefore(prompt, m[0]) {
+				anchors = append(anchors, m[1])
+			}
+		}
+	}
+	var urls []string
+	for _, loc := range locs {
+		url := prompt[loc[0]:loc[1]]
+		if slices.Contains(urls, url) {
+			continue
+		}
+		if slash || slices.ContainsFunc(anchors, func(end int) bool {
+			if end > loc[0] {
+				return false
+			}
+			between := prompt[end:loc[0]]
+			return len(between) <= reviewReach && !strings.ContainsAny(between, ".?!\n")
+		}) {
+			urls = append(urls, url)
+			anchors = append(anchors, loc[1])
+		}
+	}
+	return urls
+}
+
+// reviewReach is how far past "review" a PR URL may be and still be the thing
+// reviewed.
+const reviewReach = 40
 
 // CreatedPRs returns the pull request URLs a Bash `gh pr create` or
 // `gh stack` call printed. Other commands are ignored so PRs the agent only

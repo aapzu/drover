@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,7 +35,7 @@ func (e *Engine) pollPRs() []func() {
 		switch t.PR.State {
 		case "CLOSED":
 		case "MERGED":
-			if flow != nil && flow.Released != "" && !t.PR.Released && t.PR.MergeCommit != "" {
+			if flow != nil && flow.Released != "" && !t.PR.Released && !t.PR.IsReview() && t.PR.MergeCommit != "" {
 				merged = append(merged, t.ID)
 			}
 		default:
@@ -162,7 +164,7 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 			delete(e.prScanErrs, r.path)
 			s.PRScanPath, s.PRScan = r.path, r.next
 			if len(r.urls) > 0 {
-				e.addPRs(t, r.urls)
+				e.addPRs(t, r.urls, false)
 				if t.PRMovePending && agentIdle(t) {
 					ship = append(ship, t)
 				}
@@ -175,7 +177,8 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 }
 
 // refreshPR updates an open PR's card from GitHub and moves it along the
-// prFlow.
+// prFlow, or along the reviewFlow for a PR you review. For those it first
+// asks gh whether the PR is yours after all.
 func (e *Engine) refreshPR(id string) {
 	e.mu.Lock()
 	t := e.find(id)
@@ -183,9 +186,15 @@ func (e *Engine) refreshPR(id string) {
 		e.mu.Unlock()
 		return
 	}
-	url := t.PR.URL
+	url, review := t.PR.URL, t.PR.Review
 	e.mu.Unlock()
 	info, err := gh.View(e.Root, url)
+	var me string
+	if err == nil && review {
+		if me, err = e.login(); err != nil {
+			err = fmt.Errorf("can't tell whether it is yours, so the card stays put: %w", err)
+		}
+	}
 
 	card, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -193,22 +202,39 @@ func (e *Engine) refreshPR(id string) {
 		return
 	}
 	var step prMove
+	confirmed := false
 	e.with(func() {
 		pr := card.PR
 		if err != nil {
 			e.prError(card, err)
 			return
 		}
+		if pr.Review && info.Author.Login == me {
+			e.dropReviewNomination(card, owner)
+			return
+		}
 		if pr.Title == "" && info.Title != "" && card.GroupID != "" {
 			card.Title = info.Title
 		}
-		prev := pr.State
+		prev, prevHead := pr.State, pr.HeadSHA
 		pr.Error = ""
 		pr.Title, pr.Branch, pr.State = info.Title, info.Branch, info.State
-		pr.ReviewDecision, pr.MergeCommit = info.ReviewDecision, info.MergeOID()
+		pr.ReviewDecision, pr.MergeCommit, pr.HeadSHA = info.ReviewDecision, info.MergeOID(), info.HeadSHA
+		if pr.Review {
+			pr.Author = info.Author.Login
+			confirmed = info.State == "OPEN"
+			if card.Title == "" && info.Title != "" {
+				card.Title = "Review: " + info.Title
+			}
+			step = e.reviewStep(card, owner, prev, prevHead, info, me)
+			return
+		}
 		step = e.prStep(card, owner, prev, info)
 	})
 	e.applyPRMove(card, owner, step)
+	if confirmed {
+		e.shipOpenedPR(card)
+	}
 }
 
 // checkRelease moves a merged PR's card on once its merge commit is on ref.
@@ -292,6 +318,92 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 	return prMove{}
 }
 
+// dropReviewNomination forgets a PR that a review prompt named but gh shows
+// you wrote: the owner's card goes back to having no PR, and a card split off
+// for it is removed. Called with mu held.
+func (e *Engine) dropReviewNomination(card, owner *store.Task) {
+	pr := card.PR
+	if card.GroupID == "" {
+		card.AddLog(fmt.Sprintf("PR #%d is yours, not tracking it as a review", pr.Number))
+		card.PR, card.PRMovePending = nil, false
+		return
+	}
+	owner.AddLog(fmt.Sprintf("PR #%d is yours, not tracking it as a review (card #%d removed)", pr.Number, card.Number))
+	owner.SeenPRs = slices.DeleteFunc(owner.SeenPRs, func(u string) bool { return u == pr.URL })
+	e.state.Tasks = slices.DeleteFunc(e.state.Tasks, func(t *store.Task) bool { return t == card })
+}
+
+// loginRetry is how long a failed login lookup is remembered, so a gh that is
+// offline or signed out costs one lookup per interval, not one per card.
+var loginRetry = 30 * time.Second
+
+// login is the GitHub user the CLI is signed in as, looked up once.
+func (e *Engine) login() (string, error) {
+	e.meMu.Lock()
+	defer e.meMu.Unlock()
+	if e.me != "" {
+		return e.me, nil
+	}
+	if e.meErr != nil && time.Since(e.meFailedAt) < loginRetry {
+		return "", e.meErr
+	}
+	me, err := gh.Me(e.Root)
+	if err != nil {
+		e.meErr, e.meFailedAt = err, time.Now()
+		return "", err
+	}
+	e.me, e.meErr = me, nil
+	return me, nil
+}
+
+// reviewStep records what changed on a PR you review and returns the move it
+// calls for, if any. A review you submit moves the card to reviewFlow.reviewed
+// from any column. New commits after it are logged and notified, and move a
+// card in reviewFlow.reviewed to reviewFlow.updated. A review already on the PR
+// when drover first looks is only recorded, so it moves nothing; a merge or
+// close still moves the card to reviewFlow.done. Called with mu held.
+func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string, info gh.PR, me string) prMove {
+	pr := card.PR
+	flow := e.board.ReviewFlow
+	if flow == nil {
+		flow = &config.ReviewFlow{}
+	}
+	first := prevState == ""
+	mine := info.ReviewedBy(me)
+	// Moving the card would stop an agent that is still writing, so a review
+	// is picked up at the first poll after its turn.
+	reviewed := mine.SubmittedAt.After(pr.MyReviewAt) && (first || agentIdle(owner))
+	if reviewed {
+		pr.MyReview, pr.MyReviewAt, pr.ReviewedSHA = mine.State, mine.SubmittedAt, mine.Commit.OID
+		if pr.ReviewedSHA == "" {
+			pr.ReviewedSHA = info.HeadSHA
+		}
+	}
+	if first {
+		return prMove{}
+	}
+	switch {
+	case info.State == "MERGED" && prevState != "MERGED":
+		card.AddLog(fmt.Sprintf("PR #%d merged", pr.Number))
+		return prMove{to: e.flowColumn(flow.Done)}
+	case info.State == "CLOSED" && prevState != "CLOSED":
+		card.AddLog(fmt.Sprintf("PR #%d closed without merging", pr.Number))
+		e.notify("#%d: PR #%d was closed", card.Number, pr.Number)
+		return prMove{to: e.flowColumn(flow.Done)}
+	case info.State != "OPEN":
+	case reviewed:
+		card.AddLog(fmt.Sprintf("You reviewed PR #%d: %s", pr.Number, strings.ToLower(mine.State)))
+		return prMove{to: e.flowColumn(flow.Reviewed)}
+	case info.HeadSHA != prevHead && pr.ReviewedSHA != "":
+		card.AddLog(fmt.Sprintf("New commits on PR #%d since your review", pr.Number))
+		e.notify("#%d: new commits on PR #%d since your review", card.Number, pr.Number)
+		if e.inColumn(card, flow.Reviewed) {
+			return prMove{to: e.flowColumn(flow.Updated)}
+		}
+	}
+	return prMove{}
+}
+
 // flowColumn resolves a prFlow target; an unset one is the zero column,
 // which means no move. Called with mu held.
 func (e *Engine) flowColumn(ref string) config.Column {
@@ -339,7 +451,7 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 	if step.onMoved != nil {
 		e.with(step.onMoved)
 	}
-	if step.to.IsDone() {
+	if step.to.IsDone() && !card.PR.IsReview() {
 		e.notifyAllReleased(owner)
 	}
 }
@@ -378,7 +490,7 @@ func (e *Engine) notifyAllReleased(owner *store.Task) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for _, m := range store.Members(e.state.Tasks, owner) {
-		if col, _, _ := e.board.Column(m.ColumnID); m.PR != nil && !col.IsDone() {
+		if col, _, _ := e.board.Column(m.ColumnID); m.PR != nil && !m.PR.IsReview() && !col.IsDone() {
 			return
 		}
 	}

@@ -126,6 +126,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
+			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
+				e.addPRs(t, urls, true)
+			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
@@ -134,7 +137,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
 			if urls := ev.CreatedPRs(); len(urls) > 0 {
-				e.addPRs(t, urls)
+				e.addPRs(t, urls, false)
 			}
 		case "PermissionRequest":
 			s.Activity = store.ActivityPermission
@@ -294,8 +297,10 @@ func (e *Engine) shipTask(t *store.Task) bool {
 
 // shipOpenedPR moves the card that took its session's first PR to the
 // prFlow's opened column once the agent is idle, unless you moved it first.
-// A card whose agent runs outside drover never moves. It reports whether it
-// moved the card. The caller holds the task lock.
+// A PR you review goes to the reviewFlow's started column instead, once gh has
+// confirmed it isn't yours, and leaves To Do even while its agent works. A card
+// whose agent runs outside drover never moves. It reports whether it moved the
+// card. The caller holds the task lock.
 func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	e.mu.Lock()
 	pending := t.PRMovePending
@@ -303,31 +308,44 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	if !pending {
 		return false
 	}
-	var target config.Column
+	var target, from config.Column
+	reason := "PR opened"
 	e.with(func() {
-		if !agentIdle(t) || hasExternal(t) {
+		col, _, _ := e.board.Column(t.ColumnID)
+		review := t.PR.IsReview()
+		if hasExternal(t) || !agentIdle(t) && !(review && col.IsTodo()) {
+			return
+		}
+		if review && t.PR.State == "" {
+			// gh hasn't said yet whether the PR is yours. A card in Done is
+			// no longer polled, so it never will.
+			if col.IsDone() {
+				t.PRMovePending = false
+			}
 			return
 		}
 		t.PRMovePending = false
-		col, _, _ := e.board.Column(t.ColumnID)
-		if f := e.board.PRFlow; f != nil {
-			target = e.flowColumn(f.Opened)
+		from = col
+		if review {
+			reason = "Review started"
 		}
+		target = e.flowColumn(e.startRef(review))
 		switch {
 		case target.ID == "" || target.ID == col.ID:
 			target = config.Column{}
-		case !isAgentColumn(col):
-			t.AddLog(fmt.Sprintf("PR opened, not moving to %s: the card is in %s", target.Name, col.Name))
+		case !isAgentColumn(col) && !(review && col.IsTodo()):
+			t.AddLog(fmt.Sprintf("%s, not moving to %s: the card is in %s", reason, target.Name, col.Name))
 			target = config.Column{}
 		}
 	})
 	if target.ID == "" {
 		return false
 	}
-	e.logf(t, "PR opened, moving to %s", target.Name)
+	e.logf(t, "%s, moving to %s", reason, target.Name)
 	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
-		e.logf(t, "PR-opened move failed: %v", err)
+		e.logf(t, "%s move failed: %v", reason, err)
 		e.notify("#%d: moving to %s failed: %v", t.Number, target.Name, err)
+		e.restoreScratch(t, t, from)
 		return false
 	}
 	return true

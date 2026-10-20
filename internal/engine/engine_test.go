@@ -38,6 +38,7 @@ emit() { printf '%s\n' "$1" >> "$events"; }
 turn() {
   case "$1" in
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
+    *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
   sleep 0.2
@@ -1572,5 +1573,283 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 	time.Sleep(time.Second)
 	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession].Activity; got != store.ActivityThinking {
 		t.Fatalf("an earlier turn's interrupt ended the new turn: %s", got)
+	}
+}
+
+const reviewBoard = `{
+  "version": 1,
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "reviewing", "name": "Reviewing", "autoSpawn": true},
+    {"id": "waiting", "name": "Waiting on author"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ],
+  "prFlow": {"opened": "waiting", "changesRequested": "exec", "changesRequestedMessage": "FIX {{prNumber}}"},
+  "reviewFlow": {"started": "reviewing", "reviewed": "waiting", "updated": "reviewing", "done": "done"}
+}`
+
+// reviewRig runs an engine against a fake gh that reports one PR, number 7,
+// written by author. Its state and the failures of `gh pr view` and
+// `gh api user` are controlled by files in dir.
+type reviewRig struct {
+	e      *Engine
+	log    string
+	dir    string
+	author string
+}
+
+func newReviewRig(t *testing.T, author, board string) *reviewRig {
+	t.Helper()
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
+	dir := filepath.Join(filepath.Dir(root), "gh")
+	os.MkdirAll(dir, 0o755)
+	t.Setenv("FAKE_DIR", dir)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(`#!/bin/sh
+case "$1" in
+  api) [ -e "$FAKE_DIR/fail-login" ] && { echo "not logged in" >&2; exit 1; }; echo me;;
+  *) [ -e "$FAKE_DIR/fail-view" ] && { echo "boom" >&2; exit 1; }; cat "$FAKE_DIR/pr.json";;
+esac
+`), 0o755)
+	old := loginRetry
+	loginRetry = 100 * time.Millisecond
+	t.Cleanup(func() { loginRetry = old })
+	r := &reviewRig{log: log, dir: dir, author: author}
+	r.gh("OPEN", "aaa", "")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go e.Run(ctx)
+	r.e = e
+	return r
+}
+
+// gh sets what gh reports for the PR; reviews is a list of JSON objects.
+func (r *reviewRig) gh(state, head, reviews string) {
+	os.WriteFile(filepath.Join(r.dir, "pr.json"), []byte(fmt.Sprintf(`{"title":"Their change","headRefName":"theirs","state":%q,
+	  "headRefOid":%q,"author":{"login":%q},"reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, state, head, r.author, reviews)), 0o644)
+}
+
+// fail makes "login" (gh api user) or "view" (gh pr view) fail, or work again.
+func (r *reviewRig) fail(what string, on bool) {
+	path := filepath.Join(r.dir, "fail-"+what)
+	if on {
+		os.WriteFile(path, nil, 0o644)
+	} else {
+		os.Remove(path)
+	}
+}
+
+// ask starts a session in To Do and asks it to review PR 7.
+func (r *reviewRig) ask(t *testing.T) {
+	t.Helper()
+	task, err := r.e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.Send(task.ID, "REVIEWME"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// reviewCard is the only card, or a stand-in with an empty PR while there is
+// none or it holds no PR yet.
+func reviewCard(tasks []*store.Task) *store.Task {
+	if len(tasks) != 1 || tasks[0].PR == nil {
+		return &store.Task{PR: &store.PR{}}
+	}
+	return tasks[0]
+}
+
+// agentDone reports whether the only card has a PR and its agent is between turns.
+func agentDone(tasks []*store.Task) bool {
+	return len(tasks) == 1 && tasks[0].PR != nil && tasks[0].Sessions[store.MainSession] != nil && agentIdle(tasks[0])
+}
+
+func TestReviewCardFollowsYourReviewAndTheAuthorsPushes(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	e := r.e
+	r.ask(t)
+	waitForAll(t, e, "the review card to take its PR and move to Reviewing", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "reviewing" && c.PR.Author == "them"
+	})
+	if c := reviewCard(e.Snapshot().Tasks); !c.PR.Review || c.PR.State != "OPEN" || c.PR.Number != 7 || c.Title != "Review: Their change" {
+		t.Fatalf("review card: %q %+v", c.Title, c.PR)
+	}
+	waitForAll(t, e, "the agent to finish its turn", agentDone)
+
+	first := `{"author":{"login":"them"},"state":"APPROVED","submittedAt":"2026-10-19T09:00:00Z","commit":{"oid":"zzz"}},
+	  {"author":{"login":"me"},"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`
+	r.gh("OPEN", "aaa", first)
+	waitForAll(t, e, "your review to move the card to Waiting", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "waiting" && c.PR.MyReview == "CHANGES_REQUESTED" && c.PR.ReviewedSHA == "aaa"
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := reviewCard(e.Snapshot().Tasks); c.ColumnID != "waiting" {
+		t.Fatalf("the same review moved the card to %s again", c.ColumnID)
+	}
+
+	r.gh("OPEN", "bbb", first)
+	waitForAll(t, e, "new commits to move the card back to Reviewing", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "reviewing" && c.PR.HeadSHA == "bbb" && c.PR.ReviewedSHA == "aaa"
+	})
+	waitForAll(t, e, "the agent to finish its turn", agentDone)
+
+	second := first + `,
+	  {"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-20T10:00:00Z","commit":{"oid":"bbb"}}`
+	r.gh("OPEN", "bbb", second)
+	waitForAll(t, e, "a newer review to move the card to Waiting again", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "waiting" && c.PR.MyReview == "APPROVED" && c.PR.ReviewedSHA == "bbb"
+	})
+
+	r.gh("MERGED", "bbb", second)
+	waitForAll(t, e, "the merged PR to finish the card", func(tasks []*store.Task) bool { return reviewCard(tasks).ColumnID == "done" })
+	if data, _ := os.ReadFile(r.log); strings.Contains(string(data), "typed:FIX") {
+		t.Errorf("your own changes-requested review was sent to the agent to address:\n%s", data)
+	}
+}
+
+func TestReviewCardWaitsForTheAgentBeforeMovingOnYourReview(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+	})
+	if err := r.e.Send(r.e.Snapshot().Tasks[0].ID, "SLOW"); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, r.e, "the agent to be mid-turn", func(tasks []*store.Task) bool {
+		return tasks[0].Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"COMMENTED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+	time.Sleep(time.Second)
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "reviewing" {
+		t.Fatalf("the card moved to %s under a running agent", c.ColumnID)
+	}
+	waitForAll(t, r.e, "the review to move the card once the agent is idle", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "waiting"
+	})
+}
+
+func TestReviewOfYourOwnPRIsForgotten(t *testing.T) {
+	r := newReviewRig(t, "me", reviewBoard)
+	r.ask(t)
+	waitForAll(t, r.e, "gh to show PR 7 is yours and the card to forget it", func(tasks []*store.Task) bool {
+		for _, l := range tasks[0].Log {
+			if strings.Contains(l.Text, "is yours, not tracking it as a review") {
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := r.e.Snapshot().Tasks[0]; c.PR != nil || c.PRMovePending || c.ColumnID != "todo" {
+		t.Fatalf("own PR kept as a review: %+v, pending %v, column %s", c.PR, c.PRMovePending, c.ColumnID)
+	}
+}
+
+func TestReviewCardWaitsForGhToConfirmThePR(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	r.fail("login", true)
+	r.ask(t)
+	waitForAll(t, r.e, "the nominated PR and a failed login lookup", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.PR.Review && strings.Contains(c.PR.Error, "can't tell whether it is yours") && agentDone(tasks)
+	})
+	r.fail("view", true)
+	waitForAll(t, r.e, "gh pr view to fail first", func(tasks []*store.Task) bool {
+		return strings.Contains(reviewCard(tasks).PR.Error, "boom")
+	})
+	r.fail("login", false)
+	time.Sleep(600 * time.Millisecond)
+	c := r.e.Snapshot().Tasks[0]
+	if c.ColumnID != "todo" || !c.PRMovePending || c.PR.State != "" {
+		t.Fatalf("card moved before gh confirmed the PR: column %s, pending %v, %+v", c.ColumnID, c.PRMovePending, c.PR)
+	}
+	r.fail("view", false)
+	waitForAll(t, r.e, "the confirmed review card to move to Reviewing", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "reviewing" && c.PR.State == "OPEN" && c.PR.Error == ""
+	})
+	waitForAll(t, r.e, "the agent to settle in Reviewing", agentDone)
+}
+
+func TestReviewedPRAlreadyMergedStaysPut(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	r.gh("MERGED", "aaa", "")
+	r.ask(t)
+	waitForAll(t, r.e, "gh to confirm the merged PR", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).PR.State == "MERGED"
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := r.e.Snapshot().Tasks[0]; c.ColumnID == "done" || len(c.Sessions) == 0 {
+		t.Fatalf("a PR that was merged before the review sent the card to %s, sessions %d", c.ColumnID, len(c.Sessions))
+	}
+}
+
+func TestReviewedPRClosedFinishesTheCard(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing"
+	})
+	r.gh("CLOSED", "aaa", "")
+	waitForAll(t, r.e, "the closed PR to finish the card", func(tasks []*store.Task) bool { return reviewCard(tasks).ColumnID == "done" })
+	logged := false
+	for _, l := range r.e.Snapshot().Tasks[0].Log {
+		logged = logged || strings.Contains(l.Text, "closed without merging")
+	}
+	if !logged {
+		t.Error("the close wasn't logged")
+	}
+}
+
+func TestReviewWithoutReviewFlowLeavesTheCardAlone(t *testing.T) {
+	board := strings.Replace(reviewBoard, `,
+  "reviewFlow": {"started": "reviewing", "reviewed": "waiting", "updated": "reviewing", "done": "done"}`, "", 1)
+	r := newReviewRig(t, "them", board)
+	r.ask(t)
+	waitForAll(t, r.e, "gh to confirm the review PR", func(tasks []*store.Task) bool { return reviewCard(tasks).PR.State == "OPEN" })
+	r.gh("MERGED", "bbb", `{"author":{"login":"me"},"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`)
+	waitForAll(t, r.e, "gh to report the merge", func(tasks []*store.Task) bool { return reviewCard(tasks).PR.State == "MERGED" })
+	time.Sleep(600 * time.Millisecond)
+	c := r.e.Snapshot().Tasks[0]
+	if c.ColumnID == "waiting" || c.ColumnID == "done" || c.PRMovePending || c.PR.Released {
+		t.Fatalf("review card followed the prFlow: column %s, pending %v, %+v", c.ColumnID, c.PRMovePending, c.PR)
+	}
+	if data, _ := os.ReadFile(r.log); strings.Contains(string(data), "typed:FIX") {
+		t.Errorf("your own review was sent to the agent:\n%s", data)
+	}
+}
+
+func TestReviewInAWorkingSessionGetsItsOwnCard(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	task := r.e.CreateTask("Auth", "REVIEWME")
+	if err := r.e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	var owner, review *store.Task
+	waitForAll(t, r.e, "the reviewed PR to get its own confirmed card", func(tasks []*store.Task) bool {
+		if len(tasks) != 2 {
+			return false
+		}
+		owner, review = tasks[0], tasks[1]
+		return review.PR != nil && review.PR.State == "OPEN"
+	})
+	if owner.PR != nil || owner.ColumnID != "exec" || owner.PRMovePending {
+		t.Fatalf("the working card was taken over: %+v, column %s", owner.PR, owner.ColumnID)
+	}
+	if !review.PR.Review || review.GroupID != owner.ID || review.ColumnID != "reviewing" || review.PR.Author != "them" {
+		t.Fatalf("review card: group %q, column %s, %+v", review.GroupID, review.ColumnID, review.PR)
 	}
 }

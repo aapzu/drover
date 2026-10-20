@@ -13,11 +13,24 @@ import (
 const FileName = "drover.json"
 
 type Board struct {
-	Version               int      `json:"version"`
-	DefaultBaseBranch     string   `json:"defaultBaseBranch,omitempty"`
-	DefaultPermissionMode string   `json:"defaultPermissionMode,omitempty"`
-	Columns               []Column `json:"columns"`
-	PRFlow                *PRFlow  `json:"prFlow,omitempty"`
+	Version               int         `json:"version"`
+	DefaultBaseBranch     string      `json:"defaultBaseBranch,omitempty"`
+	DefaultPermissionMode string      `json:"defaultPermissionMode,omitempty"`
+	Columns               []Column    `json:"columns"`
+	PRFlow                *PRFlow     `json:"prFlow,omitempty"`
+	ReviewFlow            *ReviewFlow `json:"reviewFlow,omitempty"`
+}
+
+// ReviewFlow moves the cards of pull requests you review. Started is where a
+// card goes once the agent's first review turn ends, Reviewed once you have
+// submitted a review, Updated when the author pushes after it, and Done when
+// the PR merges or closes. Targets are column ids or names; an empty one
+// leaves cards where they are.
+type ReviewFlow struct {
+	Started  string `json:"started,omitempty"`
+	Reviewed string `json:"reviewed,omitempty"`
+	Updated  string `json:"updated,omitempty"`
+	Done     string `json:"done,omitempty"`
 }
 
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
@@ -125,13 +138,24 @@ func (b *Board) validate() error {
 		seen[c.ID] = true
 	}
 	if f := b.PRFlow; f != nil {
-		for _, ref := range []string{f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released} {
-			if _, ok := b.Find(ref); ref != "" && !ok {
-				return fmt.Errorf("%s: prFlow names unknown column %q", FileName, ref)
-			}
+		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {
+			return err
 		}
 		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
 			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
+		}
+	}
+	if f := b.ReviewFlow; f != nil {
+		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Updated, f.Done)
+	}
+	return nil
+}
+
+// checkColumns rejects a flow target that names no column. Empty ones are fine.
+func (b *Board) checkColumns(flow string, refs ...string) error {
+	for _, ref := range refs {
+		if _, ok := b.Find(ref); ref != "" && !ok {
+			return fmt.Errorf("%s: %s names unknown column %q", FileName, flow, ref)
 		}
 	}
 	return nil

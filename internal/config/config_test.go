@@ -74,6 +74,28 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	}
 }
 
+func TestReviewFlow(t *testing.T) {
+	load := func(flow string) (*Board, error) {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":1,"columns":[{"id":"todo","name":"To Do","role":"todo"},
+		  {"id":"waiting","name":"Waiting"}],"reviewFlow":`+flow+`}`), 0o644)
+		board, _, err := Load(dir)
+		return board, err
+	}
+	for _, field := range []string{"started", "reviewed", "updated", "done"} {
+		if _, err := load(`{"` + field + `":"nowhere"}`); err == nil {
+			t.Errorf("unknown reviewFlow.%s column accepted", field)
+		}
+	}
+	board, err := load(`{"started":"Waiting","reviewed":"waiting"}`)
+	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" {
+		t.Fatalf("reviewFlow not loaded: %+v %v", board.ReviewFlow, err)
+	}
+	if _, err := load(`{}`); err != nil {
+		t.Errorf("empty reviewFlow rejected: %v", err)
+	}
+}
+
 func TestPRFlow(t *testing.T) {
 	if err := Default().validate(); err != nil {
 		t.Fatalf("default board: %v", err)
