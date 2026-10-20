@@ -31,6 +31,7 @@ func testModel(width, height, columns int, tasksPerColumn int) Model {
 		width:    width,
 		height:   height,
 		selected: map[string]string{},
+		busy:     map[string]op{},
 		prefs:    prefs{ColumnWidths: map[string]int{}},
 	}
 }

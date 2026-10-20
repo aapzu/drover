@@ -1044,6 +1044,32 @@ func exitsSoon(exited <-chan struct{}) bool {
 	}
 }
 
+func TestSnapshotListsLiveSessionsAndIsStamped(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	running := e.CreateTask("running", "")
+	idle := e.CreateTask("idle", "")
+	e.with(func() {
+		running.Sessions = map[string]*store.Session{store.MainSession: {
+			Key: store.MainSession, Tmux: "repo-live", Status: store.StatusRunning,
+		}}
+		idle.Sessions = map[string]*store.Session{store.MainSession: {
+			Key: store.MainSession, Tmux: "repo-gone", Status: store.StatusSuspended,
+		}}
+	})
+
+	first := e.Snapshot()
+	want, _ := e.LiveSession(running.ID)
+	if got := first.Live[running.ID]; got != want || got != "repo-live" {
+		t.Errorf("Live[running] = %q, want %q", got, want)
+	}
+	if name, ok := first.Live[idle.ID]; ok {
+		t.Errorf("a suspended card has no live session, got %q", name)
+	}
+	if second := e.Snapshot(); second.At.Before(first.At) || first.At.IsZero() {
+		t.Errorf("snapshots must be stamped in order: %v then %v", first.At, second.At)
+	}
+}
+
 func TestClosingStopsBackgroundConversation(t *testing.T) {
 	e := newEngineWithClaudeDir(t)
 	withSession := func(id string, status store.SessionStatus) *store.Task {

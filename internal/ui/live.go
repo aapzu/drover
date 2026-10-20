@@ -135,7 +135,7 @@ func (m Model) startLive() (Model, tea.Cmd) {
 	if t == nil {
 		return m, nil
 	}
-	if _, ok := m.eng.LiveSession(t.ID); !ok {
+	if _, ok := m.liveSession(t.ID); !ok {
 		m.setFlash("No running agent to type into. Press r to start or resume it.")
 		return m, nil
 	}
@@ -157,7 +157,7 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if t == nil {
 		return m, nil
 	}
-	name, ok := m.eng.LiveSession(t.ID)
+	name, ok := m.liveSession(t.ID)
 	if !ok {
 		m.setFlash("No running agent here. Ctrl-q returns to the board.")
 		return m, nil

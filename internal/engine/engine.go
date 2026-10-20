@@ -126,21 +126,31 @@ type Snapshot struct {
 	Busy map[string]string
 	// Running agents count against MaxConcurrent; the rest queue.
 	Running, MaxConcurrent int
+	// Live maps task ids to the tmux session of their running agent, so the
+	// UI can look one up without taking the engine's lock.
+	Live map[string]string
+	// At is when the state was read, under the engine's lock. A snapshot with
+	// an earlier At is older.
+	At time.Time
 }
 
 func (e *Engine) Snapshot() Snapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	busy := map[string]string{}
 	e.busy.Range(func(id, what any) bool {
 		busy[id.(string)] = what.(string)
 		return true
 	})
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	tasks := make([]*store.Task, len(e.state.Tasks))
+	live := map[string]string{}
 	for i, t := range e.state.Tasks {
 		tasks[i] = t.Clone()
+		if name, ok := e.liveSession(t); ok {
+			live[t.ID] = name
+		}
 	}
-	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy, Running: e.runningCount(), MaxConcurrent: e.MaxConcurrent}
+	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy, Live: live, Running: e.runningCount(), MaxConcurrent: e.MaxConcurrent, At: time.Now()}
 }
 
 func (e *Engine) setBusy(id, what string) {
@@ -1343,6 +1353,11 @@ func (e *Engine) LiveSession(id string) (string, bool) {
 	if card == nil {
 		return "", false
 	}
+	return e.liveSession(card)
+}
+
+// liveSession is LiveSession for a card. Called with mu held.
+func (e *Engine) liveSession(card *store.Task) (string, bool) {
 	t := e.owner(card)
 	if s := t.Sessions[sessionKey(e.sessionColumn(t))]; s != nil && s.Status == store.StatusRunning {
 		return s.Tmux, true
