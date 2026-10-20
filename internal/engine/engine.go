@@ -411,6 +411,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.with(func() {
 		t.ColumnID = target.ID
 		t.UpdatedAt = time.Now()
+		if opts.evict {
+			t.PRMovePending = false
+		}
 		if drives {
 			// Turn-end automations of the previous visit no longer apply.
 			owner.Visit++

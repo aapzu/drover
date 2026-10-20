@@ -108,10 +108,11 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 
 ## One card per pull request
 
-Every pull request an agent opens (`gh pr create` or `gh stack`) gets its own
-card. The session's card stays where the work is, so one session can ship
-several PRs. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker
-has the same color on every card of the group.
+The first pull request an agent opens (`gh pr create` or `gh stack`) stays on
+the session's own card, which moves to the `prFlow` opened column once the
+agent's turn ends. Every further PR gets its own card, so one session can ship
+several. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker has
+the same color on every card of the group.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
   and the preview all reach the same agent from any of them.
@@ -149,7 +150,8 @@ board uses:
   Negated asks ("don't open a PR yet") are ignored. The column must have
   `autoSpawn`. Its enter automations are skipped, as the agent is already on
   it, but its turn-end automations run when that turn ends.
-- **opened:** where a new PR card goes.
+- **opened:** where the session card goes once its first PR is open, and where
+  each further PR's card starts.
 - **changesRequested:** a new review requesting changes moves a card from
   `opened` here and sends the agent `changesRequestedMessage`. Once the agent
   has pushed a new head and is idle, the card goes back to `opened`.
@@ -158,9 +160,9 @@ board uses:
 - **released:** once the merge commit reaches `releaseBranch` on origin
   (default `master`, else `main`), a card in `merged` moves here.
 
-Moves only happen when the PR changes, so a card you move by hand stays put.
-The session card never moves by itself; you get a notice once all its PRs are
-released.
+Moves only happen when the PR changes, so a card you move by hand stays put,
+including before the session card's move to `opened`. You get a notice once all
+the session's PRs are released.
 
 ## Importing Claude Code agents
 

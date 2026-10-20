@@ -124,7 +124,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			return
 		}
 	}
-	if e.leaveScratch(t, owner, col, board) {
+	if e.shipOpenedPR(owner) || e.leaveScratch(t, owner, col, board) {
 		return
 	}
 	e.flushPending(owner, sessKey)

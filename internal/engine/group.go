@@ -69,16 +69,27 @@ func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {
 	return card, owner, unlock
 }
 
-// addPRs records pull requests the owner's session opened. Each becomes its
-// own card in the group, in the prFlow's opened column, else in the column of
-// the card the session works for. Called with mu held.
+// addPRs records pull requests the owner's session opened. The first goes on
+// the owner's own card, which moves to the prFlow's opened column once the
+// agent's turn ends. Each further PR becomes its own card in the group, in
+// the opened column, else in the column of the card the session works for.
+// Called with mu held.
 func (e *Engine) addPRs(owner *store.Task, urls []string) {
 	members := store.Members(e.state.Tasks, owner)
 	column := store.Driver(e.state.Tasks, owner).ColumnID
+	hasOpened := false
 	if f := e.board.PRFlow; f != nil {
 		if c, ok := e.board.Find(f.Opened); ok {
-			column = c.ID
+			column, hasOpened = c.ID, true
 		}
+	}
+	if owner.PR == nil && len(members) == 1 && len(urls) > 0 {
+		n := gh.Number(urls[0])
+		owner.PR = &store.PR{URL: urls[0], Number: n}
+		owner.PRMovePending = hasOpened
+		owner.AddLog(fmt.Sprintf("Opened PR #%d", n))
+		e.notify("#%d opened PR #%d", owner.Number, n)
+		urls = urls[1:]
 	}
 	for _, url := range urls {
 		if slices.Contains(owner.SeenPRs, url) ||
