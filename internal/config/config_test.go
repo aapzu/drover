@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -93,6 +94,43 @@ func TestReviewFlow(t *testing.T) {
 	}
 	if _, err := load(`{}`); err != nil {
 		t.Errorf("empty reviewFlow rejected: %v", err)
+	}
+}
+
+func TestWorktreesPath(t *testing.T) {
+	dir := t.TempDir()
+	board := `{"version":1,"columns":[{"id":"todo","name":"To Do","role":"todo"}]`
+	for _, tc := range []struct {
+		name, main, local, want string
+	}{
+		{"default", ``, ``, filepath.Join(dir, ".drover", "worktrees")},
+		{"relative", `,"worktreesDir":".claude/worktrees"`, ``, filepath.Join(dir, ".claude", "worktrees")},
+		{"absolute", `,"worktreesDir":"/var/wt/"`, ``, "/var/wt"},
+		{"local wins", `,"worktreesDir":"a"`, `{"worktreesDir":"b"}`, filepath.Join(dir, "b")},
+		{"empty local keeps main", `,"worktreesDir":"a"`, `{"worktreesDir":""}`, filepath.Join(dir, "a")},
+	} {
+		os.WriteFile(filepath.Join(dir, FileName), []byte(board+tc.main+"}"), 0o644)
+		os.Remove(filepath.Join(dir, "drover.local.json"))
+		if tc.local != "" {
+			os.WriteFile(filepath.Join(dir, "drover.local.json"), []byte(tc.local), 0o644)
+		}
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := b.WorktreesPath(dir); got != tc.want {
+			t.Errorf("%s: WorktreesPath = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestWorktreesDirMustNotContainRoot(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{".", "..", "./", dir, filepath.Dir(dir), "/"} {
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"version":1,"worktreesDir":`+strconv.Quote(bad)+`,"columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+		if _, _, err := Load(dir); err == nil {
+			t.Errorf("worktreesDir %q accepted", bad)
+		}
 	}
 }
 
