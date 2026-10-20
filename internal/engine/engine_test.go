@@ -146,6 +146,19 @@ func waitFor(t *testing.T, e *Engine, what string, cond func(*store.Task) bool) 
 	return nil
 }
 
+// waitNotBusy waits for in-flight moves to finish writing.
+func waitNotBusy(t *testing.T, e *Engine) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(e.Snapshot().Busy) == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the move to finish")
+}
+
 func TestPipelineRunsOnAutomations(t *testing.T) {
 	root, log := setupProject(t)
 	e, err := New(root)
@@ -1232,6 +1245,74 @@ func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
 	})
 }
 
+func TestNewSessionMovesWhileAgentWorks(t *testing.T) {
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
+	waitFor(t, e, "card to move before the turn ends", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.ColumnID == "exec" && t.WorktreePath != "" && !s.Scratch
+	})
+	waitNotBusy(t, e)
+}
+
+func TestNewSessionStaysWhileAgentWorksIfColumnAlwaysSpawnsNew(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := startWithBoard(t, `{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"sessionSpawnStrategy":"always_spawn_new"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
+	waitFor(t, e, "turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0]; got.ColumnID != "todo" || !got.Sessions[store.MainSession].Scratch {
+		t.Fatalf("moving would restart the busy agent, but the card is in %s", got.ColumnID)
+	}
+
+	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Done."}` + "\n")
+	waitFor(t, e, "card to move once the turn ends", func(t *store.Task) bool {
+		return t.ColumnID == "exec" && t.WorktreePath != "" && !t.Sessions[store.MainSession].Scratch
+	})
+	waitNotBusy(t, e)
+}
+
 func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	root, log := setupProject(t)
 	config := t.TempDir()
@@ -1467,7 +1548,7 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 	}
 	defer events.Close()
 
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"/fix the login bug"}` + "\n")
 	waitFor(t, e, "turn to start", func(t *store.Task) bool {
 		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
 	})
@@ -1484,7 +1565,7 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 
 	// The next prompt's hook can arrive before Claude Code records the prompt,
 	// while the transcript still ends with the earlier interrupt.
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"try again"}` + "\n")
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"/try again"}` + "\n")
 	waitFor(t, e, "second turn to start", func(t *store.Task) bool {
 		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
 	})
