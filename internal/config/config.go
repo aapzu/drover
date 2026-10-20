@@ -12,10 +12,13 @@ import (
 
 const FileName = "drover.json"
 
+const DefaultWorktreesDir = ".drover/worktrees"
+
 type Board struct {
 	Version               int         `json:"version"`
 	DefaultBaseBranch     string      `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string      `json:"defaultPermissionMode,omitempty"`
+	WorktreesDir          string      `json:"worktreesDir,omitempty"`
 	Columns               []Column    `json:"columns"`
 	PRFlow                *PRFlow     `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow `json:"reviewFlow,omitempty"`
@@ -112,13 +115,23 @@ func Load(root string) (board *Board, found bool, err error) {
 	if local, err := os.ReadFile(filepath.Join(root, "drover.local.json")); err == nil {
 		var override struct {
 			DefaultBaseBranch string `json:"defaultBaseBranch"`
+			WorktreesDir      string `json:"worktreesDir"`
 		}
-		if json.Unmarshal(local, &override) == nil && override.DefaultBaseBranch != "" {
-			board.DefaultBaseBranch = override.DefaultBaseBranch
+		if json.Unmarshal(local, &override) == nil {
+			if override.DefaultBaseBranch != "" {
+				board.DefaultBaseBranch = override.DefaultBaseBranch
+			}
+			if override.WorktreesDir != "" {
+				board.WorktreesDir = override.WorktreesDir
+			}
 		}
 	}
 	if err := board.validate(); err != nil {
 		return nil, true, err
+	}
+	// A worktrees dir holding the checkout itself would make it look board-owned.
+	if rel, err := filepath.Rel(board.WorktreesPath(root), root); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+		return nil, true, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
 	}
 	return board, true, nil
 }
@@ -159,6 +172,19 @@ func (b *Board) checkColumns(flow string, refs ...string) error {
 		}
 	}
 	return nil
+}
+
+// WorktreesPath is where task worktrees live: worktreesDir resolved against
+// the repo root, or .drover/worktrees when unset.
+func (b *Board) WorktreesPath(root string) string {
+	dir := b.WorktreesDir
+	if dir == "" {
+		dir = DefaultWorktreesDir
+	}
+	if filepath.IsAbs(dir) {
+		return filepath.Clean(dir)
+	}
+	return filepath.Join(root, dir)
 }
 
 func (b *Board) Save(root string) error {
