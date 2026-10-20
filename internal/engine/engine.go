@@ -763,7 +763,11 @@ func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
 
 // settingsDiffer reports whether s runs with other settings than col wants.
 func settingsDiffer(s *store.Session, col config.Column, mode string) bool {
-	return s.PermissionMode != mode || s.Model != col.ModelOverride || s.Effort != col.EffortOverride
+	modeDiffers := s.PermissionMode != mode
+	if mode == "" {
+		modeDiffers = !s.ModeInherited
+	}
+	return modeDiffers || s.Model != col.ModelOverride || s.Effort != col.EffortOverride
 }
 
 // switchSettings moves a live, idle agent to col's settings, in place when it
@@ -790,7 +794,7 @@ func (e *Engine) retune(t *store.Task, key string, col config.Column) bool {
 	same := s.Model == col.ModelOverride && s.Effort == col.EffortOverride
 	want := e.board.PermissionMode(col)
 	e.mu.Unlock()
-	if !same {
+	if !same || want == "" {
 		return false
 	}
 
@@ -801,7 +805,7 @@ func (e *Engine) retune(t *store.Task, key string, col config.Column) bool {
 	}
 	e.with(func() {
 		if err == nil {
-			s.PermissionMode = want
+			s.SetMode(want)
 			t.AddLog(fmt.Sprintf("Switched agent to %s mode in place", want))
 		} else {
 			t.AddLog(fmt.Sprintf("Couldn't switch the agent to %s mode in place, restarting it: %v", want, err))
@@ -1174,7 +1178,8 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			// Skip events the previous process wrote while shutting down.
 			s.EventsOffset = info.Size()
 		}
-		s.Model, s.Effort, s.PermissionMode = col.ModelOverride, col.EffortOverride, e.board.PermissionMode(col)
+		s.Model, s.Effort = col.ModelOverride, col.EffortOverride
+		s.SetMode(e.board.PermissionMode(col))
 		s.RespawnPending = false
 		s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool { return p.Relocate != "" })
 		s.Relocate = ""

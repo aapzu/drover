@@ -67,7 +67,7 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	}{
 		{&Board{DefaultPermissionMode: "acceptEdits"}, plan, "plan"},
 		{&Board{DefaultPermissionMode: "acceptEdits"}, Column{}, "acceptEdits"},
-		{&Board{}, Column{}, "auto"},
+		{&Board{}, Column{}, ""},
 	} {
 		if got := tc.board.PermissionMode(tc.col); got != tc.want {
 			t.Errorf("PermissionMode(%+v) with default %q = %q, want %q", tc.col, tc.board.DefaultPermissionMode, got, tc.want)

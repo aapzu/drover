@@ -169,7 +169,8 @@ func (b *Board) Find(ref string) (Column, bool) {
 	return Column{}, false
 }
 
-// PermissionMode is the column's own mode, else the board default, else auto.
+// PermissionMode is the column's own mode, else the board default, else ""
+// to leave the choice to Claude Code.
 func (b *Board) PermissionMode(c Column) string {
 	switch {
 	case c.PermissionMode != "":
@@ -177,7 +178,7 @@ func (b *Board) PermissionMode(c Column) string {
 	case b.DefaultPermissionMode != "":
 		return b.DefaultPermissionMode
 	default:
-		return "auto"
+		return ""
 	}
 }
 

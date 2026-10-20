@@ -270,7 +270,7 @@ func (e *Engine) planExit(taskID string, visit int) {
 	e.with(func() {
 		if s := t.Sessions[sessionKey(target)]; s != nil && s.Status == store.StatusRunning {
 			s.TurnInVisit = true
-			s.PermissionMode = e.board.PermissionMode(target)
+			s.SetMode(e.board.PermissionMode(target))
 			s.RespawnPending = false
 		}
 	})
@@ -469,6 +469,8 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 		Model:          col.ModelOverride,
 		Effort:         col.EffortOverride,
 	}
+	s.Model, s.Effort = launch.Model, launch.Effort
+	s.SetMode(launch.PermissionMode)
 	scratch := s.Scratch
 	e.mu.Unlock()
 	worktree := e.Root
