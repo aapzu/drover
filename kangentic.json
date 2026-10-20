@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "columns": [
+    {
+      "id": "todo",
+      "name": "Sessions",
+      "role": "todo",
+      "color": "#6b7280"
+    },
+    {
+      "id": "planning",
+      "name": "Planning",
+      "color": "#8b5cf6",
+      "autoSpawn": true,
+      "permissionMode": "plan",
+      "planExitTarget": "Executing"
+    },
+    {
+      "id": "executing",
+      "name": "Executing",
+      "color": "#3b82f6",
+      "autoSpawn": true
+    },
+    {
+      "id": "self-review",
+      "name": "Self-review",
+      "color": "#06b6d4",
+      "autoSpawn": true,
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Review",
+            "type": "send_message",
+            "message": "/pr-review-toolkit:review-pr"
+          }
+        ]
+      }
+    },
+    {
+      "id": "in-review",
+      "name": "In review",
+      "color": "#f59e0b"
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "role": "done",
+      "color": "#10b981"
+    }
+  ],
+  "prFlow": {
+    "requested": "self-review",
+    "opened": "in-review",
+    "changesRequested": "executing",
+    "changesRequestedMessage": "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",
+    "merged": "done"
+  }
+}
