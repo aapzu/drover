@@ -68,7 +68,11 @@ func WriteSettings(settingsPath, exe, eventsPath string) error {
 		}
 		hooks[name] = []any{entry}
 	}
-	data, err := json.MarshalIndent(map[string]any{"hooks": hooks}, "", "  ")
+	settings := map[string]any{
+		"hooks":       hooks,
+		"permissions": map[string]any{"allow": []string{"EnterWorktree"}},
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}

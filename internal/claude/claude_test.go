@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,28 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWriteSettingsAllowsEnterWorktree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := WriteSettings(path, "/bin/drover", "/tmp/events.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(got.Permissions.Allow, "EnterWorktree") {
+		t.Errorf("allow = %v, want EnterWorktree", got.Permissions.Allow)
+	}
+}
 
 func TestReadEventsKeepsPartialLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
