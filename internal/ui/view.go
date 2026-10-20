@@ -241,7 +241,12 @@ func (m Model) sessionFor(t *store.Task) *store.Session {
 }
 
 func (m Model) status(t *store.Task) string {
-	if what := m.snap.Busy[t.ID]; what != "" {
+	// The engine's step is more specific than the board's own label.
+	what := m.snap.Busy[t.ID]
+	if what == "" {
+		what = m.busy[t.ID].label
+	}
+	if what != "" {
 		return thinking.Render(spinner[m.frame%len(spinner)] + " " + what + "…")
 	}
 	s := m.sessionFor(t)
@@ -453,7 +458,7 @@ func (m Model) renderPreview(height int) string {
 		title = fmt.Sprintf(" #%d %s ", t.Number, taskTitle(t))
 		if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
 			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d); press enter to open it or take it over. Its latest reply:", s.PID)) + "\n\n" + s.LastReply
-		} else if _, ok := m.eng.LiveSession(t.ID); !ok {
+		} else if _, ok := m.liveSession(t.ID); !ok {
 			body = dim.Render("No running agent. Move the card into an agent column, or press r to resume.")
 			if s := m.sessionFor(t); s != nil && s.LastReply != "" {
 				body += "\n\n" + muted.Render("Last reply:") + "\n" + s.LastReply
@@ -537,7 +542,7 @@ func (m Model) renderMovePicker() string {
 			break
 		}
 		marker := "  "
-		if c.ID == t.ColumnID {
+		if c.ID == m.columnOf(t) {
 			marker = "▸ "
 		}
 		lines = append(lines, fmt.Sprintf("%s%s  %s  %s", marker, bold.Render(fmt.Sprint(i+1)), c.Name, dim.Render(columnSummary(c))))
@@ -608,7 +613,7 @@ func taskTitle(t *store.Task) string {
 }
 
 func (m Model) renderDetail(t *store.Task) string {
-	col, _, _ := m.snap.Board.Column(t.ColumnID)
+	col, _, _ := m.snap.Board.Column(m.columnOf(t))
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", bold.Render(fmt.Sprintf("#%d %s", t.Number, taskTitle(t))))
 	field := func(k, v string) {

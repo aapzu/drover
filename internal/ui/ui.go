@@ -43,8 +43,13 @@ type previewMsg struct {
 	at              time.Time
 }
 type noticeMsg string
+type snapMsg engine.Snapshot
 type actionDoneMsg struct {
+	id        string
+	at        time.Time
 	err       error
+	done      string
+	snap      engine.Snapshot
 	retryDone func() tea.Cmd
 }
 type attachDoneMsg struct {
@@ -55,6 +60,7 @@ type attachDoneMsg struct {
 type takeOverDoneMsg struct {
 	taskID string
 	err    error
+	snap   engine.Snapshot
 }
 type externalAttachMsg struct {
 	cmd         *exec.Cmd
@@ -65,12 +71,19 @@ type suspendAllMsg struct{}
 type sessionStartedMsg struct {
 	task *store.Task
 	err  error
+	snap engine.Snapshot
 }
 
 type Model struct {
-	eng    *engine.Engine
-	snap   engine.Snapshot
-	branch string
+	eng      *engine.Engine
+	snap     engine.Snapshot
+	branch   string
+	snapBusy bool
+
+	// busy holds the actions the board started and is waiting on, one per
+	// card, unlike snap.Busy, which holds the engine's own steps. The map is
+	// shared by every copy of the Model and only written in Update.
+	busy map[string]op
 
 	width, height int
 	mode          mode
@@ -130,6 +143,7 @@ func New(eng *engine.Engine) Model {
 		snap:        eng.Snapshot(),
 		branch:      gitx.CurrentBranch(eng.Root),
 		selected:    map[string]string{},
+		busy:        map[string]op{},
 		prefs:       loadPrefs(eng.Root),
 		keys:        newKeySender(),
 		titleInput:  ti,
@@ -177,12 +191,37 @@ func (m Model) columns() []config.Column { return m.snap.Board.Columns }
 func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
 	for _, t := range m.snap.Tasks {
-		if t.ColumnID == colID {
+		if m.columnOf(t) == colID {
 			out = append(out, t)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt.Before(out[j].UpdatedAt) })
+	sort.SliceStable(out, func(i, j int) bool { return m.updatedAt(out[i]).Before(m.updatedAt(out[j])) })
 	return out
+}
+
+// op is an action running on a card. A move also sets column, so the card
+// jumps there at once instead of waiting for the engine.
+type op struct {
+	label, column string
+	at            time.Time
+}
+
+// columnOf is the column the card is shown in: the one it is being moved to,
+// else the one it is in.
+func (m Model) columnOf(t *store.Task) string {
+	if o := m.busy[t.ID]; o.column != "" {
+		return o.column
+	}
+	return t.ColumnID
+}
+
+// updatedAt puts a card being moved at the end of its new column, where the
+// engine puts it.
+func (m Model) updatedAt(t *store.Task) time.Time {
+	if o := m.busy[t.ID]; o.column != "" {
+		return o.at
+	}
+	return t.UpdatedAt
 }
 
 // orphans are tasks whose column no longer exists in drover.json; they are
@@ -192,7 +231,7 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 	tasks := m.tasksIn(col.ID)
 	if i == 0 {
 		for _, t := range m.snap.Tasks {
-			if _, _, ok := m.snap.Board.Column(t.ColumnID); !ok {
+			if _, _, ok := m.snap.Board.Column(m.columnOf(t)); !ok {
 				tasks = append(tasks, t)
 			}
 		}
@@ -238,7 +277,7 @@ func (m Model) selectedIndex() int {
 
 func (m *Model) selectTask(t *store.Task) {
 	for i, c := range m.columns() {
-		if c.ID == t.ColumnID {
+		if c.ID == m.columnOf(t) {
 			m.col = i
 			m.selected[c.ID] = t.ID
 		}
@@ -256,13 +295,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		m.frame++
-		m.snap = m.eng.Snapshot()
-		if m.col >= len(m.columns()) {
-			m.col = len(m.columns()) - 1
-		}
-		if (m.mode == modeMove || m.mode == modeSend) && m.task(m.modalTask) == nil {
-			m.mode = modeBoard
-		}
 		if m.flash != "" && time.Since(m.flashAt) > 6*time.Second {
 			m.flash = ""
 		}
@@ -272,6 +304,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 		}
 		cmds := []tea.Cmd{tick()}
+		if !m.snapBusy {
+			m.snapBusy = true
+			cmds = append(cmds, m.snapshot())
+		}
 		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
 		}
@@ -286,6 +322,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.follow = ""
 		}
 		return m, tea.Batch(cmds...)
+	case snapMsg:
+		m.snapBusy = false
+		m.applySnap(engine.Snapshot(msg))
+		return m, nil
 	case previewMsg:
 		if msg.at.Before(m.previewAt) {
 			return m, nil
@@ -318,7 +358,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
 	case actionDoneMsg:
-		m.snap = m.eng.Snapshot()
+		if m.busy[msg.id].at.Equal(msg.at) {
+			delete(m.busy, msg.id)
+		}
+		m.applySnap(msg.snap)
 		if errors.Is(msg.err, engine.ErrDirty) && msg.retryDone != nil {
 			m.mode = modeConfirm
 			m.confirmText = "The worktree has uncommitted changes. Move to Done and delete the worktree anyway? (y/N)"
@@ -332,10 +375,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
+		} else if msg.done != "" {
+			m.setFlash(msg.done)
 		}
 		return m, nil
 	case takeOverDoneMsg:
-		m.snap = m.eng.Snapshot()
+		m.applySnap(msg.snap)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil
@@ -355,7 +400,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suspendAll = true
 		return m, tea.Quit
 	case sessionStartedMsg:
-		m.snap = m.eng.Snapshot()
+		m.applySnap(msg.snap)
 		m.selectTask(msg.task)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
@@ -405,13 +450,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) snapshot() tea.Cmd {
+	eng := m.eng
+	return func() tea.Msg { return snapMsg(eng.Snapshot()) }
+}
+
+// applySnap drops a snapshot older than the one shown: ticks and actions take
+// theirs on separate goroutines, so they can arrive out of order. An empty one
+// comes from an op that never ran.
+func (m *Model) applySnap(snap engine.Snapshot) {
+	if snap.Board == nil || snap.At.Before(m.snap.At) {
+		return
+	}
+	m.snap = snap
+	if m.col >= len(m.columns()) {
+		m.col = len(m.columns()) - 1
+	}
+	if (m.mode == modeMove || m.mode == modeSend) && m.task(m.modalTask) == nil {
+		m.mode = modeBoard
+	}
+}
+
 func (m Model) capturePreview() tea.Cmd {
 	t := m.current()
 	if t == nil {
 		return func() tea.Msg { return previewMsg{} }
 	}
 	id := t.ID
-	name, ok := m.eng.LiveSession(id)
+	name, ok := m.liveSession(id)
 	l := m.layout()
 	w, h := m.width-2, l.previewH-2
 	// Extra history lets the anchored view grow before the next capture.
@@ -439,18 +505,54 @@ func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
 	return m, m.capturePreview()
 }
 
+// liveSession reads the snapshot instead of the engine, which Tick can keep
+// locked for long enough to freeze drawing.
+func (m Model) liveSession(id string) (string, bool) {
+	name, ok := m.snap.Live[id]
+	return name, ok
+}
+
 func (m Model) hasLiveSession(id string) bool {
-	_, ok := m.eng.LiveSession(id)
+	_, ok := m.liveSession(id)
 	return ok
 }
 
-func (m Model) action(fn func() error) tea.Cmd {
-	return func() tea.Msg { return actionDoneMsg{err: fn()} }
+type snapshotter interface {
+	Snapshot() engine.Snapshot
+}
+
+type mover interface {
+	snapshotter
+	Move(id, targetID string, opts engine.MoveOptions) error
+}
+
+var errBusy = errors.New("that card is still busy")
+
+// action runs fn off the UI thread and marks the card busy until it returns.
+func (m Model) action(id, label string, fn func() error) tea.Cmd {
+	return runOp(m.eng, m.busy, id, op{label: label}, func() actionDoneMsg {
+		return actionDoneMsg{err: fn()}
+	})
+}
+
+// runOp marks the card busy, runs work off the UI thread and returns its
+// result with the board as it stands afterwards. A card runs one op at a time.
+func runOp(eng snapshotter, busy map[string]op, id string, o op, work func() actionDoneMsg) tea.Cmd {
+	if _, working := busy[id]; working {
+		return func() tea.Msg { return actionDoneMsg{id: id, err: errBusy} }
+	}
+	o.at = time.Now()
+	busy[id] = o
+	return func() tea.Msg {
+		msg := work()
+		msg.id, msg.at, msg.snap = id, o.at, eng.Snapshot()
+		return msg
+	}
 }
 
 // attach opens the task's live agent terminal; Ctrl-q returns to the board.
 func (m Model) attach(id string) (tea.Cmd, bool) {
-	name, ok := m.eng.LiveSession(id)
+	name, ok := m.liveSession(id)
 	if !ok {
 		return nil, false
 	}
@@ -466,7 +568,10 @@ func (m *Model) confirmTakeOver(id string, number, pid int) {
 	m.confirmText = fmt.Sprintf("#%d runs in another terminal (pid %d). Stop it there and resume it here? (y/N)", number, pid)
 	eng := m.eng
 	m.confirmAction = func() tea.Cmd {
-		return func() tea.Msg { return takeOverDoneMsg{taskID: id, err: eng.TakeOver(id)} }
+		return func() tea.Msg {
+			err := eng.TakeOver(id)
+			return takeOverDoneMsg{taskID: id, err: err, snap: eng.Snapshot()}
+		}
 	}
 }
 
@@ -475,16 +580,25 @@ func attachExternal(cmd *exec.Cmd) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 }
 
-func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
-	id, targetID := t.ID, target.ID
-	m.setFlash(fmt.Sprintf("Moving #%d to %s…", t.Number, target.Name))
-	return func() tea.Msg {
-		err := m.eng.Move(id, targetID, engine.MoveOptions{})
-		retry := func() tea.Cmd {
-			return m.action(func() error { return m.eng.Move(id, targetID, engine.MoveOptions{Force: true}) })
+func (m Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
+	return moveTo(m.eng, m.busy, t.ID, t.Number, target, false)
+}
+
+// moveTo shows the card in the target column straight away while the engine
+// works. A move that fails, or needs confirming (ErrDirty), puts the card back;
+// force is the retry after that confirmation.
+func moveTo(eng mover, busy map[string]op, id string, number int, target config.Column, force bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "moving", column: target.ID}, func() actionDoneMsg {
+		err := eng.Move(id, target.ID, engine.MoveOptions{Force: force})
+		msg := actionDoneMsg{err: err}
+		switch {
+		case err == nil:
+			msg.done = fmt.Sprintf("Moved #%d to %s", number, target.Name)
+		case errors.Is(err, engine.ErrDirty):
+			msg.retryDone = func() tea.Cmd { return moveTo(eng, busy, id, number, target, true) }
 		}
-		return actionDoneMsg{err: err, retryDone: retry}
-	}
+		return msg
+	})
 }
 
 func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -539,7 +653,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		_, idx, ok := m.snap.Board.Column(t.ColumnID)
+		_, idx, ok := m.snap.Board.Column(m.columnOf(t))
 		if !ok {
 			idx = 0
 		}
@@ -561,9 +675,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "n":
 		m.setFlash("Starting a new session…")
+		eng := m.eng
 		return m, func() tea.Msg {
-			t, err := m.eng.NewSession()
-			return sessionStartedMsg{task: t, err: err}
+			t, err := eng.NewSession()
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
 		}
 	case "e":
 		if t != nil {
@@ -580,7 +695,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(store.Members(m.snap.Tasks, store.Owner(m.snap.Tasks, t))) > 1 {
 			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, taskTitle(t))
 		}
-		m.confirmAction = func() tea.Cmd { return m.action(func() error { return m.eng.DeleteTask(id) }) }
+		m.confirmAction = func() tea.Cmd { return m.action(id, "deleting", func() error { return m.eng.DeleteTask(id) }) }
 	case "enter", "a":
 		if t == nil {
 			break
@@ -602,7 +717,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		if _, ok := m.eng.LiveSession(t.ID); !ok {
+		if _, ok := m.liveSession(t.ID); !ok {
 			m.setFlash("No running agent for this task")
 			break
 		}
@@ -614,13 +729,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if t != nil {
 			id := t.ID
-			m.setFlash(fmt.Sprintf("Starting agent for #%d…", t.Number))
-			return m, m.action(func() error { return m.eng.Start(id) })
+			return m, m.action(id, "starting agent", func() error { return m.eng.Start(id) })
 		}
 	case "S":
 		if t != nil {
 			id := t.ID
-			return m, m.action(func() error { m.eng.Suspend(id); return nil })
+			return m, m.action(id, "suspending", func() error { m.eng.Suspend(id); return nil })
 		}
 	case "p":
 		m.prefs.HidePreview = !m.prefs.HidePreview
@@ -757,7 +871,7 @@ func (m Model) updateSend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		id := t.ID
 		m.setFlash(fmt.Sprintf("Sent to #%d", t.Number))
-		return m, m.action(func() error { return m.eng.Send(id, text) })
+		return m, m.action(id, "sending", func() error { return m.eng.Send(id, text) })
 	}
 	var cmd tea.Cmd
 	m.sendInput, cmd = m.sendInput.Update(msg)
