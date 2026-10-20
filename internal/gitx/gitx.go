@@ -1,5 +1,5 @@
 // Package gitx creates and removes the per-task worktrees under
-// <repo>/.drover/worktrees/<task number>.
+// <worktrees dir>/<task number>.
 package gitx
 
 import (
@@ -88,11 +88,13 @@ func BranchName(title, taskID string) string {
 	return slug + "-" + taskID[:8]
 }
 
-func WorktreesDir(root string) string { return filepath.Join(root, ".drover", "worktrees") }
-
-// EnsureExcluded keeps .drover/ out of git status without touching the
-// tracked .gitignore.
-func EnsureExcluded(root string) error {
+// EnsureExcluded keeps .drover/ and the worktrees directory, when it is
+// inside the repo, out of git status.
+func EnsureExcluded(root, worktrees string) error {
+	patterns := []string{"/.drover/"}
+	if rel, err := filepath.Rel(root, worktrees); err == nil && rel != "." && filepath.IsLocal(rel) {
+		patterns = append(patterns, "/"+filepath.ToSlash(rel)+"/")
+	}
 	commonDir, err := run(root, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return err
@@ -100,10 +102,19 @@ func EnsureExcluded(root string) error {
 	if !filepath.IsAbs(commonDir) {
 		commonDir = filepath.Join(root, commonDir)
 	}
-	exclude := filepath.Join(commonDir, "info", "exclude")
+	excludeFile := filepath.Join(commonDir, "info", "exclude")
+	for _, pattern := range patterns {
+		if err := appendExclude(excludeFile, pattern); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendExclude(exclude, pattern string) error {
 	data, _ := os.ReadFile(exclude)
 	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == "/.drover/" || strings.TrimSpace(line) == ".drover/" {
+		if line = strings.TrimSpace(line); line == pattern || line == strings.TrimPrefix(pattern, "/") {
 			return nil
 		}
 	}
@@ -118,18 +129,18 @@ func EnsureExcluded(root string) error {
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte("\n")) {
 		f.WriteString("\n")
 	}
-	_, err = f.WriteString("/.drover/\n")
+	_, err = f.WriteString(pattern + "\n")
 	return err
 }
 
 // CreateWorktree checks out branch (creating it from base if needed) into
-// .drover/worktrees/<folder>. An existing worktree is reused.
-func CreateWorktree(root, folder, branch, base string) (string, error) {
-	path := filepath.Join(WorktreesDir(root), folder)
+// <worktrees>/<folder>. An existing worktree is reused.
+func CreateWorktree(root, worktrees, folder, branch, base string) (string, error) {
+	path := filepath.Join(worktrees, folder)
 	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
 		return path, nil
 	}
-	if err := os.MkdirAll(WorktreesDir(root), 0o755); err != nil {
+	if err := os.MkdirAll(worktrees, 0o755); err != nil {
 		return "", err
 	}
 	if entries, err := os.ReadDir(path); err == nil {

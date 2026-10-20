@@ -50,7 +50,7 @@ func (e *Engine) DiscoverSessions() []claude.Found {
 	var out []claude.Found
 	for _, f := range claude.Discover(e.Root, skip, 40) {
 		// Sessions the board itself launched in its worktrees are not imports.
-		if !claude.Within(gitx.WorktreesDir(e.Root), f.Cwd) {
+		if !e.ownsWorktree(f.Cwd) {
 			out = append(out, f)
 		}
 	}

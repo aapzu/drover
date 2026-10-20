@@ -102,7 +102,7 @@ func New(root string) (*Engine, error) {
 		e.linear = client
 	}
 	if e.isRepo {
-		gitx.EnsureExcluded(root)
+		gitx.EnsureExcluded(root, board.WorktreesPath(root))
 	}
 	e.reconcile()
 	return e, nil
@@ -194,6 +194,18 @@ func (e *Engine) WriteDefaultBoard() error {
 	return nil
 }
 
+func (e *Engine) worktreesDir() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.board.WorktreesPath(e.Root)
+}
+
+// ownsWorktree reports whether path is under the configured worktrees
+// directory or the default one.
+func (e *Engine) ownsWorktree(path string) bool {
+	return claude.Within(e.worktreesDir(), path) || claude.Within(filepath.Join(e.Root, config.DefaultWorktreesDir), path)
+}
+
 // reloadBoard picks up edits to drover.json made while the TUI runs.
 func (e *Engine) reloadBoard() {
 	info, err := os.Stat(filepath.Join(e.Root, config.FileName))
@@ -215,9 +227,12 @@ func (e *Engine) reloadBoard() {
 	e.mu.Unlock()
 	if err != nil {
 		e.notify("drover.json: %v", err)
-	} else {
-		e.notify("Reloaded drover.json")
+		return
 	}
+	if e.isRepo {
+		gitx.EnsureExcluded(e.Root, board.WorktreesPath(e.Root))
+	}
+	e.notify("Reloaded drover.json")
 }
 
 // reconcile marks sessions whose tmux session vanished while the TUI was
@@ -662,7 +677,7 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 		branch = gitx.BranchName(title, id)
 	}
 	e.setBusy(busyID, "creating worktree")
-	path, err = gitx.CreateWorktree(e.Root, fmt.Sprint(number), branch, resolved)
+	path, err = gitx.CreateWorktree(e.Root, e.worktreesDir(), fmt.Sprint(number), branch, resolved)
 	e.setBusy(busyID, "starting agent")
 	if err != nil {
 		return "", err
@@ -850,7 +865,7 @@ func (e *Engine) removeWorktree(t *store.Task) error {
 	e.mu.Unlock()
 	// Imported sessions may live in the main checkout or a worktree the board
 	// did not create; those are never deleted.
-	if path == "" || !e.isRepo || !claude.Within(gitx.WorktreesDir(e.Root), path) {
+	if path == "" || !e.isRepo || !e.ownsWorktree(path) {
 		return nil
 	}
 	if err := gitx.RemoveWorktree(e.Root, path); err != nil {

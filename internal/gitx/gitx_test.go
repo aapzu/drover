@@ -1,6 +1,7 @@
 package gitx
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -62,5 +63,51 @@ func TestMainRootFromLinkedWorktree(t *testing.T) {
 		if got, err := MainRoot(dir); err != nil || got != root {
 			t.Fatalf("MainRoot(%s) = %s, %v; want %s", dir, got, err, root)
 		}
+	}
+}
+
+func TestCreateWorktreeInCustomDir(t *testing.T) {
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	root := filepath.Join(tmp, "repo")
+	git(t, tmp, "init", "-q", "-b", "main", root)
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+
+	worktrees := filepath.Join(root, ".claude", "worktrees")
+	path, err := CreateWorktree(root, worktrees, "1", "feature-1", "main")
+	if err != nil || path != filepath.Join(worktrees, "1") {
+		t.Fatalf("CreateWorktree = %q, %v", path, err)
+	}
+	if got := git(t, path, "rev-parse", "--abbrev-ref", "HEAD"); got != "feature-1" {
+		t.Errorf("worktree branch = %q", got)
+	}
+	if err := RemoveWorktree(root, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree still exists: %v", err)
+	}
+}
+
+func TestEnsureExcluded(t *testing.T) {
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	root := filepath.Join(tmp, "repo")
+	git(t, tmp, "init", "-q", "-b", "main", root)
+
+	for range 2 {
+		if err := EnsureExcluded(root, filepath.Join(root, ".claude", "worktrees")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := EnsureExcluded(root, filepath.Join(tmp, "elsewhere")); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, ".git", "info", "exclude"))
+	for _, pattern := range []string{"/.drover/\n", "/.claude/worktrees/\n"} {
+		if n := strings.Count(string(data), pattern); n != 1 {
+			t.Errorf("%q appears %d times in info/exclude:\n%s", pattern, n, data)
+		}
+	}
+	if strings.Contains(string(data), "elsewhere") {
+		t.Errorf("a directory outside the repo was excluded:\n%s", data)
 	}
 }

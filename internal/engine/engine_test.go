@@ -300,6 +300,46 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	}
 }
 
+func TestWorktreesDirSetting(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"worktreesDir":".claude/worktrees"}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	task := e.CreateTask("Custom dir", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, ".claude", "worktrees", "1")
+	if got := e.Snapshot().Tasks[0].WorktreePath; got != want {
+		t.Fatalf("worktree path = %q, want %q", got, want)
+	}
+	for _, path := range []string{want, filepath.Join(root, ".drover", "worktrees", "1")} {
+		if !e.ownsWorktree(path) {
+			t.Errorf("%s not recognised as a board worktree", path)
+		}
+	}
+	if e.ownsWorktree(root) {
+		t.Errorf("the main checkout counts as a board worktree")
+	}
+
+	if err := e.Move(task.ID, "todo", MoveOptions{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(want); !os.IsNotExist(err) {
+		t.Errorf("worktree directory still exists after move to To Do")
+	}
+}
+
 func readFile(path string) string {
 	b, _ := os.ReadFile(path)
 	return string(b)

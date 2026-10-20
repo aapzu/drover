@@ -74,7 +74,9 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
   Self-review, In review, Verify in develop, Done); press `W` to write it out.
-  `drover.local.json` can override `defaultBaseBranch`.
+  `drover.local.json` can override `defaultBaseBranch` and `worktreesDir`.
+  `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
+  to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
   becomes the card's title. When that turn ends, the card moves to the first
