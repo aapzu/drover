@@ -32,6 +32,16 @@ func writeTranscript(t *testing.T, config, cwd, id string, lines ...string) {
 	os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(strings.Join(out, "\n")+"\n"), 0o644)
 }
 
+// writeJob records a job in Claude Code's agents view; an empty state leaves
+// the directory without a state file, as dismissing the job does.
+func writeJob(t *testing.T, config, dir, state string) {
+	t.Helper()
+	os.MkdirAll(filepath.Join(config, "jobs", dir), 0o755)
+	if state != "" {
+		os.WriteFile(filepath.Join(config, "jobs", dir, "state.json"), []byte(state), 0o644)
+	}
+}
+
 func TestDiscover(t *testing.T) {
 	config := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", config)
@@ -47,6 +57,12 @@ func TestDiscover(t *testing.T) {
 	os.Chtimes(filepath.Join(config, "projects", projectDirName(root), "66666666-cmd.jsonl"), older, older)
 	past := time.Now().Add(-time.Hour)
 	os.Chtimes(filepath.Join(config, "projects", projectDirName(root), "11111111-old.jsonl"), past, past)
+
+	writeTranscript(t, config, root, "77777777-plain", "A terminal session")
+	writeTranscript(t, config, root, "88888888-gone", "Dismissed from the agents view")
+	writeJob(t, config, "11111111", `{"sessionId":"11111111-old"}`)
+	writeJob(t, config, "66666666", `{"sessionId":"other","resumeSessionId":"66666666-cmd"}`)
+	writeJob(t, config, "88888888", "")
 
 	os.MkdirAll(filepath.Join(config, "sessions"), 0o755)
 	registry := func(pid int, id, cwd, status string) {
@@ -83,10 +99,12 @@ func TestDiscoverLimitsPastSessions(t *testing.T) {
 	for i := range 4 {
 		id := fmt.Sprintf("%08d-past", i)
 		writeTranscript(t, config, root, id, "Past "+id)
+		writeJob(t, config, id, `{"sessionId":"`+id+`"}`)
 		at := time.Now().Add(-time.Duration(4-i) * time.Hour)
 		os.Chtimes(filepath.Join(config, "projects", projectDirName(root), id+".jsonl"), at, at)
 	}
 	writeTranscript(t, config, root, "99999999-live", "Running one")
+	writeTranscript(t, config, root, "88888888-hidden", "Not in the agents view")
 	os.MkdirAll(filepath.Join(config, "sessions"), 0o755)
 	b, _ := json.Marshal(Live{PID: os.Getpid(), SessionID: "99999999-live", Cwd: root, Status: "idle"})
 	os.WriteFile(filepath.Join(config, "sessions", "live.json"), b, 0o644)

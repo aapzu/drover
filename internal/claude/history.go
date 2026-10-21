@@ -74,6 +74,32 @@ func Running() map[string]Live {
 	return out
 }
 
+// agentSessions returns the ids of the conversations Claude Code's agents
+// view lists: every job it keeps a state file for, until the user dismisses it.
+func agentSessions() map[string]bool {
+	out := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(ConfigDir(), "jobs", "*", "state.json"))
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var job struct {
+			SessionID       string `json:"sessionId"`
+			ResumeSessionID string `json:"resumeSessionId"`
+		}
+		if json.Unmarshal(data, &job) != nil {
+			continue
+		}
+		for _, id := range []string{job.SessionID, job.ResumeSessionID} {
+			if id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}
+
 // ShortID is the first 8 characters of a session id, for display.
 func ShortID(id string) string { return id[:min(8, len(id))] }
 
@@ -164,10 +190,12 @@ func MoveTranscript(path, toDir string) (moved bool, err error) {
 
 // Discover lists conversations started in root or any directory below it
 // (such as worktrees), running ones first, then the most recent limit past ones.
-// skip holds session ids that are already on the board. more reports whether
-// older transcripts were left out.
+// Past conversations are only listed while Claude Code's agents view still
+// shows them. skip holds session ids that are already on the board. more
+// reports whether older transcripts were left out.
 func Discover(root string, skip map[string]bool, limit int) (found []Found, more bool) {
 	live := Running()
+	agents := agentSessions()
 	byID := map[string]*Found{}
 
 	prefix := projectDirName(root)
@@ -194,7 +222,7 @@ func Discover(root string, skip map[string]bool, limit int) (found []Found, more
 	for _, c := range candidates {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
 		_, running := live[id]
-		if skip[id] {
+		if skip[id] || (!running && !agents[id]) {
 			continue
 		}
 		if !running && past >= limit {
