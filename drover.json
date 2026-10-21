@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "worktreesDir": ".claude/worktrees",
   "columns": [
     {
       "id": "todo",
