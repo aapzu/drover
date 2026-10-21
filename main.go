@@ -26,7 +26,8 @@ Usage:
 
 The board is read from drover.json at the repo root. Agents run in tmux and
 keep running after you quit.
-`
+
+` + cliUsage
 
 func main() {
 	args := os.Args[1:]
@@ -39,6 +40,19 @@ func main() {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 		fmt.Print(usage)
 		return
+	}
+	if len(args) > 0 {
+		if cmd, ok := cliCommands[args[0]]; ok {
+			root, err := projectRoot(".")
+			if err == nil {
+				err = cmd(root, args[1:])
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "drover:", err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 	dir := "."
 	if len(args) > 0 {

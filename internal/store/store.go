@@ -213,6 +213,16 @@ func find(tasks []*Task, id string) *Task {
 	return nil
 }
 
+// ByNumber returns the task numbered n, or nil.
+func (s *State) ByNumber(n int) *Task {
+	for _, t := range s.Tasks {
+		if t.Number == n {
+			return t
+		}
+	}
+	return nil
+}
+
 // Owner returns the task that holds t's sessions and worktree.
 func Owner(tasks []*Task, t *Task) *Task {
 	if t.GroupID == "" {

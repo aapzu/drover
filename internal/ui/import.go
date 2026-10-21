@@ -189,7 +189,7 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				issues = append(issues, *it.issue)
 			}
 		}
-		n := m.eng.ImportSessions(sessions) + m.eng.ImportIssues(issues)
+		n := m.eng.ImportSessions(sessions) + len(m.eng.ImportIssues(issues))
 		m.snap = m.eng.Snapshot()
 		m.mode = modeBoard
 		switch {
