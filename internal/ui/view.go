@@ -613,7 +613,7 @@ func (m Model) renderHelp() string {
 		{"n", "new Claude session (no branch until moved right)"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
-		{"enter / a", "attach to the agent's terminal (Ctrl-q returns)"},
+		{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
 		{"tab", "type into the agent from the preview (Ctrl-q returns)"},
 		{"s", "send a message to the agent"},
 		{"r", "start or resume the agent in place"},
