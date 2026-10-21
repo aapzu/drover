@@ -334,15 +334,22 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	if row.TimeoutMinutes == 0 {
 		timeout = 10 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 	vars := e.vars(t, gc)
-	cmd := exec.CommandContext(ctx, "sh", "-c", e.render(t, row.Script, gc, true))
-	cmd.Dir = vars["worktreePath"]
-	cmd.Env = os.Environ()
+	var env []string
 	for k, v := range vars {
-		cmd.Env = append(cmd.Env, "DROVER_"+strings.ToUpper(k)+"="+v)
+		env = append(env, "DROVER_"+strings.ToUpper(k)+"="+v)
 	}
+	return runShell(e.stopping, vars["worktreePath"], e.render(t, row.Script, gc, true), env, timeout)
+}
+
+// runShell runs script with sh -c in dir, killing it after timeout. Its error
+// ends with the last of the script's output.
+func runShell(ctx context.Context, dir, script string, env []string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", script)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		tail := strings.TrimSpace(string(out))

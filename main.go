@@ -80,10 +80,12 @@ func run(dir string) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go eng.Run(ctx)
+	stopped := make(chan struct{})
+	go func() { eng.Run(ctx); close(stopped) }()
 
 	final, err := tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
+	cancel()
+	<-stopped
 	if m, ok := final.(ui.Model); ok && m.SuspendAllRequested() {
 		fmt.Println("Suspending all agents…")
 		for _, h := range eng.SuspendAll() {

@@ -1,6 +1,7 @@
 package gitx
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,5 +110,86 @@ func TestEnsureExcluded(t *testing.T) {
 	}
 	if strings.Contains(string(data), "elsewhere") {
 		t.Errorf("a directory outside the repo was excluded:\n%s", data)
+	}
+}
+
+func TestCopyFilesAndDirtyIgnoresThem(t *testing.T) {
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	root := filepath.Join(tmp, "repo")
+	git(t, tmp, "init", "-q", "-b", "main", root)
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	os.WriteFile(filepath.Join(root, ".env.shared"), []byte("SECRET=1"), 0o600)
+	os.Symlink(".env.shared", filepath.Join(root, ".env"))
+	os.MkdirAll(filepath.Join(root, "config", "local"), 0o755)
+	os.WriteFile(filepath.Join(root, "config", "tracked.json"), []byte("{}"), 0o644)
+	git(t, root, "add", "config/tracked.json")
+	git(t, root, "commit", "-q", "-m", "tracked")
+	os.WriteFile(filepath.Join(root, "config", "local", "dev.json"), []byte("{}"), 0o644)
+	os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
+	os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(tmp, "outside"), []byte("x"), 0o644)
+	wt, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "b", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	paths := []string{".env", "config", ".claude/settings.local.json", "missing", "../outside"}
+	if err := CopyFiles(root, wt, paths); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(wt, ".env")); string(b) != "SECRET=1" {
+		t.Errorf(".env = %q", b)
+	}
+	if info, err := os.Stat(filepath.Join(wt, ".env")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf(".env mode = %v, %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "config", "local", "dev.json")); err != nil {
+		t.Errorf("directory not copied: %v", err)
+	}
+	for _, skipped := range []string{".claude/settings.local.json", "../outside"} {
+		if _, err := os.Stat(filepath.Join(wt, skipped)); err == nil {
+			t.Errorf("%s was copied", skipped)
+		}
+	}
+
+	if Dirty(wt, paths...) {
+		t.Error("copied files count as uncommitted changes")
+	}
+	os.WriteFile(filepath.Join(wt, "config", "tracked.json"), []byte("{\"edited\":1}"), 0o644)
+	if !Dirty(wt, paths...) {
+		t.Error("an edit to a tracked file under a copied path is not dirty")
+	}
+	git(t, wt, "checkout", "--", "config/tracked.json")
+	os.WriteFile(filepath.Join(wt, "notes.txt"), []byte("x"), 0o644)
+	if !Dirty(wt, paths...) {
+		t.Error("a new file outside the copied paths is not dirty")
+	}
+}
+
+func TestFastForward(t *testing.T) {
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	root := filepath.Join(tmp, "repo")
+	git(t, tmp, "init", "-q", "-b", "main", root)
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	wt, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := FastForward(wt, "main"); n != 0 || err != nil {
+		t.Fatalf("up to date: %d, %v", n, err)
+	}
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "two")
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "three")
+	if n, err := FastForward(wt, "main"); n != 2 || err != nil {
+		t.Fatalf("behind by two: %d, %v", n, err)
+	}
+	if got, want := git(t, wt, "rev-parse", "HEAD"), git(t, root, "rev-parse", "main"); got != want {
+		t.Errorf("HEAD = %s, want main's %s", got, want)
+	}
+	git(t, wt, "commit", "-q", "--allow-empty", "-m", "mine")
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "four")
+	if _, err := FastForward(wt, "main"); !errors.Is(err, ErrDiverged) {
+		t.Errorf("diverged: %v", err)
 	}
 }

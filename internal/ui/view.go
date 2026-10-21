@@ -581,6 +581,8 @@ func (m Model) renderHelp() string {
 		{"s", "send a message to the agent"},
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
+		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
+		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},
 		{"+ / -", "taller / shorter preview"},
 		{"< / >", "narrower / wider column"},

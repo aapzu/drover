@@ -752,6 +752,26 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			id := t.ID
 			return m, m.action(id, "starting agent", func() error { return m.eng.Start(id) })
 		}
+	case "c":
+		if t != nil {
+			name, err := m.eng.Shell(t.ID)
+			if err != nil {
+				m.setFlash("Error: " + err.Error())
+				return m, nil
+			}
+			id := t.ID
+			return m, tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+				return attachDoneMsg{id: id, err: err}
+			})
+		}
+	case "u":
+		if t != nil {
+			id, eng := t.ID, m.eng
+			return m, runOp(eng, m.busy, id, op{label: "updating from base"}, func() actionDoneMsg {
+				done, err := eng.UpdateFromBase(id)
+				return actionDoneMsg{err: err, done: done}
+			})
+		}
 	case "S":
 		if t != nil {
 			id := t.ID

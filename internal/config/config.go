@@ -22,6 +22,10 @@ type Board struct {
 	DefaultBaseBranch     string `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string `json:"defaultPermissionMode,omitempty"`
 	WorktreesDir          string `json:"worktreesDir,omitempty"`
+	// CopyFiles are untracked paths, such as .env, copied into new worktrees.
+	CopyFiles []string `json:"copyFiles,omitempty"`
+	// InitScript runs with sh -c in a new worktree before its agent starts.
+	InitScript string `json:"initScript,omitempty"`
 	// MaxConcurrent caps running agents; 0 means DefaultMaxConcurrent.
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 	// IdleTimeoutMinutes suspends agents idle this long; 0 never does.

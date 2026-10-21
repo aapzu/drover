@@ -16,7 +16,8 @@ import (
 )
 
 // Run polls hook events and tmux, and applies the CLI's requests, until ctx is
-// done.
+// done, then waits for the work it started. Automations only run while the
+// TUI is open; agents keep working in tmux when it is closed.
 func (e *Engine) Run(ctx context.Context) {
 	if release, ok := inbox.Hold(e.Root); ok {
 		defer release()
@@ -30,6 +31,8 @@ func (e *Engine) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			e.stop()
+			e.work.Wait()
 			return
 		case <-ticker.C:
 			e.Tick()
@@ -74,7 +77,7 @@ func (e *Engine) Tick() {
 	})
 
 	for _, fn := range followUps {
-		go fn()
+		e.work.Go(fn)
 	}
 }
 
@@ -396,7 +399,8 @@ func (e *Engine) prRequested(taskID string, visit int) {
 			return
 		}
 		if s.Activity == store.ActivityIdle {
-			go e.runTurnEnd(taskID, store.MainSession, t.Visit, s.LastReply)
+			visit, reply := t.Visit, s.LastReply
+			e.work.Go(func() { e.runTurnEnd(taskID, store.MainSession, visit, reply) })
 		} else {
 			s.TurnInVisit = true
 		}
@@ -516,6 +520,7 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 				s.Activity = store.ActivityIdle
 				t.AddLog(fmt.Sprintf("Worktree failed: %v", err))
 			})
+			e.notify("#%d: %v", t.Number, err)
 			return
 		}
 	}

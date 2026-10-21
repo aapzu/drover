@@ -9,6 +9,7 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -65,6 +66,9 @@ type Engine struct {
 	launching sync.Map // tmux session names dequeued but not yet started
 	busy      sync.Map // task id -> what a move is doing, shown on the card
 	notices   chan string
+	work      sync.WaitGroup
+	stopping  context.Context
+	stop      context.CancelFunc
 
 	focused      string
 	alerted      map[string]time.Time
@@ -101,6 +105,7 @@ func New(root string) (*Engine, error) {
 		prScanErrs:           map[string]string{},
 		alerted:              map[string]time.Time{},
 	}
+	e.stopping, e.stop = context.WithCancel(context.Background())
 	e.boardStamp = config.Stamp(root)
 	if client, ok := linear.FromEnv(); ok {
 		e.linear = client
@@ -377,8 +382,9 @@ func (e *Engine) WorktreeDirty(id string) bool {
 	if t != nil {
 		path = e.owner(t).WorktreePath
 	}
+	ignore := e.board.CopyFiles
 	e.mu.Unlock()
-	return gitx.Dirty(path)
+	return gitx.Dirty(path, ignore...)
 }
 
 type MoveOptions struct {
@@ -447,8 +453,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	worktree := owner.WorktreePath
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
+	copied := e.board.CopyFiles
 	e.mu.Unlock()
-	if target.IsDone() && ending && !opts.Force && gitx.Dirty(worktree) {
+	if target.IsDone() && ending && !opts.Force && gitx.Dirty(worktree, copied...) {
 		return ErrDirty
 	}
 
@@ -664,6 +671,7 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
 	title, id, number := t.Title, t.ID, t.Number
 	defaultBase := e.board.DefaultBaseBranch
+	copyFiles, initScript := e.board.CopyFiles, e.board.InitScript
 	imported := false
 	for _, s := range t.Sessions {
 		imported = imported || s.Imported
@@ -693,10 +701,21 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 	}
 	e.setBusy(busyID, "creating worktree")
 	path, err = gitx.CreateWorktree(e.Root, e.worktreesDir(), fmt.Sprintf("%s%d", worktreeFolderPrefix, number), branch, resolved)
+	if err == nil {
+		err = gitx.CopyFiles(e.Root, path, copyFiles)
+	}
+	if err == nil && initScript != "" {
+		e.setBusy(busyID, "running init script")
+		env := []string{"DROVER_PROJECTPATH=" + e.Root, "DROVER_WORKTREEPATH=" + path, "DROVER_BRANCHNAME=" + branch}
+		if err = runShell(e.stopping, path, initScript, env, 10*time.Minute); err != nil {
+			err = fmt.Errorf("init script: %w", err)
+		}
+	}
 	e.setBusy(busyID, "starting agent")
 	if err != nil {
 		return "", err
 	}
+	tmux.Kill(e.shellName(t))
 	e.with(func() {
 		t.WorktreePath, t.Branch = path, branch
 		if t.BaseBranch == "" {
@@ -746,7 +765,7 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) (bool, e
 // relocateLive keeps a running scratch conversation alive across the move,
 // and returns the request asking it to switch into worktree itself. It
 // declines, leaving the restart to the caller, when there is nothing to keep.
-func (e *Engine) relocateLive(t *store.Task, s *store.Session, col config.Column, worktree string, runEnter bool) (store.Pending, bool) {
+func (e *Engine) relocateLive(t *store.Task, s *store.Session, worktree string) (store.Pending, bool) {
 	e.mu.Lock()
 	ok := s.Status == store.StatusRunning && s.Started
 	name, branch := s.Tmux, t.Branch
@@ -878,6 +897,7 @@ func scratchSession(t *store.Task) *store.Session {
 }
 
 func (e *Engine) removeWorktree(t *store.Task) error {
+	tmux.Kill(e.shellName(t))
 	e.mu.Lock()
 	path := t.WorktreePath
 	e.mu.Unlock()
@@ -996,7 +1016,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 			return err
 		}
 		if scratch != nil {
-			if p, ok := e.relocateLive(t, scratch, col, worktree, runEnter); ok {
+			if p, ok := e.relocateLive(t, scratch, worktree); ok {
 				relocation = p
 			} else {
 				e.stopSessions(t, "", store.StatusSuspended)
@@ -1044,7 +1064,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		fresh := !started
 		prompt := ""
 		if fresh {
-			prompt, enter = e.initialPrompt(card, col, enter, gc)
+			prompt, enter = e.initialPrompt(card, enter, gc)
 			if message != "" {
 				prompt += "\n\n" + message
 				message = ""
@@ -1067,7 +1087,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 // initialPrompt is the first message of a fresh session. A column whose enter
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
-func (e *Engine) initialPrompt(t *store.Task, col config.Column, enter []config.Automation, gc groupContext) (string, []config.Automation) {
+func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (string, []config.Automation) {
 	if len(enter) > 0 && enter[0].Type == "send_message" && enter[0].Condition == "" {
 		row := enter[0]
 		e.logf(t, "Automation %q: started agent with message", rowName(row))
