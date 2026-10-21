@@ -165,7 +165,7 @@ func TestLocalOverridesPersonalSettings(t *testing.T) {
 	}
 	want := DefaultNotifications()
 	want.TurnDone = false
-	if board.Notifications != want || board.Limit() != 4 {
+	if board.Notifications != want || board.Limit() != 4 || !board.AutoName {
 		t.Errorf("shared board: notifications=%+v limit=%d", board.Notifications, board.Limit())
 	}
 
@@ -187,12 +187,12 @@ func TestLocalOverridesPersonalSettings(t *testing.T) {
 
 func TestLocalOverridesApplyToDefaultBoard(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"notifications":{"needsYou":false}}`), 0o644)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"notifications":{"needsYou":false},"autoName":false}`), 0o644)
 	board, found, err := Load(dir)
 	if err != nil || found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
-	if board.Notifications.NeedsYou || !board.Notifications.TurnDone || board.Limit() != DefaultMaxConcurrent {
+	if board.Notifications.NeedsYou || !board.Notifications.TurnDone || board.Limit() != DefaultMaxConcurrent || board.AutoName {
 		t.Errorf("default board: notifications=%+v limit=%d", board.Notifications, board.Limit())
 	}
 }

@@ -105,6 +105,32 @@ func TestUsageAddsUpAcrossTranscripts(t *testing.T) {
 	}
 }
 
+func TestAutoNameTitlesNewSessions(t *testing.T) {
+	t.Setenv("FAKE_TITLE", `"Fix Safari login."`)
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, ""))
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"the login is broken on safari, can you look"}` + "\n")
+	events.Close()
+	waitFor(t, e, "the haiku title", func(t *store.Task) bool { return t.Title == "Fix Safari login" })
+
+	e.EditTask(task.ID, "My own title", "")
+	e.autoName(task.ID, "anything", "Fix Safari login")
+	if got := e.Snapshot().Tasks[0].Title; got != "My own title" {
+		t.Errorf("auto-naming overwrote an edited title: %q", got)
+	}
+}
+
 func TestPermissionRequestsAlertOncePerCooldown(t *testing.T) {
 	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"notifications":{"turnDone":false,"needsYou":true,"planReady":true,"cooldownSeconds":60},`))
 	task := startIdleAgent(t, e, "Asks a lot")

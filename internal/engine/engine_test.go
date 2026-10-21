@@ -18,15 +18,9 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// fakeClaude stands in for the claude CLI: it records its argv and writes the
-// hook events Claude would, replying "Verdict: Ready" to /code-review and
-// "Findings: applied" to anything else, including messages typed into it.
-// /plan only switches mode, Shift+Tab is ignored, and a worktree it is asked
-// to enter is entered unless FAKE_STAY is set. Haiku calls (-p) answer YES to
-// a condition containing ALWAYS and NO otherwise.
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *ALWAYS*) echo YES;; *) echo NO;; esac
+  case "$*" in *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""

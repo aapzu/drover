@@ -19,21 +19,18 @@ const (
 )
 
 type Board struct {
-	DefaultBaseBranch     string `json:"defaultBaseBranch,omitempty"`
-	DefaultPermissionMode string `json:"defaultPermissionMode,omitempty"`
-	WorktreesDir          string `json:"worktreesDir,omitempty"`
-	// CopyFiles are untracked paths, such as .env, copied into new worktrees.
-	CopyFiles []string `json:"copyFiles,omitempty"`
-	// InitScript runs with sh -c in a new worktree before its agent starts.
-	InitScript string `json:"initScript,omitempty"`
-	// MaxConcurrent caps running agents; 0 means DefaultMaxConcurrent.
-	MaxConcurrent int `json:"maxConcurrent,omitempty"`
-	// IdleTimeoutMinutes suspends agents idle this long; 0 never does.
-	IdleTimeoutMinutes int           `json:"idleTimeoutMinutes,omitempty"`
-	Notifications      Notifications `json:"notifications"`
-	Columns            []Column      `json:"columns"`
-	PRFlow             *PRFlow       `json:"prFlow,omitempty"`
-	ReviewFlow         *ReviewFlow   `json:"reviewFlow,omitempty"`
+	DefaultBaseBranch     string        `json:"defaultBaseBranch,omitempty"`
+	DefaultPermissionMode string        `json:"defaultPermissionMode,omitempty"`
+	WorktreesDir          string        `json:"worktreesDir,omitempty"`
+	CopyFiles             []string      `json:"copyFiles,omitempty"`
+	InitScript            string        `json:"initScript,omitempty"`
+	MaxConcurrent         int           `json:"maxConcurrent,omitempty"`
+	IdleTimeoutMinutes    int           `json:"idleTimeoutMinutes,omitempty"`
+	Notifications         Notifications `json:"notifications"`
+	AutoName              bool          `json:"autoName"`
+	Columns               []Column      `json:"columns"`
+	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
+	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
 }
 
 // Notifications picks the agent events that raise a desktop notification and
@@ -121,7 +118,7 @@ func Load(root string) (board *Board, found bool, err error) {
 		return nil, false, err
 	default:
 		found = true
-		board = &Board{Notifications: DefaultNotifications()}
+		board = &Board{Notifications: DefaultNotifications(), AutoName: true}
 		if err := json.Unmarshal(data, board); err != nil {
 			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
 		}
@@ -152,6 +149,7 @@ func (b *Board) applyLocal(root string) error {
 		WorktreesDir       string          `json:"worktreesDir"`
 		MaxConcurrent      *int            `json:"maxConcurrent"`
 		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
+		AutoName           *bool           `json:"autoName"`
 		Notifications      json.RawMessage `json:"notifications"`
 	}
 	if err := json.Unmarshal(data, &local); err != nil {
@@ -168,6 +166,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.IdleTimeoutMinutes != nil {
 		b.IdleTimeoutMinutes = *local.IdleTimeoutMinutes
+	}
+	if local.AutoName != nil {
+		b.AutoName = *local.AutoName
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -304,6 +305,7 @@ func (b *Board) TodoColumn() Column {
 func Default() *Board {
 	return &Board{
 		Notifications: DefaultNotifications(),
+		AutoName:      true,
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
