@@ -40,6 +40,7 @@ type tickMsg time.Time
 type previewMsg struct {
 	taskID, content string
 	history         int
+	mouse           bool
 	at              time.Time
 }
 type noticeMsg string
@@ -99,6 +100,7 @@ type Model struct {
 	// previewScroll is how many lines above the bottom the preview shows.
 	previewScroll  int
 	previewHistory int
+	previewMouse   bool
 
 	prefs   prefs
 	drag    dragState
@@ -300,7 +302,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		select {
 		case err := <-m.keys.errs:
-			m.setFlash("Typing into the agent failed: " + err.Error())
+			m.setFlash("Sending input to the agent failed: " + err.Error())
 		default:
 		}
 		cmds := []tea.Cmd{tick()}
@@ -339,6 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
+		m.previewMouse = msg.mouse
 		return m, nil
 	case liveTickMsg:
 		if m.mode != modeLive || msg.gen != m.liveGen {
@@ -491,8 +494,8 @@ func (m Model) capturePreview() tea.Cmd {
 			if l.previewH > 0 {
 				tmux.Resize(name, w, h)
 			}
-			if out, history, err := tmux.Capture(name, scrollback); err == nil {
-				msg.content, msg.history = out, history
+			if out, history, mouse, err := tmux.Capture(name, scrollback); err == nil {
+				msg.content, msg.history, msg.mouse = out, history, mouse
 			}
 		}
 		msg.at = time.Now()
@@ -503,6 +506,17 @@ func (m Model) capturePreview() tea.Cmd {
 func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
 	m.previewScroll = clamp(m.previewScroll+lines, 0, m.previewHistory)
 	return m, m.capturePreview()
+}
+
+// wheelTarget is the session that should get wheel events: its agent reads
+// SGR mouse reports and tmux has no history for the preview to scroll.
+// previewFor guards against flags left over from the previously selected task.
+func (m Model) wheelTarget() (string, bool) {
+	t := m.current()
+	if t == nil || m.previewFor != t.ID || !m.previewMouse || m.previewHistory != 0 {
+		return "", false
+	}
+	return m.liveSession(t.ID)
 }
 
 // liveSession reads the snapshot instead of the engine, which Tick can keep

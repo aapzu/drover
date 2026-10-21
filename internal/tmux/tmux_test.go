@@ -13,7 +13,7 @@ func waitFor(t *testing.T, name, want string) string {
 	t.Helper()
 	var out string
 	for range 50 {
-		out, _, _ = Capture(name, 0)
+		out, _, _, _ = Capture(name, 0)
 		if strings.Contains(out, want) {
 			return out
 		}
@@ -76,7 +76,7 @@ func TestCaptureReturnsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, name, "100")
-	out, history, err := Capture(name, 30)
+	out, history, _, err := Capture(name, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +85,36 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	}
 	if rows := strings.Count(out, "\n"); rows != 40 {
 		t.Fatalf("got %d rows, want 30 of history plus 10 on screen:\n%s", rows, out)
+	}
+}
+
+func TestCaptureReportsMouseTracking(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+
+	cases := []struct {
+		name, setup string
+		want        bool
+	}{
+		{"mouse-sgr", `\033[?1000h\033[?1006h`, true},
+		{"mouse-no-sgr", `\033[?1000h`, false},
+		{"mouse-off", ``, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := fmt.Sprintf(`printf '%s'; echo ready; cat`, c.setup)
+			if err := NewSession(c.name, t.TempDir(), []string{"sh", "-c", script}, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { Kill(c.name) })
+			waitFor(t, c.name, "ready")
+			if _, _, mouse, err := Capture(c.name, 0); err != nil || mouse != c.want {
+				t.Fatalf("mouse is %v (err %v), want %v", mouse, err, c.want)
+			}
+		})
 	}
 }
 
