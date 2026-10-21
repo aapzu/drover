@@ -59,7 +59,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.scrollPreview(-3)
 		}
-		if h.kind != hitCard && h.kind != hitColumn {
+		if m.mode == modeLive || (h.kind != hitCard && h.kind != hitColumn) {
 			return m, nil
 		}
 		m.col = h.col
