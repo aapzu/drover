@@ -212,8 +212,13 @@ cards don't follow a PR to release.
 ## Importing Claude Code agents
 
 `I` lists Claude Code conversations started in this repo or any directory
-below it, such as worktrees. Running agents come first and are preselected.
-Past sessions follow, newest first.
+below it, such as worktrees. Sessions are grouped by directory, directories
+with running agents first. Within a directory, running agents come first and
+are preselected, then past sessions, newest first. The list loads the 40
+newest past sessions; `m` loads 40 more while older ones remain.
+
+`space` on a directory header selects its sessions, or clears them if all are
+selected. `a` does the same for every loaded session.
 
 - **Running agents** land in the first agent column. The card mirrors the
   agent's working or idle status, and the preview shows its latest reply.
@@ -222,6 +227,8 @@ Past sessions follow, newest first.
   `r` and the board resumes the conversation with `claude --resume` in the
   agent's original directory.
 - **Past sessions** land in To Do. Moving one into an agent column resumes it.
+- **Sessions that opened several PRs** are split into a card per PR as they
+  are imported; the first PR stays on the session's own card.
 - **Board conversations you resume yourself**, for example with the commands
   `Q` prints, are tracked the same way. The board won't start them again
   until you exit them.

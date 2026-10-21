@@ -163,9 +163,10 @@ func MoveTranscript(path, toDir string) (moved bool, err error) {
 }
 
 // Discover lists conversations started in root or any directory below it
-// (such as worktrees), running ones first, then the most recent up to limit.
-// skip holds session ids that are already on the board.
-func Discover(root string, skip map[string]bool, limit int) []Found {
+// (such as worktrees), running ones first, then the most recent limit past ones.
+// skip holds session ids that are already on the board. more reports whether
+// older transcripts were left out.
+func Discover(root string, skip map[string]bool, limit int) (found []Found, more bool) {
 	live := Running()
 	byID := map[string]*Found{}
 
@@ -189,10 +190,15 @@ func Discover(root string, skip map[string]bool, limit int) []Found {
 	}
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].mod.After(candidates[j].mod) })
 
+	past := 0
 	for _, c := range candidates {
 		id := strings.TrimSuffix(filepath.Base(c.path), ".jsonl")
 		_, running := live[id]
-		if skip[id] || (!running && len(byID) >= limit) {
+		if skip[id] {
+			continue
+		}
+		if !running && past >= limit {
+			more = true
 			continue
 		}
 		f, ok := readTranscript(c.path)
@@ -201,6 +207,9 @@ func Discover(root string, skip map[string]bool, limit int) []Found {
 		}
 		f.SessionID, f.Updated = id, c.mod
 		byID[id] = &f
+		if !running {
+			past++
+		}
 	}
 
 	for id, l := range live {
@@ -218,7 +227,7 @@ func Discover(root string, skip map[string]bool, limit int) []Found {
 		}
 	}
 
-	out := make([]Found, 0, len(byID))
+	found = make([]Found, 0, len(byID))
 	for _, f := range byID {
 		if f.Title == "" {
 			f.Title = FirstLine(f.FirstPrompt)
@@ -226,15 +235,15 @@ func Discover(root string, skip map[string]bool, limit int) []Found {
 		if f.Title == "" {
 			f.Title = "Session " + ShortID(f.SessionID)
 		}
-		out = append(out, *f)
+		found = append(found, *f)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Running != out[j].Running {
-			return out[i].Running
+	sort.SliceStable(found, func(i, j int) bool {
+		if found[i].Running != found[j].Running {
+			return found[i].Running
 		}
-		return out[i].Updated.After(out[j].Updated)
+		return found[i].Updated.After(found[j].Updated)
 	})
-	return out
+	return found, more
 }
 
 // readTranscript pulls the title, first prompt, directory and branch out of

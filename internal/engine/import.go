@@ -37,8 +37,9 @@ func externalSession(t *store.Task) *store.Session {
 }
 
 // DiscoverSessions lists Claude Code conversations for this project that are
-// not on the board yet, running ones first.
-func (e *Engine) DiscoverSessions() []claude.Found {
+// not on the board yet, running ones first, then limit past ones. more reports
+// whether older ones were left out.
+func (e *Engine) DiscoverSessions(limit int) (found []claude.Found, more bool) {
 	skip := map[string]bool{}
 	e.mu.Lock()
 	for _, t := range e.state.Tasks {
@@ -47,14 +48,14 @@ func (e *Engine) DiscoverSessions() []claude.Found {
 		}
 	}
 	e.mu.Unlock()
-	var out []claude.Found
-	for _, f := range claude.Discover(e.Root, skip, 40) {
+	all, more := claude.Discover(e.Root, skip, limit)
+	for _, f := range all {
 		// Sessions the board itself launched in its worktrees are not imports.
 		if !e.ownsWorktree(f.Cwd) {
-			out = append(out, f)
+			found = append(found, f)
 		}
 	}
-	return out
+	return found, more
 }
 
 // importColumn puts a running agent in the work column, so the card shows
@@ -67,10 +68,10 @@ func importColumn(board *config.Board, running bool) config.Column {
 }
 
 // ImportSessions adds a card per conversation not already on the board and
-// returns how many it added. The conversation stays in its own directory:
+// returns how many cards it added. The conversation stays in its own directory:
 // resuming it anywhere else would not find it.
 func (e *Engine) ImportSessions(found []claude.Found) int {
-	added := 0
+	var imported []*store.Task
 	for _, f := range found {
 		branch := f.Branch
 		if current := gitx.CurrentBranch(f.Cwd); current != "" {
@@ -119,10 +120,16 @@ func (e *Engine) ImportSessions(found []claude.Found) int {
 			t.Sessions = map[string]*store.Session{store.MainSession: s}
 			t.AddLog(fmt.Sprintf("Imported Claude session %s from %s", claude.ShortID(f.SessionID), f.Cwd))
 			e.state.Tasks = append(e.state.Tasks, t)
-			added++
+			imported = append(imported, t)
 		})
 	}
-	return added
+	var scans []prScan
+	e.mu.Lock()
+	for _, t := range imported {
+		scans = append(scans, e.prScansOf(t)...)
+	}
+	e.mu.Unlock()
+	return len(imported) + e.scanTranscripts(scans)
 }
 
 // externalCheck refuses to start an imported or handed-off conversation that

@@ -56,7 +56,10 @@ func TestDiscover(t *testing.T) {
 	registry(os.Getpid(), "22222222-wt", root+"/.claude/worktrees/feat", "busy")
 	registry(99999999, "11111111-old", root, "idle") // dead process
 
-	found := Discover(root, map[string]bool{"55555555-skip": true}, 10)
+	found, more := Discover(root, map[string]bool{"55555555-skip": true}, 10)
+	if more {
+		t.Error("more is set though every session fit")
+	}
 	if len(found) != 3 {
 		t.Fatalf("got %d sessions: %+v", len(found), found)
 	}
@@ -70,6 +73,37 @@ func TestDiscover(t *testing.T) {
 	if old.SessionID != "11111111-old" || old.Running || old.Title != "Flaky login test" ||
 		old.FirstPrompt != "Fix the flaky login test" || old.Branch != "feature-x" || old.Cwd != root {
 		t.Errorf("past session wrong: %+v", old)
+	}
+}
+
+func TestDiscoverLimitsPastSessions(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	root := "/work/app"
+	for i := range 4 {
+		id := fmt.Sprintf("%08d-past", i)
+		writeTranscript(t, config, root, id, "Past "+id)
+		at := time.Now().Add(-time.Duration(4-i) * time.Hour)
+		os.Chtimes(filepath.Join(config, "projects", projectDirName(root), id+".jsonl"), at, at)
+	}
+	writeTranscript(t, config, root, "99999999-live", "Running one")
+	os.MkdirAll(filepath.Join(config, "sessions"), 0o755)
+	b, _ := json.Marshal(Live{PID: os.Getpid(), SessionID: "99999999-live", Cwd: root, Status: "idle"})
+	os.WriteFile(filepath.Join(config, "sessions", "live.json"), b, 0o644)
+
+	var ids []string
+	found, more := Discover(root, nil, 2)
+	for _, f := range found {
+		ids = append(ids, f.SessionID)
+	}
+	if want := "99999999-live 00000003-past 00000002-past"; strings.Join(ids, " ") != want || !more {
+		t.Errorf("limit 2 found %v (more %v), want %s with more", ids, more, want)
+	}
+	if found, more := Discover(root, nil, 3); len(found) != 4 || !more {
+		t.Errorf("limit 3 found %d sessions (more %v), want the running one and three past, with more", len(found), more)
+	}
+	if found, more := Discover(root, nil, 4); len(found) != 5 || more {
+		t.Errorf("limit 4 found %d sessions (more %v), want all five and no more", len(found), more)
 	}
 }
 

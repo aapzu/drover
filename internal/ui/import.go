@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,11 +23,18 @@ const (
 	sourceLinear
 )
 
+const importPageSize = 40
+
+// importItem is a session, an issue, or a header over the sessions started in
+// one directory.
 type importItem struct {
 	session  *claude.Found
 	issue    *linear.Issue
 	selected bool
+	header   string
 }
+
+func (it importItem) isHeader() bool { return it.header != "" }
 
 type importState struct {
 	// gen discards results from a load that was superseded.
@@ -38,11 +46,14 @@ type importState struct {
 	err      string
 	keyEntry bool
 	keyInput textinput.Model
+	limit    int
+	more     bool
 }
 
 type sessionsLoadedMsg struct {
 	gen      int
 	sessions []claude.Found
+	more     bool
 }
 type issuesLoadedMsg struct {
 	gen    int
@@ -54,19 +65,20 @@ type issuesLoadedMsg struct {
 func newImportState() importState {
 	ki := textinput.New()
 	ki.Placeholder = "DX-123 or a linear.app issue URL"
-	return importState{keyInput: ki}
+	return importState{keyInput: ki, limit: importPageSize}
 }
 
 func (m *Model) openImport(source int) tea.Cmd {
 	m.mode = modeImport
 	m.imp.source = source
 	m.imp.items, m.imp.cursor, m.imp.err, m.imp.keyEntry = nil, 0, "", false
+	m.imp.limit, m.imp.more = importPageSize, false
+	if source == sourceClaude {
+		return m.loadSessions()
+	}
 	m.imp.loading = true
 	m.imp.gen++
 	gen, eng := m.imp.gen, m.eng
-	if source == sourceClaude {
-		return func() tea.Msg { return sessionsLoadedMsg{gen: gen, sessions: eng.DiscoverSessions()} }
-	}
 	if !eng.HasLinear() {
 		m.imp.loading = false
 		m.imp.err = "Set LINEAR_API_KEY (linear.app → Settings → Security & access → Personal API keys) and restart."
@@ -80,6 +92,62 @@ func (m *Model) openImport(source int) tea.Cmd {
 	}
 }
 
+func (m *Model) loadSessions() tea.Cmd {
+	m.imp.loading = true
+	m.imp.gen++
+	gen, eng, limit := m.imp.gen, m.eng, m.imp.limit
+	return func() tea.Msg {
+		sessions, more := eng.DiscoverSessions(limit)
+		return sessionsLoadedMsg{gen: gen, sessions: sessions, more: more}
+	}
+}
+
+// groupSessions lists sessions under a header per directory, in the order each
+// directory first appears.
+func groupSessions(sessions []claude.Found, root string, prev map[string]bool) []importItem {
+	var dirs []string
+	byDir := map[string][]int{}
+	for i, s := range sessions {
+		if _, ok := byDir[s.Cwd]; !ok {
+			dirs = append(dirs, s.Cwd)
+		}
+		byDir[s.Cwd] = append(byDir[s.Cwd], i)
+	}
+	var items []importItem
+	for _, dir := range dirs {
+		where, _ := strings.CutPrefix(dir, root)
+		if where = strings.TrimPrefix(where, "/"); where == "" {
+			where = "repo root"
+		}
+		items = append(items, importItem{header: where})
+		for _, i := range byDir[dir] {
+			s := &sessions[i]
+			selected, seen := prev[s.SessionID]
+			items = append(items, importItem{session: s, selected: selected || (!seen && s.Running)})
+		}
+	}
+	return items
+}
+
+// group returns the sessions under the header at index h.
+func (s *importState) group(h int) []importItem {
+	end := h + 1
+	for end < len(s.items) && !s.items[end].isHeader() {
+		end++
+	}
+	return s.items[h+1 : end]
+}
+
+// toggleGroup selects every session under the header at index h, or none if
+// all are selected.
+func (s *importState) toggleGroup(h int) {
+	group := s.group(h)
+	all := !slices.ContainsFunc(group, func(it importItem) bool { return !it.selected })
+	for i := range group {
+		group[i].selected = !all
+	}
+}
+
 func (m Model) updateImportLoaded(msg tea.Msg) Model {
 	switch msg := msg.(type) {
 	case sessionsLoadedMsg:
@@ -87,10 +155,21 @@ func (m Model) updateImportLoaded(msg tea.Msg) Model {
 			return m
 		}
 		m.imp.loading = false
-		m.imp.items, m.imp.cursor = nil, 0
-		for i := range msg.sessions {
-			// Running agents are what you most likely want on the board.
-			m.imp.items = append(m.imp.items, importItem{session: &msg.sessions[i], selected: msg.sessions[i].Running})
+		prev, cursorID := map[string]bool{}, ""
+		for i, it := range m.imp.items {
+			if it.session != nil {
+				prev[it.session.SessionID] = it.selected
+				if i == m.imp.cursor {
+					cursorID = it.session.SessionID
+				}
+			}
+		}
+		m.imp.more = msg.more
+		m.imp.items, m.imp.cursor = groupSessions(msg.sessions, m.eng.Root, prev), 0
+		for i, it := range m.imp.items {
+			if it.session != nil && it.session.SessionID == cursorID {
+				m.imp.cursor = i
+			}
 		}
 	case issuesLoadedMsg:
 		if msg.gen != m.imp.gen || m.mode != modeImport {
@@ -155,15 +234,27 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		imp.cursor = max(0, min(len(imp.items)-1, imp.cursor+1))
 	case " ", "x":
 		if imp.cursor >= 0 && imp.cursor < len(imp.items) {
-			imp.items[imp.cursor].selected = !imp.items[imp.cursor].selected
+			if it := imp.items[imp.cursor]; it.isHeader() {
+				imp.toggleGroup(imp.cursor)
+			} else {
+				imp.items[imp.cursor].selected = !it.selected
+			}
 		}
 	case "a":
 		all := true
 		for _, it := range imp.items {
-			all = all && it.selected
+			all = all && (it.isHeader() || it.selected)
 		}
-		for i := range imp.items {
-			imp.items[i].selected = !all
+		for i, it := range imp.items {
+			if !it.isHeader() {
+				imp.items[i].selected = !all
+			}
+		}
+	case "m":
+		if imp.source == sourceClaude && imp.more && !imp.loading {
+			imp.limit += importPageSize
+			cmd := m.loadSessions()
+			return m, cmd
 		}
 	case "/":
 		if imp.source == sourceLinear && m.eng.HasLinear() {
@@ -262,6 +353,24 @@ func (m Model) renderImport(height int) string {
 		if i == imp.cursor {
 			pointer = "▸ "
 		}
+		if it.isHeader() {
+			group := imp.group(i)
+			picked := 0
+			for _, s := range group {
+				if s.selected {
+					picked++
+				}
+			}
+			switch {
+			case picked == len(group):
+				check = idle.Render("[x]")
+			case picked > 0:
+				check = idle.Render("[-]")
+			}
+			line := pointer + check + " " + bold.Render(it.header) + dim.Render(fmt.Sprintf("  %d", len(group)))
+			lines = append(lines, ansi.Truncate(line, inner, "…"))
+			continue
+		}
 		var label, detail string
 		if s := it.session; s != nil {
 			state := dim.Render(ago(s.Updated))
@@ -271,12 +380,8 @@ func (m Model) renderImport(height int) string {
 					state = idle.Render("● running · idle")
 				}
 			}
-			where, _ := strings.CutPrefix(s.Cwd, m.eng.Root)
-			if where == "" {
-				where = "repo root"
-			}
 			label = s.Title
-			detail = state + dim.Render("  "+strings.TrimPrefix(where, "/"))
+			detail = state + dim.Render("  "+s.Branch)
 		} else if is := it.issue; is != nil {
 			label = bold.Render(is.Identifier) + " " + is.Title
 			detail = dim.Render(is.State.Name + "  " + is.BranchName)
@@ -285,12 +390,19 @@ func (m Model) renderImport(height int) string {
 		if i == imp.cursor {
 			line = bold.Render(pointer+check+" ") + label
 		}
-		lines = append(lines, ansi.Truncate(line, inner, "…"), "      "+ansi.Truncate(detail, inner-6, "…"))
+		indent := ""
+		if it.session != nil {
+			indent = "  "
+		}
+		lines = append(lines, ansi.Truncate(indent+line, inner, "…"), indent+"      "+ansi.Truncate(detail, inner-6-len(indent), "…"))
 	}
 	if imp.keyEntry {
 		lines = append(lines, "", "Issue › "+imp.keyInput.View())
 	}
 	hint := "space select · a all · enter import · tab switch source · esc close"
+	if imp.more {
+		hint = "space select · a all · m load more · enter import · tab switch · esc close"
+	}
 	if imp.source == sourceLinear {
 		hint = "space select · a all · / fetch by key · enter import · tab switch · esc close"
 	}

@@ -961,9 +961,7 @@ func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 			Key: store.MainSession, AgentSessionID: "sid", Status: store.StatusSuspended, Started: true,
 		}}
 	})
-	created := func(n int) string {
-		return fmt.Sprintf(`{"type":"user","toolUseResult":{"gitOperation":{"pr":{"url":"https://github.com/o/r/pull/%d","action":"created"}}}}`+"\n", n)
-	}
+	created := prCreatedLine
 	path := claude.TranscriptPath("sid", root)
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	os.WriteFile(path, []byte(created(1)), 0o644)
@@ -991,6 +989,12 @@ func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	if tasks := e.Snapshot().Tasks; len(tasks) != 2 || tasks[0].PR.Number != 1 {
 		t.Errorf("PR one got a card of its own: %+v", tasks)
 	}
+}
+
+// prCreatedLine is the transcript line Claude Code records when a session
+// creates pull request n.
+func prCreatedLine(n int) string {
+	return fmt.Sprintf(`{"type":"user","toolUseResult":{"gitOperation":{"pr":{"url":"https://github.com/o/r/pull/%d","action":"created"}}}}`+"\n", n)
 }
 
 func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) bool) {
