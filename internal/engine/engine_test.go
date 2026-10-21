@@ -267,7 +267,7 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
@@ -337,7 +337,7 @@ func TestSettingsDiffer(t *testing.T) {
 
 func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "kangentic.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
