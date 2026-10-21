@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -419,5 +420,45 @@ func TestUsageLabel(t *testing.T) {
 		if got := usageLabel(&store.Session{Usage: c.usage}); got != c.want {
 			t.Errorf("usageLabel(%+v) = %q, want %q", c.usage, got, c.want)
 		}
+	}
+}
+
+func TestFilterNarrowsColumnsUntilCleared(t *testing.T) {
+	m := testModel(120, 40, 2, 0)
+	m.filterInput = textinput.New()
+	m.snap.Tasks = []*store.Task{
+		{ID: "a", Number: 1, Title: "Fix the login bug", ColumnID: "c0"},
+		{ID: "b", Number: 2, Title: "Dark mode", Branch: "dark-mode-1234", ColumnID: "c0"},
+		{ID: "c", Number: 3, Title: "Review", ColumnID: "c1", PR: &store.PR{Number: 42, Title: "Login page"}},
+	}
+	ids := func() string {
+		var out []string
+		for i := range m.columns() {
+			for _, t := range m.tasksForColumn(i) {
+				out = append(out, t.ID)
+			}
+		}
+		return strings.Join(out, ",")
+	}
+
+	next, _ := m.updateBoard(key("/"))
+	m = next.(Model)
+	next, _ = m.updateFilter(key("LOGIN"))
+	m = next.(Model)
+	if got := ids(); got != "a,c" {
+		t.Errorf("filter LOGIN shows %s, want a,c", got)
+	}
+	m.filterInput.SetValue("")
+	next, _ = m.updateFilter(key("dark 1234"))
+	m = next.(Model)
+	next, _ = m.updateFilter(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := ids(); m.mode != modeBoard || got != "b" {
+		t.Errorf("after enter: mode %v, cards %s, want the board showing b", m.mode, got)
+	}
+	next, _ = m.updateBoard(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if got := ids(); got != "a,b,c" {
+		t.Errorf("esc left %s", got)
 	}
 }

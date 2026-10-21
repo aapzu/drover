@@ -114,6 +114,9 @@ func (m Model) renderHeader() string {
 	if queued > 0 {
 		stats = append(stats, muted.Render(fmt.Sprintf("◷ %d queued · %d/%d slots", queued, m.snap.Running, m.snap.MaxConcurrent)))
 	}
+	if m.filter != "" {
+		stats = append(stats, bold.Render("filter: "+m.filter)+dim.Render(" (esc clears)"))
+	}
 	if cost >= 0.005 {
 		stats = append(stats, dim.Render(fmt.Sprintf("$%.2f", cost)))
 	}
@@ -127,11 +130,14 @@ func (m Model) renderFooter() string {
 	if m.mode == modeSend {
 		return " " + bold.Render("Send ›") + " " + m.sendInput.View()
 	}
+	if m.mode == modeFilter {
+		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
+	}
 	if m.flash != "" {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  n new  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  H/L move  n new  / filter  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
 		modeLive:    "LIVE: every key goes to the agent  ctrl+q back to board  mouse wheel scrolls",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
@@ -608,6 +614,7 @@ func (m Model) renderHelp() string {
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
+		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},
 		{"+ / -", "taller / shorter preview"},

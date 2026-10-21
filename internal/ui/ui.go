@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ const (
 	modeHelp
 	modeImport
 	modeLive
+	modeFilter
 )
 
 type tickMsg time.Time
@@ -118,7 +120,9 @@ type Model struct {
 	promptInput textarea.Model
 	formFocus   int
 
-	sendInput textinput.Model
+	sendInput   textinput.Model
+	filter      string
+	filterInput textinput.Model
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
 
@@ -142,6 +146,8 @@ func New(eng *engine.Engine) Model {
 	ta.SetHeight(8)
 	si := textinput.New()
 	si.Placeholder = "Message for the agent"
+	fi := textinput.New()
+	fi.Placeholder = "Words to match"
 	m := Model{
 		eng:         eng,
 		snap:        eng.Snapshot(),
@@ -153,6 +159,7 @@ func New(eng *engine.Engine) Model {
 		titleInput:  ti,
 		promptInput: ta,
 		sendInput:   si,
+		filterInput: fi,
 		detail:      viewport.New(80, 20),
 		imp:         newImportState(),
 	}
@@ -240,7 +247,29 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 			}
 		}
 	}
+	if m.filter != "" {
+		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, m.filter) })
+	}
 	return tasks
+}
+
+// matches reports whether the card's number, title, branch, issue or PR
+// contains every word of filter, ignoring case.
+func matches(t *store.Task, filter string) bool {
+	text := fmt.Sprintf("#%d %s %s", t.Number, t.Title, t.Branch)
+	if t.Issue != nil {
+		text += " " + t.Issue.Key
+	}
+	if t.PR != nil {
+		text += fmt.Sprintf(" #%d %s %s", t.PR.Number, t.PR.Title, t.PR.Branch)
+	}
+	text = strings.ToLower(text)
+	for _, word := range strings.Fields(strings.ToLower(filter)) {
+		if !strings.Contains(text, word) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m Model) current() *store.Task {
@@ -295,6 +324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptInput.SetWidth(min(100, m.width-8))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
+		m.filterInput.Width = max(20, m.width-14)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		return m, nil
 	case tickMsg:
@@ -452,6 +482,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateImport(msg)
 		case modeLive:
 			return m.updateLive(msg)
+		case modeFilter:
+			return m.updateFilter(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -570,7 +602,7 @@ func runOp(eng snapshotter, busy map[string]op, id string, o op, work func() act
 }
 
 // attach opens the task's live agent terminal; Ctrl-q returns to the board.
-func (m Model) attach(id string) (tea.Cmd, bool) {
+func (m *Model) attach(id string) (tea.Cmd, bool) {
 	name, ok := m.liveSession(id)
 	if !ok {
 		return nil, false
@@ -752,6 +784,14 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			id := t.ID
 			return m, m.action(id, "starting agent", func() error { return m.eng.Start(id) })
 		}
+	case "/":
+		m.mode = modeFilter
+		m.filterInput.SetValue(m.filter)
+		m.filterInput.CursorEnd()
+		m.filterInput.Focus()
+		return m, textinput.Blink
+	case "esc":
+		m.filter = ""
 	case "c":
 		if t != nil {
 			name, err := m.eng.Shell(t.ID)
@@ -895,6 +935,24 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.promptInput, cmd = m.promptInput.Update(msg)
 	}
+	return m, cmd
+}
+
+// updateFilter narrows the board as you type. Enter keeps the filter, esc
+// clears it.
+func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.filter = ""
+		m.mode = modeBoard
+		return m, nil
+	case "enter":
+		m.mode = modeBoard
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m.filter = strings.TrimSpace(m.filterInput.Value())
 	return m, cmd
 }
 
