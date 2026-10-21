@@ -359,20 +359,28 @@ func LastAssistantText(transcriptPath string) string {
 	return ""
 }
 
-// EvalCondition asks a small read-only Claude call whether condition holds for
-// the agent's reply.
-func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, error) {
+// AskHaiku runs prompt through a small read-only Claude call in dir and
+// returns its trimmed answer.
+func AskHaiku(ctx context.Context, dir, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	prompt := fmt.Sprintf("You judge automation conditions. Answer with exactly YES or NO.\n\nCondition: %s\n\nAgent's final message:\n<message>\n%s\n</message>", condition, reply)
-	cmd := exec.CommandContext(ctx, "claude", "-p", "--model", "haiku", "--permission-mode", "plan", prompt)
+	cmd := exec.CommandContext(ctx, "claude", "-p", "--no-session-persistence", "--model", "haiku", "--permission-mode", "plan", prompt)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// EvalCondition asks AskHaiku whether condition holds for the agent's reply.
+func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, error) {
+	prompt := fmt.Sprintf("You judge automation conditions. Answer with exactly YES or NO.\n\nCondition: %s\n\nAgent's final message:\n<message>\n%s\n</message>", condition, reply)
+	answer, err := AskHaiku(ctx, dir, prompt)
+	if err != nil {
 		return false, fmt.Errorf("condition check failed: %w", err)
 	}
-	answer := strings.ToUpper(strings.TrimSpace(string(out)))
-	return strings.HasPrefix(answer, "YES"), nil
+	return strings.HasPrefix(strings.ToUpper(answer), "YES"), nil
 }
 
 // Interrupted reports whether the transcript's last conversation entry is the

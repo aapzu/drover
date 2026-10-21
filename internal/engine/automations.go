@@ -55,6 +55,19 @@ func (e *Engine) runEnterGroup(t *store.Task, rows []config.Automation, gc group
 	}
 }
 
+// withoutAgent drops the rows that need an agent, for a column that runs none.
+func (e *Engine) withoutAgent(t *store.Task, rows []config.Automation) []config.Automation {
+	var kept []config.Automation
+	for _, row := range rows {
+		if row.Type == "send_message" {
+			e.logf(t, "Automation %q skipped: no agent runs in this column", rowName(row))
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept
+}
+
 // runTurnEnd runs the column's turn-end group after the agent finishes a turn
 // that started during the current visit, then delivers queued messages. The
 // group is that of the card the agent works for, so a move_to_column moves
@@ -342,7 +355,8 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	return nil
 }
 
-func desktopNotify(title, body string) {
+// desktopNotify is a variable so tests can capture notifications.
+var desktopNotify = func(title, body string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

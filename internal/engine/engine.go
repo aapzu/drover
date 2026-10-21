@@ -469,6 +469,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		t.AddLog(fmt.Sprintf("Moved %s → %s", from.Name, target.Name))
 	})
 
+	if !isAgentColumn(target) && !target.IsTodo() && !target.IsDone() && !opts.skipEnter {
+		defer e.runEnterGroup(t, e.withoutAgent(t, target.Automations.OnEnter), groupContext{from: from, to: target})
+	}
 	switch {
 	case !isAgentColumn(target) && othersActive:
 		if drives {

@@ -22,8 +22,13 @@ import (
 // hook events Claude would, replying "Verdict: Ready" to /code-review and
 // "Findings: applied" to anything else, including messages typed into it.
 // /plan only switches mode, Shift+Tab is ignored, and a worktree it is asked
-// to enter is entered unless FAKE_STAY is set.
+// to enter is entered unless FAKE_STAY is set. Haiku calls (-p) answer YES to
+// a condition containing ALWAYS and NO otherwise.
 const fakeClaude = `#!/bin/sh
+if [ "$1" = "-p" ]; then
+  case "$*" in *ALWAYS*) echo YES;; *) echo NO;; esac
+  exit 0
+fi
 settings=""; sid=""; prompt=""
 for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_LOG"
 echo "---" >> "$FAKE_LOG"
@@ -148,6 +153,15 @@ func waitFor(t *testing.T, e *Engine, what string, cond func(*store.Task) bool) 
 	}
 	t.Fatalf("timed out waiting for %s; column=%s log:\n%s", what, snap.Tasks[0].ColumnID, strings.Join(logs, "\n"))
 	return nil
+}
+
+func hasLog(task *store.Task, text string) bool {
+	for _, l := range task.Log {
+		if strings.Contains(l.Text, text) {
+			return true
+		}
+	}
+	return false
 }
 
 // waitNotBusy waits for in-flight moves to finish writing.
@@ -1086,14 +1100,6 @@ func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	}
 	if s := task(second.ID).Sessions[store.MainSession]; s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
 		t.Fatalf("second agent should be running, got %+v", s)
-	}
-	hasLog := func(task *store.Task, text string) bool {
-		for _, l := range task.Log {
-			if strings.Contains(l.Text, text) {
-				return true
-			}
-		}
-		return false
 	}
 	if !hasLog(task(first.ID), "free a slot for #") || !hasLog(task(second.ID), "to free a slot") {
 		t.Error("both cards should log the suspension")
