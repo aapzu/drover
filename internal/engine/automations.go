@@ -201,7 +201,7 @@ func (e *Engine) shouldRun(t *store.Task, row config.Automation, reply string) b
 		if dir == "" {
 			dir = e.Root
 		}
-		ok, err := claude.EvalCondition(context.Background(), dir, row.Condition, reply)
+		ok, err := claude.EvalCondition(e.stopping, dir, row.Condition, reply)
 		if err != nil {
 			e.logf(t, "Automation %q skipped: %v", rowName(row), err)
 			return false
@@ -359,4 +359,23 @@ func runShell(ctx context.Context, dir, script string, env []string, timeout tim
 		return fmt.Errorf("%w: %s", err, tail)
 	}
 	return nil
+}
+
+// autoName replaces the placeholder title of a new session's card with a
+// short summary of your first message, unless the title changed meanwhile.
+func (e *Engine) autoName(taskID, prompt, placeholder string) {
+	if runes := []rune(prompt); len(runes) > 4000 {
+		prompt = string(runes[:4000])
+	}
+	answer, err := claude.AskHaiku(e.stopping, e.Root,
+		"Write a title of at most six words for this coding task. Reply with the title only.\n\n<task>\n"+prompt+"\n</task>")
+	title := strings.TrimRight(strings.Trim(claude.FirstLine(answer), "\"'` *"), ".")
+	if err != nil || title == "" {
+		return
+	}
+	e.with(func() {
+		if t := e.find(taskID); t != nil && t.Title == placeholder {
+			t.Title = title
+		}
+	})
 }

@@ -132,6 +132,10 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.TurnInVisit = true
 			if prompt := strings.TrimSpace(ev.Prompt); t.Title == "" && prompt != "" && !strings.HasPrefix(prompt, "/") {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
+				if e.board.AutoName {
+					placeholder := t.Title
+					out = append(out, func() { e.autoName(taskID, prompt, placeholder) })
+				}
 			}
 			if s.Scratch && t.Title != "" {
 				out = append(out, func() { e.leaveScratchWorking(taskID) })

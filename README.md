@@ -83,7 +83,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
-  becomes the card's title. When that turn ends, the card moves to the first
+  becomes the card's title, which Claude Haiku then shortens to a few words
+  unless `autoName` is `false`. When that turn ends, the card moves to the first
   agent column (Planning by default), which creates its
   worktree and branch and resumes the same conversation there; if you're
   attached, you follow it. Move it yourself to go elsewhere sooner.
@@ -128,7 +129,8 @@ These settings work in `drover.json` and, for you alone, in
 {
   "maxConcurrent": 8,
   "idleTimeoutMinutes": 0,
-  "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 }
+  "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 },
+  "autoName": true
 }
 ```
 
@@ -142,6 +144,9 @@ These settings work in `drover.json` and, for you alone, in
   at most once per `cooldownSeconds` for each agent.
 - The agent you're attached to or typing into neither notifies you nor times
   out.
+- **`autoName`** titles a new session's card with a short summary of your
+  first message, written with `claude -p --model haiku`. A title you edit is
+  never replaced.
 
 ## Automations
 
