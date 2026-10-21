@@ -463,6 +463,8 @@ func TestWorktreesDirSetting(t *testing.T) {
 		root,
 		filepath.Join(root, ".claude", "worktrees", "feat"),
 		filepath.Join(root, ".claude", "worktrees", "1"),
+		filepath.Join(root, ".claude", "worktrees", "drover-fix"),
+		filepath.Join(root, ".claude", "worktrees", "drover-"),
 	} {
 		if e.ownsWorktree(path) {
 			t.Errorf("%s counts as a board worktree", path)
