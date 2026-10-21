@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/store"
@@ -402,6 +403,21 @@ func TestGroupsGetDistinctColors(t *testing.T) {
 	for _, split := range splits {
 		if got, want := m.groupOf(split).color, m.groupOf(m.task(split.GroupID)).color; got != want {
 			t.Errorf("%s is %s, its owner %s", split.ID, got, want)
+		}
+	}
+}
+
+func TestUsageLabel(t *testing.T) {
+	for _, c := range []struct {
+		usage claude.Usage
+		want  string
+	}{
+		{claude.Usage{}, ""},
+		{claude.Usage{Model: "claude-opus-5-5", Context: 420_000, Cost: 1.2}, "42% · $1.20"},
+		{claude.Usage{Model: "claude-mystery", Context: 5000, Cost: 0.001}, ""},
+	} {
+		if got := usageLabel(&store.Session{Usage: c.usage}); got != c.want {
+			t.Errorf("usageLabel(%+v) = %q, want %q", c.usage, got, c.want)
 		}
 	}
 }

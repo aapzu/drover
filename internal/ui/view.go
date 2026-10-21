@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
@@ -76,8 +77,10 @@ func (m Model) place(height int, content string) string {
 
 func (m Model) renderHeader() string {
 	var working, waiting, attention, queued int
+	cost := 0.0
 	for _, t := range m.snap.Tasks {
 		for _, s := range t.Sessions {
+			cost += s.Usage.Cost
 			if s.Status == store.StatusQueued {
 				queued++
 			}
@@ -110,6 +113,9 @@ func (m Model) renderHeader() string {
 	}
 	if queued > 0 {
 		stats = append(stats, muted.Render(fmt.Sprintf("◷ %d queued · %d/%d slots", queued, m.snap.Running, m.snap.MaxConcurrent)))
+	}
+	if cost >= 0.005 {
+		stats = append(stats, dim.Render(fmt.Sprintf("$%.2f", cost)))
 	}
 	right := strings.Join(stats, "  ") + " "
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
@@ -343,12 +349,32 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 			meta = append(meta, part)
 		}
 	}
-	lines := []string{line1, line2, ansi.Truncate(strings.Join(meta, " "), content, "…")}
+	metaLine := ansi.Truncate(strings.Join(meta, " "), content, "…")
+	if u := usageLabel(m.sessionFor(t)); u != "" && lipgloss.Width(metaLine)+lipgloss.Width(u)+1 <= content {
+		metaLine += strings.Repeat(" ", content-lipgloss.Width(metaLine)-lipgloss.Width(u)) + dim.Render(u)
+	}
+	lines := []string{line1, line2, metaLine}
 	if m.prefs.Density == densityTall {
 		lines = append(lines, replyLines(m.sessionFor(t), content, 3)...)
 	}
 	// Width excludes the border, which adds one cell on each side.
 	return style.Width(width - 2).Render(strings.Join(lines, "\n"))
+}
+
+// usageLabel is how full the session's context is and what it has cost, like
+// "42% · $1.20".
+func usageLabel(s *store.Session) string {
+	if s == nil {
+		return ""
+	}
+	var parts []string
+	if window := claude.ContextWindow(s.Usage.Model); window > 0 && s.Usage.Context > 0 {
+		parts = append(parts, fmt.Sprintf("%d%%", s.Usage.Context*100/window))
+	}
+	if s.Usage.Cost >= 0.005 {
+		parts = append(parts, fmt.Sprintf("$%.2f", s.Usage.Cost))
+	}
+	return strings.Join(parts, " · ")
 }
 
 var groupColors = []lipgloss.Color{"#22d3ee", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#facc15"}
