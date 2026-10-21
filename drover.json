@@ -32,6 +32,19 @@
             "name": "Review",
             "type": "send_message",
             "message": "/pr-review-toolkit:review-pr"
+          },
+          {
+            "name": "Build",
+            "type": "run_script",
+            "script": "go build ./... && go vet ./..."
+          }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Apply fixes",
+            "type": "send_message",
+            "message": "Apply the fixes the review found, then run go test ./...",
+            "condition": "The review reported issues that are not fixed yet"
           }
         ]
       }
@@ -39,7 +52,17 @@
     {
       "id": "in-review",
       "name": "In review",
-      "color": "#f59e0b"
+      "color": "#f59e0b",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Ping",
+            "type": "notify",
+            "title": "{{title}}",
+            "body": "PR #{{prNumber}} is in review"
+          }
+        ]
+      }
     },
     {
       "id": "done",

@@ -95,15 +95,59 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   agent with `--resume`. A permission change switches it in place while it is
   idle, and respawns it when that fails or the target leaves the mode to Claude
   Code. A card keeps one conversation across every column.
-- **Automations.** `onEnter` and `onTurnEnd` rows of type `send_message`
-  (delivered once the agent is idle), `move_to_column`, `run_script` and
-  `notify`, with `condition` (checked with `claude -p --model haiku`) and
-  `{{placeholders}}` such as
-  `{{baseBranch}}` and `{{agentReply}}`. `planExitTarget` moves a card once
-  its plan is approved.
+- **Automations.** Columns run rows when a card enters them or an agent's
+  turn ends; see [Automations](#automations). `planExitTarget` moves a card
+  once its plan is approved.
 - **Activity.** A `--settings` file adds Claude Code hooks that append events
   to `sessions/…/events.jsonl` in the state directory. The board reads them
   to show working, idle and needs-you states and to run turn-end automations.
+
+## Automations
+
+A column's `automations` has two lists of rows. `onEnter` runs when a card
+enters the column, `onTurnEnd` each time the agent there finishes a turn. Rows
+run top to bottom, and a failing row is logged on the card without stopping
+the rest; `move_to_column` ends the list either way. Nothing runs when a card enters To Do or Done.
+
+| Type | Does | Fields |
+| --- | --- | --- |
+| `send_message` | types `message` into the agent, or queues it until the agent is idle | `message` |
+| `run_script` | runs `script` with `sh -c` in the worktree, killed after `timeoutMinutes` (default 10) | `script`, `timeoutMinutes` |
+| `notify` | shows a desktop notification and a notice on the board | `title` (default `{{title}}`), `body` (default `{{toColumn}}`) |
+| `move_to_column` | moves the card, `onTurnEnd` only | `targetColumn` (default: the next column), `message` (sent after the move) |
+
+- **Columns without an agent** run `run_script` and `notify` rows and skip
+  `send_message`.
+- **A fresh agent** starts with an `onEnter` group's first `send_message`,
+  if it has no `condition`, instead of the task prompt, so a review column can open with
+  `/code-review`.
+- **`condition`** on any row asks `claude -p --model haiku` whether it holds
+  for the agent's last reply. The row is skipped unless the answer is yes.
+- **Placeholders** in `message`, `script`, `title` and `body`: `{{title}}`,
+  `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
+  `{{baseBranch}}`, `{{worktreePath}}`, `{{projectPath}}`, `{{projectName}}`,
+  `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`, `{{issueKey}}`,
+  `{{issueUrl}}`, `{{fromColumn}}`, `{{toColumn}}`, `{{trigger}}` and
+  `{{agentReply}}`. In a `script` they are shell-quoted, and each is also set
+  as an environment variable such as `$DROVER_TASKNUMBER`.
+
+This repo's own board reviews and builds on entering Self-review, asks for
+fixes if the review reported issues, and notifies you once a PR is in
+review:
+
+```json
+"automations": {
+  "onEnter": [
+    { "name": "Review", "type": "send_message", "message": "/pr-review-toolkit:review-pr" },
+    { "name": "Build", "type": "run_script", "script": "go build ./... && go vet ./..." }
+  ],
+  "onTurnEnd": [
+    { "name": "Apply fixes", "type": "send_message",
+      "message": "Apply the fixes the review found, then run go test ./...",
+      "condition": "The review reported issues that are not fixed yet" }
+  ]
+}
+```
 
 ## One card per pull request
 
