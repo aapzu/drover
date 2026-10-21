@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -219,13 +220,22 @@ func (e *Engine) worktreesDir() string {
 const worktreeFolderPrefix = "drover-"
 
 // ownsWorktree reports whether path is under the default worktrees directory
-// or a drover-prefixed folder of the configured one.
+// or a drover-<N> folder of the configured one.
 func (e *Engine) ownsWorktree(path string) bool {
 	if claude.Within(filepath.Join(e.Root, config.DefaultWorktreesDir), path) {
 		return true
 	}
 	rel, err := filepath.Rel(e.worktreesDir(), path)
-	return err == nil && filepath.IsLocal(rel) && strings.HasPrefix(rel, worktreeFolderPrefix)
+	if err != nil || !filepath.IsLocal(rel) {
+		return false
+	}
+	folder, _, _ := strings.Cut(rel, string(filepath.Separator))
+	number, ok := strings.CutPrefix(folder, worktreeFolderPrefix)
+	if !ok {
+		return false
+	}
+	_, err = strconv.ParseUint(number, 10, 64)
+	return err == nil
 }
 
 // reloadBoard picks up edits to drover.json made while the TUI runs.
