@@ -69,6 +69,8 @@ type Task struct {
 	Log           []LogEntry          `json:"log,omitempty"`
 	CreatedAt     time.Time           `json:"createdAt"`
 	UpdatedAt     time.Time           `json:"updatedAt"`
+	// Archived cards stay in Done but are hidden from the board.
+	Archived bool `json:"archived,omitempty"`
 }
 
 type Session struct {

@@ -375,6 +375,75 @@ func (e *Engine) DeleteTask(id string) error {
 	return nil
 }
 
+// ArchiveTask hides a card in Done from the board, or shows it again.
+func (e *Engine) ArchiveTask(id string, archived bool) error {
+	var err error
+	e.with(func() {
+		t := e.find(id)
+		if t == nil {
+			err = errors.New("task not found")
+			return
+		}
+		if col, _, _ := e.board.Column(t.ColumnID); !col.IsDone() {
+			err = fmt.Errorf("#%d is not in Done", t.Number)
+			return
+		}
+		t.Archived = archived
+		if archived {
+			t.AddLog("Archived")
+		} else {
+			t.UpdatedAt = time.Now()
+			t.AddLog("Restored from the archive")
+		}
+	})
+	return err
+}
+
+// ArchiveColumn archives every card in a Done column and returns how many
+// were.
+func (e *Engine) ArchiveColumn(colID string) int {
+	n := 0
+	e.with(func() {
+		if col, _, _ := e.board.Column(colID); !col.IsDone() {
+			return
+		}
+		for _, t := range e.state.Tasks {
+			if t.ColumnID == colID && !t.Archived {
+				t.Archived = true
+				t.AddLog("Archived")
+				n++
+			}
+		}
+	})
+	return n
+}
+
+// archiveStale archives cards that have sat in Done for archiveDoneAfter and
+// tells you, as they vanish from the board.
+func (e *Engine) archiveStale(now time.Time) {
+	after := e.board.ArchiveAfter()
+	if after == 0 {
+		return
+	}
+	n := 0
+	for _, t := range e.state.Tasks {
+		if t.Archived {
+			continue
+		}
+		if col, _, _ := e.board.Column(t.ColumnID); !col.IsDone() {
+			continue
+		}
+		if now.Sub(t.UpdatedAt) > after {
+			t.Archived = true
+			t.AddLog("Archived after " + e.board.ArchiveDoneAfter + " in Done")
+			n++
+		}
+	}
+	if n > 0 {
+		e.notify("Archived %d cards after %s in Done. v shows them.", n, e.board.ArchiveDoneAfter)
+	}
+}
+
 func (e *Engine) WorktreeDirty(id string) bool {
 	e.mu.Lock()
 	t := e.find(id)
@@ -472,6 +541,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 				s.TurnInVisit = false
 			}
 		}
+		t.Archived = false
 		t.AddLog(fmt.Sprintf("Moved %s → %s", from.Name, target.Name))
 	})
 

@@ -137,7 +137,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  n new  / filter  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
 		modeLive:    "LIVE: every key goes to the agent  ctrl+q back to board  mouse wheel scrolls",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
@@ -174,7 +174,7 @@ func columnSummary(c config.Column) string {
 	case c.IsTodo():
 		return "sessions · main checkout"
 	case c.IsDone():
-		return "archived · worktree removed"
+		return "finished · worktree removed"
 	case !c.AutoSpawn:
 		return "agent paused"
 	}
@@ -206,6 +206,9 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	inner := width - 2
 	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Underline(selected)
 	count := fmt.Sprintf(" %d", len(tasks))
+	if hidden := m.archivedIn(col.ID); hidden > 0 {
+		count += fmt.Sprintf(" +%d", hidden)
+	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
 	summary := dim.Render(ansi.Truncate(columnSummary(col), inner-1, "…"))
 	if dropping {
@@ -327,6 +330,8 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	}
 	if dragged {
 		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
+	} else if t.Archived {
+		style = style.Faint(true)
 	}
 	group := groupMarker(g, t, sibling)
 	if m.prefs.Density == densityCompact {
@@ -624,6 +629,9 @@ func (m Model) renderHelp() string {
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
+		{"A", "archive or restore a card in Done"},
+		{"C", "archive every card in Done"},
+		{"v", "show or hide archived cards"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},

@@ -1,4 +1,5 @@
 {
+  "archiveDoneAfter": "7d",
   "worktreesDir": ".claude/worktrees",
   "columns": [
     {

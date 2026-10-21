@@ -74,6 +74,7 @@ func (e *Engine) Tick() {
 			followUps = append(followUps, e.pollExternal()...)
 		}
 		followUps = append(followUps, e.pollPRs()...)
+		e.archiveStale(time.Now())
 	})
 
 	for _, fn := range followUps {
