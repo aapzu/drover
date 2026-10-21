@@ -336,7 +336,7 @@ func (m Model) renderImport(height int) string {
 	case imp.err != "":
 		lines = append(lines, needsYou.Render(ansi.Wordwrap(imp.err, inner, " ")))
 	case len(imp.items) == 0 && imp.source == sourceClaude:
-		lines = append(lines, dim.Render("No Claude Code sessions for this repository that aren't on the board yet."))
+		lines = append(lines, dim.Render("No running agents or `claude agents` sessions for this repository that aren't on the board yet."))
 	case len(imp.items) == 0:
 		lines = append(lines, dim.Render("No open issues assigned to you. Press / to fetch one by key."))
 	}

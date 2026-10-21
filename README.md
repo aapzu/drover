@@ -214,8 +214,10 @@ cards don't follow a PR to release.
 `I` lists Claude Code conversations started in this repo or any directory
 below it, such as worktrees. Sessions are grouped by directory, directories
 with running agents first. Within a directory, running agents come first and
-are preselected, then past sessions, newest first. The list loads the 40
-newest past sessions; `m` loads 40 more while older ones remain.
+are preselected, then past sessions, newest first. Only past sessions that
+`claude agents` still lists are shown; terminal sessions it never tracked and
+agents you dismissed there are hidden. The list loads the 40 newest past
+sessions; `m` loads 40 more while older ones remain.
 
 `space` on a directory header selects its sessions, or clears them if all are
 selected. `a` does the same for every loaded session.
