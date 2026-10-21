@@ -54,6 +54,7 @@ type actionDoneMsg struct {
 	done      string
 	snap      engine.Snapshot
 	retryDone func() tea.Cmd
+	attach    bool
 }
 type attachDoneMsg struct {
 	id       string
@@ -443,6 +444,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.done != "" {
 			m.setFlash(msg.done)
 		}
+		if msg.err == nil && msg.attach {
+			if cmd, ok := m.attach(msg.id); ok {
+				return m, cmd
+			}
+			m.setFlash("The agent starts once a slot frees up")
+		}
 		return m, nil
 	case takeOverDoneMsg:
 		m.applySnap(msg.snap)
@@ -791,8 +798,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if !ok {
-			m.setFlash("No running agent. Press r to start or resume it.")
-			break
+			id := t.ID
+			return m, runOp(m.eng, m.busy, id, op{label: "starting agent"}, func() actionDoneMsg {
+				return actionDoneMsg{err: m.eng.Start(id), attach: true}
+			})
 		}
 		return m, cmd
 	case "s":

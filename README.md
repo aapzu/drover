@@ -48,7 +48,7 @@ drover
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
 | `v` | show or hide archived cards |
-| `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
+| `enter` | attach to the agent's terminal, starting it if needed (`Ctrl-q` returns) |
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
 | `s` | send the agent a message |
 | `r` / `S` | start or resume / suspend the agent |
