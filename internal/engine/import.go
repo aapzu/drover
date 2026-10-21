@@ -268,10 +268,9 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 }
 
 // ImportIssues adds a To Do card per issue not already on the board and
-// returns how many it added. The worktree branch is Linear's branch name, so
-// pull requests link back to the issue.
-func (e *Engine) ImportIssues(issues []linear.Issue) int {
-	added := 0
+// returns the cards it added.
+func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
+	var added []*store.Task
 	for _, i := range issues {
 		e.with(func() {
 			for _, t := range e.state.Tasks {
@@ -302,7 +301,7 @@ func (e *Engine) ImportIssues(issues []linear.Issue) int {
 			e.state.NextNumber++
 			t.AddLog(fmt.Sprintf("Imported Linear issue %s", i.Identifier))
 			e.state.Tasks = append(e.state.Tasks, t)
-			added++
+			added = append(added, t)
 		})
 	}
 	return added

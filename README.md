@@ -242,6 +242,37 @@ fetches any issue by key or URL.
 - With `DROVER_LINEAR_SYNC=1`, starting an agent on an unstarted issue
   moves it to the team's first "started" state, such as In Progress.
 
+## Command line
+
+Scripts, hooks and agents can change the board from a shell. Run these from
+the repo or any of its worktrees:
+
+```sh
+drover list [--json]
+drover add "Fix the login bug" -p "Steps to reproduce…" -c planning
+drover add --linear DX-123
+drover move 4 "In review"
+drover edit 4 --title "Fix signup" --prompt "…"
+drover rm 4
+```
+
+- Cards are addressed by the number `list` shows (`4`; quote it as `'#4'` if you
+  write the `#`). Columns are ids or names. A prompt of `-` is read from stdin.
+- Without `--force`, `move` to Done and `rm` fail when the card's worktree has
+  uncommitted changes. `--force` discards them. The branch is kept.
+- `add -c` into an agent column starts the agent, like a move. If that fails the
+  card stays in To Do and the command says why.
+- `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The
+  title and prompt come from the issue, and one already on the board is refused.
+- The open board applies requests one at a time and the command prints the
+  result. If the board doesn't answer within two minutes, the command fails but
+  the change may still be applied, so run `list` before retrying.
+- With no board open, the change is queued and applied the next time one opens.
+  Errors then show up on the board, not in your shell. `list` reads the saved
+  state, so it shows applied changes only.
+- `list`, `add`, `move`, `edit` and `rm` are commands, so a directory with one
+  of those names needs `./`.
+
 ## Notes
 
 - Tasks live in `$XDG_STATE_HOME/drover/<repo>-<hash>/state.json`
