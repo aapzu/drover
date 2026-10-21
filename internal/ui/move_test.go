@@ -175,6 +175,26 @@ func TestActionsLabelTheirCardWithoutMovingIt(t *testing.T) {
 	}
 }
 
+func TestEnterStartsAgentWithoutOne(t *testing.T) {
+	m := testModel(120, 40, 2, 1)
+	card := m.current()
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if o, ok := m.busy[card.ID]; !ok || o.label != "starting agent" {
+		t.Errorf("busy[%s] = %+v, want starting agent", card.ID, o)
+	}
+}
+
+func TestStartedAgentDoesNotAttachOverModal(t *testing.T) {
+	m := testModel(120, 40, 2, 1)
+	card := m.current()
+	m.snap.Live = map[string]string{card.ID: "drover-test"}
+	m.mode, m.modalTask = modeSend, card.ID
+	if _, cmd := m.Update(actionDoneMsg{id: card.ID, snap: m.snap, attach: true}); cmd != nil {
+		t.Error("attached over an open modal")
+	}
+}
+
 func TestStatusPrefersEngineStep(t *testing.T) {
 	m := testModel(120, 40, 1, 1)
 	card := m.snap.Tasks[0]

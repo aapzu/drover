@@ -1233,6 +1233,7 @@ func (e *Engine) startQueuedNow(t *store.Task, key string) {
 			stop = e.freeSlot(t)
 		}
 		if e.runningCount() >= e.limit() {
+			e.notifyQueued(t)
 			return
 		}
 		start = true
@@ -1249,6 +1250,10 @@ func (e *Engine) startQueuedNow(t *store.Task, key string) {
 		defer e.launching.Delete(name)
 		e.launchQueued(t, key)
 	}
+}
+
+func (e *Engine) notifyQueued(t *store.Task) {
+	e.notify("#%d queued: %d agents running (limit %d). Suspend one with S to free a slot", t.Number, e.runningCount(), e.limit())
 }
 
 // spawn starts the agent in tmux, or queues it when the concurrency limit is
@@ -1316,7 +1321,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 				s.Pending = append([]store.Pending{{Text: prompt}}, s.Pending...)
 			}
 			t.AddLog("Agent queued: concurrency limit reached")
-			e.notify("#%d queued: %d agents running (limit %d). Suspend one with S to free a slot", t.Number, e.runningCount(), e.limit())
+			e.notifyQueued(t)
 			return
 		}
 		s.Status = store.StatusRunning
