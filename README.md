@@ -46,6 +46,8 @@ drover
 | `m` then `1`–`9` | move card to a column |
 | `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
+| `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
+| `v` | show or hide archived cards |
 | `enter` | attach to the agent's terminal (`Ctrl-q` returns) |
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
 | `s` | send the agent a message |
@@ -81,6 +83,11 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
+- **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
+  that have sat in Done that long. Archived cards stay in the state file and
+  the column header shows how many are hidden (`Done 4 +37`). The built-in
+  board uses `7d`; with the setting missing from your `drover.json` nothing is
+  archived automatically. `drover.local.json` doesn't read it.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words

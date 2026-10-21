@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 const sample = `{
@@ -152,6 +153,46 @@ func TestPRFlow(t *testing.T) {
 	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`), 0o644)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("prFlow.requested without autoSpawn accepted")
+	}
+}
+
+func TestParseAge(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"7d":    7 * 24 * time.Hour,
+		"36h":   36 * time.Hour,
+		"1h30m": 90 * time.Minute,
+	} {
+		if got, err := parseAge(in); err != nil || got != want {
+			t.Errorf("parseAge(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "0", "0d", "-1d", "abc", "d", "7days", "0.5d", "1e9d", "1s"} {
+		if _, err := parseAge(in); err == nil {
+			t.Errorf("parseAge(%q) succeeded", in)
+		}
+	}
+}
+
+func TestArchiveDoneAfter(t *testing.T) {
+	root := t.TempDir()
+	write := func(after string) {
+		os.WriteFile(filepath.Join(root, FileName), []byte(`{"version":1,`+after+`"columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	}
+	write(`"archiveDoneAfter":"3d",`)
+	board, _, err := Load(root)
+	if err != nil || board.ArchiveAfter() != 72*time.Hour {
+		t.Fatalf("got %v, %v", board.ArchiveAfter(), err)
+	}
+	write("")
+	if board, _, err = Load(root); err != nil || board.ArchiveAfter() != 0 {
+		t.Fatalf("unset: got %v, %v", board.ArchiveAfter(), err)
+	}
+	write(`"archiveDoneAfter":"soon",`)
+	if _, _, err = Load(root); err == nil {
+		t.Error("a bad archiveDoneAfter loaded")
+	}
+	if Default().ArchiveAfter() == 0 {
+		t.Error("the default board never archives")
 	}
 }
 

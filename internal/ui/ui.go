@@ -201,13 +201,42 @@ func (m Model) columns() []config.Column { return m.snap.Board.Columns }
 
 func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
+	hides := m.hidesArchived(colID)
 	for _, t := range m.snap.Tasks {
-		if m.columnOf(t) == colID {
+		if m.columnOf(t) == colID && !(hides && t.Archived) {
 			out = append(out, t)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return m.updatedAt(out[i]).Before(m.updatedAt(out[j])) })
 	return out
+}
+
+func pluralCards(n int) string {
+	if n == 1 {
+		return "the card"
+	}
+	return fmt.Sprintf("all %d cards", n)
+}
+
+// hidesArchived is whether a column hides its archived cards: only Done
+// columns do, so a card is never lost if its column stops being Done.
+func (m Model) hidesArchived(colID string) bool {
+	col, _, _ := m.snap.Board.Column(colID)
+	return col.IsDone() && !m.prefs.ShowArchived
+}
+
+// archivedIn counts the archived cards the board hides in a column.
+func (m Model) archivedIn(colID string) int {
+	if !m.hidesArchived(colID) {
+		return 0
+	}
+	n := 0
+	for _, t := range m.snap.Tasks {
+		if t.Archived && m.columnOf(t) == colID {
+			n++
+		}
+	}
+	return n
 }
 
 // op is an action running on a card. A move also sets column, so the card
@@ -875,6 +904,48 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd
+	case "A":
+		if t == nil {
+			break
+		}
+		archive := !t.Archived
+		if err := m.eng.ArchiveTask(t.ID, archive); err != nil {
+			m.setFlash("Error: " + err.Error())
+			break
+		}
+		m.snap = m.eng.Snapshot()
+		if archive {
+			m.setFlash(fmt.Sprintf("Archived #%d. v shows archived cards.", t.Number))
+		} else {
+			m.setFlash(fmt.Sprintf("Restored #%d", t.Number))
+		}
+	case "C":
+		if !cols[m.col].IsDone() {
+			m.setFlash("Only the Done column can be archived")
+			break
+		}
+		n := 0
+		for _, task := range m.tasksForColumn(m.col) {
+			if !task.Archived {
+				n++
+			}
+		}
+		if n == 0 {
+			m.setFlash("Nothing to archive")
+			break
+		}
+		eng, colID := m.eng, cols[m.col].ID
+		m.mode = modeConfirm
+		m.confirmText = fmt.Sprintf("Archive %s in %s? They are hidden, not deleted; v shows them. (y/N)", pluralCards(n), cols[m.col].Name)
+		m.confirmAction = func() tea.Cmd {
+			return func() tea.Msg {
+				eng.ArchiveColumn(colID)
+				return snapMsg(eng.Snapshot())
+			}
+		}
+	case "v":
+		m.prefs.ShowArchived = !m.prefs.ShowArchived
+		m.savePrefs()
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

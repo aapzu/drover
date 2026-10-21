@@ -2005,3 +2005,133 @@ func TestReviewInAWorkingSessionGetsItsOwnCard(t *testing.T) {
 		t.Fatalf("review card: group %q, column %s, %+v", review.GroupID, review.ColumnID, review.PR)
 	}
 }
+
+func TestLeavingDoneClearsArchived(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := e.CreateTask("Fix the login bug", "")
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ArchiveTask(task.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if e.Snapshot().Tasks[0].Archived {
+		t.Error("leaving Done kept the card archived")
+	}
+}
+
+func TestArchiveTaskOnlyInDone(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := e.CreateTask("Open", "")
+	finished := e.CreateTask("Finished", "")
+	if err := e.Move(finished.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ArchiveTask(open.ID, true); err == nil {
+		t.Error("archived a card outside Done")
+	}
+	if n := e.ArchiveColumn("exec"); n != 0 {
+		t.Errorf("ArchiveColumn on a non-Done column = %d, want 0", n)
+	}
+	if n := e.ArchiveColumn("done"); n != 1 {
+		t.Errorf("ArchiveColumn = %d, want 1", n)
+	}
+	if n := e.ArchiveColumn("done"); n != 0 {
+		t.Errorf("second ArchiveColumn = %d, want 0", n)
+	}
+	for _, task := range e.Snapshot().Tasks {
+		if task.Archived != (task.ID == finished.ID) {
+			t.Errorf("#%d archived = %v", task.Number, task.Archived)
+		}
+	}
+	if err := e.ArchiveTask(finished.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range e.Snapshot().Tasks {
+		if task.ID == finished.ID && task.Archived {
+			t.Error("card still archived after restoring it")
+		}
+	}
+}
+
+func TestArchiveStaleUsesTimeInDone(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	e.with(func() {
+		e.board.ArchiveDoneAfter = "7d"
+		e.state.Tasks = []*store.Task{
+			{ID: "old", ColumnID: "done", UpdatedAt: now.Add(-8 * 24 * time.Hour)},
+			{ID: "fresh", ColumnID: "done", UpdatedAt: now.Add(-24 * time.Hour)},
+			{ID: "open", ColumnID: "exec", UpdatedAt: now.Add(-30 * 24 * time.Hour)},
+		}
+		e.archiveStale(now)
+	})
+	want := map[string]bool{"old": true, "fresh": false, "open": false}
+	for _, task := range e.Snapshot().Tasks {
+		if task.Archived != want[task.ID] {
+			t.Errorf("%s archived = %v, want %v", task.ID, task.Archived, want[task.ID])
+		}
+	}
+
+	if err := e.ArchiveTask("old", false); err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() { e.archiveStale(now) })
+	for _, task := range e.Snapshot().Tasks {
+		if task.ID == "old" && task.Archived {
+			t.Error("a restored card was archived again on the next sweep")
+		}
+	}
+
+	e.with(func() {
+		e.board.ArchiveDoneAfter = ""
+		for _, task := range e.state.Tasks {
+			task.Archived = false
+			task.UpdatedAt = now.Add(-30 * 24 * time.Hour)
+		}
+		e.archiveStale(now)
+	})
+	for _, task := range e.Snapshot().Tasks {
+		if task.Archived {
+			t.Errorf("%s archived with archiveDoneAfter unset", task.ID)
+		}
+	}
+}
+
+func TestTickArchivesStaleDoneCards(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() {
+		e.board.ArchiveDoneAfter = "7d"
+		e.state.Tasks = []*store.Task{{ID: "old", ColumnID: "done", UpdatedAt: time.Now().Add(-8 * 24 * time.Hour)}}
+	})
+	e.Tick()
+	if !e.Snapshot().Tasks[0].Archived {
+		t.Error("Tick left a stale Done card unarchived")
+	}
+	reloaded, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.Snapshot().Tasks[0].Archived {
+		t.Error("archived state didn't survive a reload")
+	}
+}

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const FileName = "drover.json"
@@ -18,10 +20,14 @@ const (
 	DefaultMaxConcurrent = 8
 )
 
+// maxArchiveDays keeps a day count inside what a Duration can hold.
+const maxArchiveDays = 100 * 365
+
 type Board struct {
 	DefaultBaseBranch     string        `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string        `json:"defaultPermissionMode,omitempty"`
 	WorktreesDir          string        `json:"worktreesDir,omitempty"`
+	ArchiveDoneAfter      string        `json:"archiveDoneAfter,omitempty"`
 	CopyFiles             []string      `json:"copyFiles,omitempty"`
 	InitScript            string        `json:"initScript,omitempty"`
 	MaxConcurrent         int           `json:"maxConcurrent,omitempty"`
@@ -198,9 +204,40 @@ func (b *Board) Limit() int {
 	return DefaultMaxConcurrent
 }
 
+// parseAge reads a duration such as "36h" or "7d"; Go's own syntax has no
+// days, so those are whole numbers.
+func parseAge(s string) (time.Duration, error) {
+	var d time.Duration
+	var err error
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		var n int
+		if n, err = strconv.Atoi(days); err == nil && n > 0 && n < maxArchiveDays {
+			d = time.Duration(n) * 24 * time.Hour
+		}
+	} else {
+		d, err = time.ParseDuration(s)
+	}
+	if err != nil || d < time.Minute {
+		return 0, fmt.Errorf("%q is not a duration of a minute or more, like 7d or 36h", s)
+	}
+	return d, nil
+}
+
+// ArchiveAfter is how long a card may sit in Done before it is archived;
+// zero when archiveDoneAfter is unset.
+func (b *Board) ArchiveAfter() time.Duration {
+	d, _ := parseAge(b.ArchiveDoneAfter)
+	return d
+}
+
 func (b *Board) validate() error {
 	if len(b.Columns) == 0 {
 		return fmt.Errorf("%s has no columns", FileName)
+	}
+	if b.ArchiveDoneAfter != "" {
+		if _, err := parseAge(b.ArchiveDoneAfter); err != nil {
+			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
+		}
 	}
 	seen := map[string]bool{}
 	for _, c := range b.Columns {
@@ -304,8 +341,9 @@ func (b *Board) TodoColumn() Column {
 
 func Default() *Board {
 	return &Board{
-		Notifications: DefaultNotifications(),
-		AutoName:      true,
+		ArchiveDoneAfter: "7d",
+		Notifications:    DefaultNotifications(),
+		AutoName:         true,
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
