@@ -6,7 +6,7 @@ starts.
 ```
  ▦ drover     my-app on main                                              ⠧ 1 working  ◆ 1 need you
  1 Sessions 2           2 Planning 1             3 Executing 1            4 Code Review 0
- sessions · main check… plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · isolated · ⚡2
+ sessions · main check… plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · ⚡2
 ╭──────────────────────╮╭──────────────────────╮╭──────────────────────╮
 │ #3 Upgrade React     ││ #1 Fix the login bug ││ #2 Add dark mode     │
 │                      ││                      ││ to settings page     │
@@ -80,7 +80,7 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
   becomes the card's title. When that turn ends, the card moves to the first
-  agent column that isn't isolated (Planning by default), which creates its
+  agent column (Planning by default), which creates its
   worktree and branch and resumes the same conversation there; if you're
   attached, you follow it. Move it yourself to go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
@@ -94,13 +94,11 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   Code's own default when that is unset. A model or effort change respawns the
   agent with `--resume`. A permission change switches it in place while it is
   idle, and respawns it when that fails or the target leaves the mode to Claude
-  Code. `sessionTarget: "isolated"` and
-  `sessionSpawnStrategy: "always_spawn_new"` give a column its own
-  conversation.
-- **Automations.** `onEnter`, `onTurnEnd` and `onExit` rows of type
-  `send_message` (`immediate` or deferred), `move_to_column`, `run_script`,
-  `webhook` and `notify`, with `finalLine`, `maxRuns`, `condition` (checked
-  with `claude -p --model haiku`) and `{{placeholders}}` such as
+  Code. A card keeps one conversation across every column.
+- **Automations.** `onEnter` and `onTurnEnd` rows of type `send_message`
+  (delivered once the agent is idle), `move_to_column`, `run_script` and
+  `notify`, with `condition` (checked with `claude -p --model haiku`) and
+  `{{placeholders}}` such as
   `{{baseBranch}}` and `{{agentReply}}`. `planExitTarget` moves a card once
   its plan is approved.
 - **Activity.** A `--settings` file adds Claude Code hooks that append events

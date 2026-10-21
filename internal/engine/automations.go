@@ -1,21 +1,15 @@
 package engine
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
@@ -28,8 +22,6 @@ type groupContext struct {
 	reply    string
 }
 
-func isSendMessage(kind string) bool { return kind == "send_message" || kind == "send_command" }
-
 func rowName(row config.Automation) string {
 	if row.Name != "" {
 		return row.Name
@@ -37,38 +29,29 @@ func rowName(row config.Automation) string {
 	return row.Type
 }
 
-// runGroup runs an enter or exit group top to bottom. A failing row is logged
-// and never stops the rest of the group or the move.
-func (e *Engine) runGroup(t *store.Task, col config.Column, trigger string, rows []config.Automation, gc groupContext) {
+// runEnterGroup runs the column's enter group top to bottom. A failing row is
+// logged and never stops the rest of the group or the move.
+func (e *Engine) runEnterGroup(t *store.Task, rows []config.Automation, gc groupContext) {
 	if len(rows) == 0 {
 		return
 	}
-	gc.trigger = trigger
+	gc.trigger = "enter"
 	e.mu.Lock()
 	gc.reply = ""
-	if s := e.owner(t).Sessions[sessionKey(col)]; s != nil {
+	if s := e.owner(t).Sessions[store.MainSession]; s != nil {
 		gc.reply = s.LastReply
 	}
 	e.mu.Unlock()
 
-	deadline := time.Time{}
-	if trigger == "exit" {
-		deadline = time.Now().Add(60 * time.Second)
-	}
-	for i, row := range rows {
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			e.logf(t, "Exit automations hit the 60s cap; skipped the rest")
-			return
-		}
-		key := runKey(col.ID, trigger, i)
-		if !e.shouldRun(t, col, row, key, gc.reply, false) {
+	for _, row := range rows {
+		if !e.shouldRun(t, row, gc.reply) {
 			continue
 		}
 		if row.Type == "move_to_column" {
 			e.logf(t, "Automation %q skipped: move_to_column only runs on turn end", rowName(row))
 			continue
 		}
-		e.execute(t, col, row, key, gc)
+		e.execute(t, row, gc)
 	}
 }
 
@@ -90,15 +73,14 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 	board := e.board
 	e.mu.Unlock()
 
-	if sessionKey(col) == sessKey {
+	if sessKey == store.MainSession {
 		gc := groupContext{from: col, to: col, trigger: "turn_end", reply: reply}
-		for i, row := range col.Automations.OnTurnEnd {
-			key := runKey(col.ID, "turn_end", i)
-			if !e.shouldRun(t, col, row, key, reply, true) {
+		for _, row := range col.Automations.OnTurnEnd {
+			if !e.shouldRun(t, row, reply) {
 				continue
 			}
 			if row.Type != "move_to_column" {
-				e.execute(t, col, row, key, gc)
+				e.execute(t, row, gc)
 				continue
 			}
 			target, ok := moveTarget(board, row.TargetColumn, idx)
@@ -107,11 +89,10 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 				continue
 			}
 			gc.to = target
-			message := e.render(t, row.Message, gc, "")
+			message := e.render(t, row.Message, gc, false)
 			e.logf(t, "Automation %q: moving to %s", rowName(row), target.Name)
 			err := e.moveLocked(t.ID, target.ID, MoveOptions{Message: message})
 			if err == nil {
-				e.with(func() { t.AutomationRuns = bump(t.AutomationRuns, key) })
 				return
 			}
 			if errors.Is(err, ErrDirty) {
@@ -162,8 +143,7 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	due := s != nil && t.Title != "" && !held && s.Status == store.StatusRunning && (working || idle)
 	e.mu.Unlock()
 	target, ok := firstAgentColumn(board)
-	// A column that always spawns a new agent would kill a busy one mid-turn.
-	if !due || !ok || (working && target.AlwaysSpawnNew()) {
+	if !due || !ok {
 		return false
 	}
 	why := "First turn done"
@@ -199,19 +179,11 @@ func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column,
 	return board.Find(ref)
 }
 
-// shouldRun applies maxRuns, finalLine and condition. A row that does not
-// match is not counted, so it is checked again at the next turn end.
-func (e *Engine) shouldRun(t *store.Task, col config.Column, row config.Automation, key, reply string, turnEnd bool) bool {
+// shouldRun checks the row's condition, if any, against the agent's reply.
+func (e *Engine) shouldRun(t *store.Task, row config.Automation, reply string) bool {
 	e.mu.Lock()
-	runs := t.AutomationRuns[key]
 	worktree := e.owner(t).WorktreePath
 	e.mu.Unlock()
-	if row.MaxRuns > 0 && runs >= row.MaxRuns {
-		return false
-	}
-	if row.FinalLine != "" && turnEnd && !MatchFinalLine(reply, row.FinalLine) {
-		return false
-	}
 	if row.Condition != "" {
 		dir := worktree
 		if dir == "" {
@@ -230,19 +202,17 @@ func (e *Engine) shouldRun(t *store.Task, col config.Column, row config.Automati
 	return true
 }
 
-func (e *Engine) execute(t *store.Task, col config.Column, row config.Automation, key string, gc groupContext) {
+func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) {
 	var err error
-	switch {
-	case isSendMessage(row.Type):
+	switch row.Type {
+	case "send_message":
 		e.mu.Lock()
 		owner := e.owner(t)
 		e.mu.Unlock()
-		e.sendMessage(owner, sessionKey(col), e.render(t, row.Message, gc, ""), row.Mode == "immediate")
-	case row.Type == "run_script":
+		e.sendMessage(owner, store.MainSession, e.render(t, row.Message, gc, false))
+	case "run_script":
 		err = e.runScript(t, row, gc)
-	case row.Type == "webhook":
-		err = e.webhook(t, row, gc)
-	case row.Type == "notify":
+	case "notify":
 		title, body := row.Title, row.Body
 		if title == "" {
 			title = "{{title}}"
@@ -250,8 +220,8 @@ func (e *Engine) execute(t *store.Task, col config.Column, row config.Automation
 		if body == "" {
 			body = "{{toColumn}}"
 		}
-		desktopNotify(e.render(t, title, gc, ""), e.render(t, body, gc, ""))
-		e.notify("%s", e.render(t, title+": "+body, gc, ""))
+		desktopNotify(e.render(t, title, gc, false), e.render(t, body, gc, false))
+		e.notify("%s", e.render(t, title+": "+body, gc, false))
 	default:
 		err = fmt.Errorf("unsupported automation type %q", row.Type)
 	}
@@ -260,7 +230,6 @@ func (e *Engine) execute(t *store.Task, col config.Column, row config.Automation
 			t.AddLog(fmt.Sprintf("Automation %q failed: %v", rowName(row), err))
 			return
 		}
-		t.AutomationRuns = bump(t.AutomationRuns, key)
 		t.AddLog(fmt.Sprintf("Automation %q ran", rowName(row)))
 	})
 }
@@ -275,7 +244,7 @@ func (e *Engine) flushPending(t *store.Task, key string) {
 	next := s.Pending[0]
 	s.Pending = s.Pending[1:]
 	e.mu.Unlock()
-	e.sendPending(t, key, next, false)
+	e.sendPending(t, key, next)
 }
 
 func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
@@ -331,9 +300,9 @@ func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 
 var placeholder = regexp.MustCompile(`\{\{\s*([a-zA-Z_]+)\s*\}\}`)
 
-// render fills {{placeholders}}; unknown ones are left as written. escape
-// selects how values are quoted: "" (none), "shell", "json" or "url".
-func (e *Engine) render(t *store.Task, tpl string, gc groupContext, escape string) string {
+// render fills {{placeholders}}; unknown ones are left as written. shell
+// quotes each value for sh.
+func (e *Engine) render(t *store.Task, tpl string, gc groupContext, shell bool) string {
 	vars := e.vars(t, gc)
 	return placeholder.ReplaceAllStringFunc(tpl, func(m string) string {
 		name := placeholder.FindStringSubmatch(m)[1]
@@ -341,14 +310,8 @@ func (e *Engine) render(t *store.Task, tpl string, gc groupContext, escape strin
 		if !ok {
 			return m
 		}
-		switch escape {
-		case "shell":
+		if shell {
 			return claude.ShellQuote(v)
-		case "json":
-			b, _ := json.Marshal(v)
-			return string(b[1 : len(b)-1])
-		case "url":
-			return url.QueryEscape(v)
 		}
 		return v
 	})
@@ -362,7 +325,7 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	vars := e.vars(t, gc)
-	cmd := exec.CommandContext(ctx, "sh", "-c", e.render(t, row.Script, gc, "shell"))
+	cmd := exec.CommandContext(ctx, "sh", "-c", e.render(t, row.Script, gc, true))
 	cmd.Dir = vars["worktreePath"]
 	cmd.Env = os.Environ()
 	for k, v := range vars {
@@ -379,52 +342,6 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	return nil
 }
 
-func (e *Engine) webhook(t *store.Task, row config.Automation, gc groupContext) error {
-	method := strings.ToUpper(row.Method)
-	if method == "" {
-		method = http.MethodPost
-	}
-	target := e.render(t, row.URL, gc, "url")
-	body := e.render(t, row.Body, gc, "json")
-	idempotencyKey := uuid.NewString()
-	client := &http.Client{Timeout: 30 * time.Second}
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * time.Second)
-		}
-		var reader *bytes.Reader
-		if method != http.MethodGet {
-			reader = bytes.NewReader([]byte(body))
-		} else {
-			reader = bytes.NewReader(nil)
-		}
-		req, err := http.NewRequest(method, target, reader)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Idempotency-Key", idempotencyKey)
-		for k, v := range row.Headers {
-			req.Header.Set(k, e.render(t, v, gc, ""))
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode < 300 {
-			return nil
-		}
-		lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-		if resp.StatusCode != 408 && resp.StatusCode != 429 && resp.StatusCode < 500 {
-			return lastErr
-		}
-	}
-	return lastErr
-}
-
 func desktopNotify(title, body string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
@@ -437,44 +354,4 @@ func desktopNotify(title, body string) {
 		return
 	}
 	go cmd.Run()
-}
-
-var nonWord = regexp.MustCompile(`[\p{L}\p{N}]`)
-
-// MatchFinalLine checks the last line of reply that contains a word against
-// pattern, ignoring case, markdown emphasis and spacing; * matches anything.
-func MatchFinalLine(reply, pattern string) bool {
-	lines := strings.Split(reply, "\n")
-	last := ""
-	for i := len(lines) - 1; i >= 0; i-- {
-		if nonWord.MatchString(lines[i]) {
-			last = lines[i]
-			break
-		}
-	}
-	if last == "" {
-		return false
-	}
-	parts := strings.Split(normalizeLine(pattern), "*")
-	for i, p := range parts {
-		parts[i] = regexp.QuoteMeta(p)
-	}
-	re, err := regexp.Compile("^" + strings.Join(parts, ".*") + "$")
-	if err != nil {
-		return false
-	}
-	return re.MatchString(normalizeLine(last))
-}
-
-var (
-	emphasis = strings.NewReplacer("**", "", "__", "", "`", "")
-	spaces   = regexp.MustCompile(`\s+`)
-)
-
-func normalizeLine(s string) string {
-	s = emphasis.Replace(s)
-	s = strings.TrimLeft(strings.TrimSpace(s), "#>-• ")
-	s = strings.TrimSpace(spaces.ReplaceAllString(s, " "))
-	s = strings.TrimRight(s, ".!")
-	return strings.ToLower(s)
 }

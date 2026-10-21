@@ -172,11 +172,6 @@ func Screen(name string) (string, error) {
 	return run("capture-pane", "-p", "-t", "="+name+":")
 }
 
-func Interrupt(name string) error {
-	_, err := run("send-keys", "-t", "="+name+":", "Escape")
-	return err
-}
-
 // SendText types a message into the agent and submits it. Multi-line text is
 // pasted as one bracketed paste so newlines do not submit early.
 func SendText(name, text string) error {

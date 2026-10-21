@@ -466,13 +466,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 				s.TurnInVisit = false
 			}
 		}
-		if from.IsDone() {
-			t.AutomationRuns = nil
-		}
 		t.AddLog(fmt.Sprintf("Moved %s → %s", from.Name, target.Name))
 	})
-
-	e.runGroup(t, from, "exit", from.Automations.OnExit, groupContext{from: from, to: target})
 
 	switch {
 	case !isAgentColumn(target) && othersActive:
@@ -646,23 +641,11 @@ func (e *Engine) SuspendAll() []Handoff {
 	return out
 }
 
-func sessionKey(col config.Column) string {
-	if col.Isolated() {
-		return col.ID
-	}
-	return store.MainSession
-}
-
 var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
-func (e *Engine) tmuxName(t *store.Task, key string) string {
+func (e *Engine) tmuxName(t *store.Task) string {
 	project := nonName.ReplaceAllString(e.ProjectName, "-")
-	name := fmt.Sprintf("%s-%d-%s", project, t.Number, t.ID[:6])
-	if key != store.MainSession {
-		suffix := nonName.ReplaceAllString(key, "")
-		name += "-" + suffix[:min(6, len(suffix))]
-	}
-	return name
+	return fmt.Sprintf("%s-%d-%s", project, t.Number, t.ID[:6])
 }
 
 func (e *Engine) sessionDir(t *store.Task, key string) string {
@@ -763,8 +746,7 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) (bool, e
 // declines, leaving the restart to the caller, when there is nothing to keep.
 func (e *Engine) relocateLive(t *store.Task, s *store.Session, col config.Column, worktree string, runEnter bool) (store.Pending, bool) {
 	e.mu.Lock()
-	ok := sessionKey(col) == store.MainSession && !(runEnter && col.AlwaysSpawnNew()) &&
-		s.Status == store.StatusRunning && s.Started
+	ok := s.Status == store.StatusRunning && s.Started
 	name, branch := s.Tmux, t.Branch
 	e.mu.Unlock()
 	if !ok || !tmux.Has(name) {
@@ -1021,7 +1003,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		}
 	}
 	e.with(func() { t.ActiveCard = card.ID })
-	key := sessionKey(col)
+	key := store.MainSession
 	e.stopSessions(t, key, store.StatusSuspended)
 
 	e.mu.Lock()
@@ -1044,11 +1026,6 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	}
 	gc := groupContext{from: from, to: col}
 
-	if runEnter && col.AlwaysSpawnNew() && (live || queued) {
-		e.stopSessions(t, "", store.StatusSuspended)
-		live, queued = false, false
-	}
-
 	switch {
 	case live && changed && !busy:
 		restarted, err := e.switchSettings(t, key, col, worktree)
@@ -1062,7 +1039,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		e.startQueuedNow(t, key)
 	case live || queued:
 	default:
-		fresh := !started || (runEnter && col.AlwaysSpawnNew())
+		fresh := !started
 		prompt := ""
 		if fresh {
 			prompt, enter = e.initialPrompt(card, col, enter, gc)
@@ -1076,12 +1053,12 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		}
 	}
 	if relocation.Text != "" {
-		e.sendPending(t, key, relocation, false)
+		e.sendPending(t, key, relocation)
 	}
 	if message != "" {
-		e.sendMessage(t, key, message, false)
+		e.sendMessage(t, key, message)
 	}
-	e.runGroup(card, col, "enter", enter, gc)
+	e.runEnterGroup(card, enter, gc)
 	return nil
 }
 
@@ -1089,17 +1066,10 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
 func (e *Engine) initialPrompt(t *store.Task, col config.Column, enter []config.Automation, gc groupContext) (string, []config.Automation) {
-	e.mu.Lock()
-	firstRuns := t.AutomationRuns[runKey(col.ID, "enter", 0)]
-	e.mu.Unlock()
-	if len(enter) > 0 && isSendMessage(enter[0].Type) && enter[0].Condition == "" &&
-		(enter[0].MaxRuns == 0 || firstRuns < enter[0].MaxRuns) {
+	if len(enter) > 0 && enter[0].Type == "send_message" && enter[0].Condition == "" {
 		row := enter[0]
-		e.with(func() {
-			t.AutomationRuns = bump(t.AutomationRuns, runKey(col.ID, "enter", 0))
-			t.AddLog(fmt.Sprintf("Automation %q: started agent with message", rowName(row)))
-		})
-		return e.render(t, row.Message, gc, ""), enter[1:]
+		e.logf(t, "Automation %q: started agent with message", rowName(row))
+		return e.render(t, row.Message, gc, false), enter[1:]
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1210,7 +1180,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		}
 		s := t.Sessions[key]
 		if s == nil {
-			s = &store.Session{Key: key, Tmux: e.tmuxName(t, key), Dir: dir}
+			s = &store.Session{Key: key, Tmux: e.tmuxName(t), Dir: dir}
 			t.Sessions[key] = s
 		}
 		if fresh {
@@ -1310,14 +1280,14 @@ func describeLaunch(l claude.Launch) string {
 }
 
 // sendMessage delivers text to the agent now if it is idle; otherwise it is
-// queued until the turn ends. immediate interrupts a running turn first.
-func (e *Engine) sendMessage(t *store.Task, key, text string, immediate bool) {
-	e.sendPending(t, key, store.Pending{Text: text}, immediate)
+// queued until the turn ends.
+func (e *Engine) sendMessage(t *store.Task, key, text string) {
+	e.sendPending(t, key, store.Pending{Text: text})
 }
 
 // sendPending is sendMessage for a queued message. Typing a relocation
 // request starts watching for the move; its reply is no turn of the column's.
-func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immediate bool) {
+func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 	e.mu.Lock()
 	s := t.Sessions[key]
 	if s == nil {
@@ -1325,10 +1295,8 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immedia
 		return
 	}
 	ready := s.Status == store.StatusRunning && s.Activity == store.ActivityIdle
-	interrupt := immediate && s.Status == store.StatusRunning &&
-		(s.Activity == store.ActivityThinking || s.Activity == store.ActivityPermission)
 	name := s.Tmux
-	if !ready && !interrupt {
+	if !ready {
 		s.Pending = append(s.Pending, p)
 		e.mu.Unlock()
 		return
@@ -1343,13 +1311,8 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending, immedia
 	e.mu.Unlock()
 
 	defer e.lockTyping(name)()
-	if interrupt {
-		tmux.Interrupt(name)
-		time.Sleep(700 * time.Millisecond)
-	}
 	err := tmux.SendText(name, p.Text)
 	e.with(func() {
-		// An interrupt before this point belongs to the turn that was cut off.
 		s.UpdatedAt = time.Now()
 		if err != nil {
 			s.Activity = store.ActivityIdle
@@ -1370,11 +1333,9 @@ func (e *Engine) lockTyping(name string) func() {
 func (e *Engine) Send(id, text string) error {
 	card, t, unlock := e.lockGroup(id)
 	defer unlock()
-	var key string
 	e.mu.Lock()
 	if card != nil {
-		key = sessionKey(e.sessionColumn(t))
-		if s := t.Sessions[key]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+		if s := t.Sessions[store.MainSession]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
 			t = nil
 		}
 	}
@@ -1382,7 +1343,7 @@ func (e *Engine) Send(id, text string) error {
 	if t == nil {
 		return errors.New("no running agent for this task")
 	}
-	e.sendMessage(t, key, text, false)
+	e.sendMessage(t, store.MainSession, text)
 	return nil
 }
 
@@ -1401,7 +1362,7 @@ func (e *Engine) LiveSession(id string) (string, bool) {
 // liveSession is LiveSession for a card. Called with mu held.
 func (e *Engine) liveSession(card *store.Task) (string, bool) {
 	t := e.owner(card)
-	if s := t.Sessions[sessionKey(e.sessionColumn(t))]; s != nil && s.Status == store.StatusRunning {
+	if s := t.Sessions[store.MainSession]; s != nil && s.Status == store.StatusRunning {
 		return s.Tmux, true
 	}
 	for _, s := range t.Sessions {
@@ -1437,16 +1398,4 @@ func (e *Engine) ExternalAttach(id string) (*exec.Cmd, bool) {
 		return tmux.AttachPaneCommand(pane), true
 	}
 	return nil, false
-}
-
-func bump(m map[string]int, key string) map[string]int {
-	if m == nil {
-		m = map[string]int{}
-	}
-	m[key]++
-	return m
-}
-
-func runKey(colID, trigger string, index int) string {
-	return fmt.Sprintf("%s:%s:%d", colID, trigger, index)
 }

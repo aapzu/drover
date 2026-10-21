@@ -172,10 +172,7 @@ func columnSummary(c config.Column) string {
 			parts = append(parts, p)
 		}
 	}
-	if c.Isolated() {
-		parts = append(parts, "isolated")
-	}
-	if n := len(c.Automations.OnEnter) + len(c.Automations.OnTurnEnd) + len(c.Automations.OnExit); n > 0 {
+	if n := len(c.Automations.OnEnter) + len(c.Automations.OnTurnEnd); n > 0 {
 		parts = append(parts, fmt.Sprintf("⚡%d", n))
 	}
 	if len(parts) == 0 {
@@ -226,12 +223,7 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 // off a session that opened several PRs, the one its group shares.
 func (m Model) sessionFor(t *store.Task) *store.Session {
 	owner := store.Owner(m.snap.Tasks, t)
-	col, _, _ := m.snap.Board.Column(store.Driver(m.snap.Tasks, owner).ColumnID)
-	key := store.MainSession
-	if col.Isolated() {
-		key = col.ID
-	}
-	if s := owner.Sessions[key]; s != nil {
+	if s := owner.Sessions[store.MainSession]; s != nil {
 		return s
 	}
 	for _, s := range owner.Sessions {
@@ -676,13 +668,7 @@ func (m Model) renderDetail(t *store.Task) string {
 	if len(owner.Sessions) > 0 {
 		fmt.Fprintf(&b, "\n%s\n", muted.Render("Sessions"))
 		for key, s := range owner.Sessions {
-			name := "main"
-			if key != store.MainSession {
-				if c, _, ok := m.snap.Board.Column(key); ok {
-					name = c.Name + " (isolated)"
-				}
-			}
-			fmt.Fprintf(&b, "  %s  %s/%s  %s  tmux:%s\n", name, s.Status, s.Activity, dim.Render(s.AgentSessionID), s.Tmux)
+			fmt.Fprintf(&b, "  %s  %s/%s  %s  tmux:%s\n", key, s.Status, s.Activity, dim.Render(s.AgentSessionID), s.Tmux)
 		}
 	}
 	if s := m.sessionFor(t); s != nil && s.LastReply != "" {

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,21 +81,22 @@ done
 `
 
 const testBoard = `{
-  "version": 1,
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true, "permissionMode": "acceptEdits", "modelOverride": "opus",
      "automations": {"onTurnEnd": [
-       {"name": "On to review", "type": "move_to_column", "finalLine": "Findings: applied", "targetColumn": "Review", "maxRuns": 2}
+       {"name": "On to review", "type": "move_to_column", "targetColumn": "Review"}
      ]}},
-    {"id": "review", "name": "Review", "autoSpawn": true, "sessionTarget": "isolated", "sessionSpawnStrategy": "always_spawn_new",
+    {"id": "review", "name": "Review", "autoSpawn": true,
      "automations": {
-       "onEnter": [{"name": "Review", "type": "send_message", "message": "/code-review {{baseBranch}}", "mode": "immediate"}],
-       "onTurnEnd": [{"name": "Finish", "type": "move_to_column", "finalLine": "Verdict: Ready", "targetColumn": "Done"}]
+       "onEnter": [{"name": "Review", "type": "send_message", "message": "/code-review {{baseBranch}}"}],
+       "onTurnEnd": [{"name": "Finish", "type": "move_to_column", "targetColumn": "Done"}]
      }},
     {"id": "done", "name": "Done", "role": "done"}
   ]
 }`
+
+var setSocket sync.Once
 
 func setupProject(t *testing.T) (root, log string) {
 	t.Helper()
@@ -112,7 +114,7 @@ func setupProject(t *testing.T) (root, log string) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_LOG", log)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
-	tmux.Socket = fmt.Sprintf("kt-test-%d", os.Getpid())
+	setSocket.Do(func() { tmux.Socket = fmt.Sprintf("kt-test-%d", os.Getpid()) })
 	t.Cleanup(func() { exec.Command("tmux", "-L", tmux.Socket, "kill-server").Run() })
 
 	for _, args := range [][]string{
@@ -198,29 +200,32 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 			t.Errorf("session %s status = %s", key, s.Status)
 		}
 	}
-	if len(done.Sessions) != 2 {
-		t.Errorf("want main + isolated review session, got %d", len(done.Sessions))
+	if len(done.Sessions) != 1 {
+		t.Errorf("want one shared session, got %d", len(done.Sessions))
 	}
 
 	argv, _ := os.ReadFile(log)
-	launches := strings.Split(strings.TrimSuffix(strings.TrimSpace(string(argv)), "---"), "---")
-	if len(launches) != 2 {
-		t.Fatalf("want 2 launches, got %d:\n%s", len(launches), argv)
+	launches := strings.Split(strings.TrimSpace(string(argv)), "---")
+	if len(launches) != 3 {
+		t.Fatalf("want 2 launches, got %d:\n%s", len(launches)-1, argv)
 	}
-	first, second := launches[0], launches[1]
+	first, second, typed := launches[0], launches[1], launches[2]
 	for _, want := range []string{"--permission-mode\nacceptEdits", "--model\nopus", "--session-id", "Fix the login bug\n\nUsers cannot log in"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("executing launch missing %q:\n%s", want, first)
 		}
 	}
-	if !strings.Contains(second, "/code-review main") || !strings.Contains(second, "--session-id") {
-		t.Errorf("review launch should start fresh with the enter message:\n%s", second)
+	if sid := done.Sessions[store.MainSession].AgentSessionID; !strings.Contains(second, "--resume\n"+sid) {
+		t.Errorf("review should resume the executing conversation %s:\n%s", sid, second)
+	}
+	if !strings.Contains(typed, "typed:/code-review main") {
+		t.Errorf("review message not typed into the agent:\n%s", typed)
 	}
 }
 
 func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
@@ -267,7 +272,7 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
@@ -337,7 +342,7 @@ func TestSettingsDiffer(t *testing.T) {
 
 func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
@@ -378,7 +383,7 @@ func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 
 func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -428,7 +433,7 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 
 func TestWorktreesDirSetting(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -488,11 +493,11 @@ func readFile(path string) string {
 // turn's end must run the target column's automations.
 func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits",
-	   "automations":{"onTurnEnd":[{"type":"move_to_column","finalLine":"Findings: applied","targetColumn":"Done"}]}},
+	   "automations":{"onTurnEnd":[{"type":"move_to_column","targetColumn":"Done"}]}},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	e, err := New(root)
 	if err != nil {
@@ -522,12 +527,12 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 
 func TestPRRequestMovesCard(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"self","name":"Self-review","autoSpawn":true,
 	   "automations":{"onEnter":[{"type":"send_message","message":"/code-review"}],
-	    "onTurnEnd":[{"type":"move_to_column","finalLine":"Findings: applied","targetColumn":"Done"}]}},
+	    "onTurnEnd":[{"type":"move_to_column","targetColumn":"Done"}]}},
 	  {"id":"done","name":"Done","role":"done"}],
 	  "prFlow":{"requested":"self"}}`), 0o644)
 	e, err := New(root)
@@ -550,7 +555,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, e, "PR request to move the card via Self-review to Done", func(t *store.Task) bool {
-		return t.ColumnID == "done"
+		return t.ColumnID == "done" && t.WorktreePath == ""
 	})
 	if strings.Contains(readFile(log), "/code-review") {
 		t.Error("Self-review's enter group ran on a PR request")
@@ -561,7 +566,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 // start once a slot frees up instead of being dropped.
 func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
@@ -629,11 +634,10 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 }
 
 const prBoard = `{
-  "version": 1,
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true,
-     "automations": {"onTurnEnd": [{"name": "Ship", "type": "move_to_column", "targetColumn": "Review", "maxRuns": 1}]}},
+     "automations": {"onTurnEnd": [{"name": "Ship", "type": "move_to_column", "targetColumn": "Review"}]}},
     {"id": "review", "name": "Review"},
     {"id": "done", "name": "Done", "role": "done"}
   ]
@@ -733,7 +737,6 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 }
 
 const openedBoard = `{
-  "version": 1,
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
@@ -826,7 +829,7 @@ func TestPendingPRMoveShipsWhenNoAgentIsRunning(t *testing.T) {
 }
 
 func TestFirstPRStaysPutWithoutAnOpenedColumn(t *testing.T) {
-	e := startWithBoard(t, `{"version":1,"columns":[
+	e := startWithBoard(t, `{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`)
@@ -845,7 +848,6 @@ func TestFirstPRStaysPutWithoutAnOpenedColumn(t *testing.T) {
 }
 
 const flowBoard = `{
-  "version": 1,
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
@@ -1030,7 +1032,7 @@ func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) b
 
 func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
@@ -1131,7 +1133,7 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -1246,7 +1248,7 @@ func TestClosingStopsBackgroundConversation(t *testing.T) {
 		task := e.CreateTask("Imported "+id, "")
 		e.with(func() {
 			task.Sessions = map[string]*store.Session{store.MainSession: {
-				Key: store.MainSession, AgentSessionID: id, Tmux: e.tmuxName(task, store.MainSession),
+				Key: store.MainSession, AgentSessionID: id, Tmux: e.tmuxName(task),
 				Status: status, Started: true, Imported: true,
 			}}
 		})
@@ -1281,7 +1283,7 @@ func TestClosingLeavesTerminalConversationAndSaysSo(t *testing.T) {
 	task := e.CreateTask("Imported", "")
 	e.with(func() {
 		task.Sessions = map[string]*store.Session{store.MainSession: {
-			Key: store.MainSession, AgentSessionID: "in-terminal", Tmux: e.tmuxName(task, store.MainSession),
+			Key: store.MainSession, AgentSessionID: "in-terminal", Tmux: e.tmuxName(task),
 			Status: store.StatusExternal, Imported: true,
 		}}
 	})
@@ -1473,42 +1475,6 @@ func TestNewSessionMovesWhileAgentWorks(t *testing.T) {
 	waitNotBusy(t, e)
 }
 
-func TestNewSessionStaysWhileAgentWorksIfColumnAlwaysSpawnsNew(t *testing.T) {
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	e := startWithBoard(t, `{"version":1,"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
-	  {"id":"exec","name":"Executing","autoSpawn":true,"sessionSpawnStrategy":"always_spawn_new"},
-	  {"id":"done","name":"Done","role":"done"}]}`)
-
-	if _, err := e.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Close()
-
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
-	waitFor(t, e, "turn to start", func(t *store.Task) bool {
-		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
-	})
-	time.Sleep(time.Second)
-	if got := e.Snapshot().Tasks[0]; got.ColumnID != "todo" || !got.Sessions[store.MainSession].Scratch {
-		t.Fatalf("moving would restart the busy agent, but the card is in %s", got.ColumnID)
-	}
-
-	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Done."}` + "\n")
-	waitFor(t, e, "card to move once the turn ends", func(t *store.Task) bool {
-		return t.ColumnID == "exec" && t.WorktreePath != "" && !t.Sessions[store.MainSession].Scratch
-	})
-	waitNotBusy(t, e)
-}
-
 func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	root, log := setupProject(t)
 	config := t.TempDir()
@@ -1572,7 +1538,7 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 
 func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"defaultPermissionMode":"acceptEdits","columns":[
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","modelOverride":"opus"},
@@ -1637,7 +1603,7 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 			if stays {
 				t.Setenv("FAKE_STAY", "1")
 			}
-			os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"version":1,"columns":[
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 			  {"id":"todo","name":"To Do","role":"todo"},
 			  {"id":"exec","name":"Executing","autoSpawn":true},
 			  {"id":"opus","name":"Opus","autoSpawn":true,"modelOverride":"opus"},
@@ -1772,7 +1738,6 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 }
 
 const reviewBoard = `{
-  "version": 1,
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},

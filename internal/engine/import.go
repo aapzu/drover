@@ -102,7 +102,7 @@ func (e *Engine) ImportSessions(found []claude.Found) int {
 			s := &store.Session{
 				Key:            store.MainSession,
 				AgentSessionID: f.SessionID,
-				Tmux:           e.tmuxName(t, store.MainSession),
+				Tmux:           e.tmuxName(t),
 				Status:         store.StatusSuspended,
 				Activity:       store.ActivityIdle,
 				Started:        true,

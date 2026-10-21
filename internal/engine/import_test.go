@@ -124,7 +124,7 @@ func TestImportLinearIssue(t *testing.T) {
 	if task.Branch != "aapeli/dx-1-speed-up-ci" || task.Issue.Key != "DX-1" || !strings.Contains(task.Prompt, "CI takes 40 minutes.") {
 		t.Errorf("card wrong: %+v", task)
 	}
-	got := e.render(task, "{{issueKey}} {{issueUrl}}", groupContext{to: config.Column{}}, "")
+	got := e.render(task, "{{issueKey}} {{issueUrl}}", groupContext{to: config.Column{}}, false)
 	if got != "DX-1 https://linear.app/x/issue/DX-1" {
 		t.Errorf("issue placeholders = %q", got)
 	}

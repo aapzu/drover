@@ -35,8 +35,6 @@ const (
 	ActivityPermission Activity = "permission"
 )
 
-// MainSession is the session key for the task's main conversation; isolated
-// columns use their column id as the key.
 const MainSession = "main"
 
 type State struct {
@@ -59,17 +57,16 @@ type Task struct {
 	SeenPRs []string `json:"seenPRs,omitempty"`
 	// ActiveCard is the group card whose move last drove the shared session;
 	// its column decides the session's settings and turn-end automations.
-	ActiveCard     string              `json:"activeCard,omitempty"`
-	PRMovePending  bool                `json:"prMovePending,omitempty"`
-	BaseBranch     string              `json:"baseBranch,omitempty"`
-	Branch         string              `json:"branch,omitempty"`
-	WorktreePath   string              `json:"worktreePath,omitempty"`
-	Visit          int                 `json:"visit"`
-	Sessions       map[string]*Session `json:"sessions,omitempty"`
-	AutomationRuns map[string]int      `json:"automationRuns,omitempty"`
-	Log            []LogEntry          `json:"log,omitempty"`
-	CreatedAt      time.Time           `json:"createdAt"`
-	UpdatedAt      time.Time           `json:"updatedAt"`
+	ActiveCard    string              `json:"activeCard,omitempty"`
+	PRMovePending bool                `json:"prMovePending,omitempty"`
+	BaseBranch    string              `json:"baseBranch,omitempty"`
+	Branch        string              `json:"branch,omitempty"`
+	WorktreePath  string              `json:"worktreePath,omitempty"`
+	Visit         int                 `json:"visit"`
+	Sessions      map[string]*Session `json:"sessions,omitempty"`
+	Log           []LogEntry          `json:"log,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	UpdatedAt     time.Time           `json:"updatedAt"`
 }
 
 type Session struct {
@@ -186,10 +183,6 @@ func (t *Task) Clone() *Task {
 		sc := *s
 		sc.Pending = append([]Pending(nil), s.Pending...)
 		c.Sessions[k] = &sc
-	}
-	c.AutomationRuns = make(map[string]int, len(t.AutomationRuns))
-	for k, v := range t.AutomationRuns {
-		c.AutomationRuns[k] = v
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)
 	c.SeenPRs = slices.Clone(t.SeenPRs)
