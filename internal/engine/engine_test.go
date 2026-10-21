@@ -101,7 +101,25 @@ const testBoard = `{
   ]
 }`
 
-var setSocket sync.Once
+var testSetup sync.Once
+
+var notified struct {
+	sync.Mutex
+	got []string
+}
+
+// desktopNotified returns the notifications so far that start with prefix.
+func desktopNotified(prefix string) []string {
+	notified.Lock()
+	defer notified.Unlock()
+	var out []string
+	for _, n := range notified.got {
+		if strings.HasPrefix(n, prefix) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 func setupProject(t *testing.T) (root, log string) {
 	t.Helper()
@@ -119,7 +137,14 @@ func setupProject(t *testing.T) (root, log string) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_LOG", log)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
-	setSocket.Do(func() { tmux.Socket = fmt.Sprintf("kt-test-%d", os.Getpid()) })
+	testSetup.Do(func() {
+		tmux.Socket = fmt.Sprintf("kt-test-%d", os.Getpid())
+		desktopNotify = func(title, body string) {
+			notified.Lock()
+			defer notified.Unlock()
+			notified.got = append(notified.got, title+": "+body)
+		}
+	})
 	t.Cleanup(func() { exec.Command("tmux", "-L", tmux.Socket, "kill-server").Run() })
 
 	for _, args := range [][]string{
@@ -589,7 +614,6 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.MaxConcurrent = 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go e.Run(ctx)
@@ -1055,7 +1079,6 @@ func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.MaxConcurrent = 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go e.Run(ctx)

@@ -154,3 +154,53 @@ func TestPRFlow(t *testing.T) {
 		t.Fatal("prFlow.requested without autoSpawn accepted")
 	}
 }
+
+func TestLocalOverridesPersonalSettings(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"maxConcurrent":4,"notifications":{"turnDone":false},
+	  "columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+	board, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := DefaultNotifications()
+	want.TurnDone = false
+	if board.Notifications != want || board.Limit() != 4 {
+		t.Errorf("shared board: notifications=%+v limit=%d", board.Notifications, board.Limit())
+	}
+
+	before := Stamp(dir)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":2,"idleTimeoutMinutes":30,
+	  "notifications":{"exited":false,"cooldownSeconds":60}}`), 0o644)
+	if Stamp(dir) == before {
+		t.Error("stamp ignores drover.local.json")
+	}
+	board, _, err = Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want.Exited, want.CooldownSeconds = false, 60
+	if board.Notifications != want || board.Limit() != 2 || board.IdleTimeoutMinutes != 30 {
+		t.Errorf("local overrides: notifications=%+v limit=%d idle=%d", board.Notifications, board.Limit(), board.IdleTimeoutMinutes)
+	}
+}
+
+func TestLocalOverridesApplyToDefaultBoard(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"notifications":{"needsYou":false}}`), 0o644)
+	board, found, err := Load(dir)
+	if err != nil || found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if board.Notifications.NeedsYou || !board.Notifications.TurnDone || board.Limit() != DefaultMaxConcurrent {
+		t.Errorf("default board: notifications=%+v limit=%d", board.Notifications, board.Limit())
+	}
+}
+
+func TestBrokenLocalFileIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":`), 0o644)
+	if _, _, err := Load(dir); err == nil {
+		t.Error("want a parse error for drover.local.json")
+	}
+}

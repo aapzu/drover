@@ -74,7 +74,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
   Self-review, In review, Verify in develop, Done); press `W` to write it out.
-  `drover.local.json` can override `defaultBaseBranch` and `worktreesDir`.
+  `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
+  `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
@@ -101,6 +102,30 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 - **Activity.** A `--settings` file adds Claude Code hooks that append events
   to `sessions/…/events.jsonl` in the state directory. The board reads them
   to show working, idle and needs-you states and to run turn-end automations.
+
+## Agents and notifications
+
+These settings work in `drover.json` and, for you alone, in
+`drover.local.json`. Both files are reloaded while the board runs.
+
+```json
+{
+  "maxConcurrent": 8,
+  "idleTimeoutMinutes": 0,
+  "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 }
+}
+```
+
+- **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
+  except that a start you make suspends the agent that has been idle longest.
+- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long.
+  `r` resumes it. 0, the default, never does.
+- **`notifications`** shows a desktop notification and a notice on the board
+  when an agent finishes a turn and stays idle, asks for a permission, has a
+  plan for you to approve, or exits by itself. Each is on by default and fires
+  at most once per `cooldownSeconds` for each agent.
+- The agent you're attached to or typing into neither notifies you nor times
+  out.
 
 ## Automations
 
