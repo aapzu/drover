@@ -95,20 +95,28 @@ type prScan struct {
 func (e *Engine) prScans() []prScan {
 	var scans []prScan
 	for _, t := range e.state.Tasks {
-		if col, _, _ := e.board.Column(t.ColumnID); t.GroupID != "" || col.IsDone() {
+		scans = append(scans, e.prScansOf(t)...)
+	}
+	return scans
+}
+
+// prScansOf lists the transcripts of t's sessions, none for a split card or
+// one in Done. Called with mu held.
+func (e *Engine) prScansOf(t *store.Task) []prScan {
+	if col, _, _ := e.board.Column(t.ColumnID); t.GroupID != "" || col.IsDone() {
+		return nil
+	}
+	var scans []prScan
+	for key, s := range t.Sessions {
+		path := e.transcriptOf(t, s)
+		if path == "" {
 			continue
 		}
-		for key, s := range t.Sessions {
-			path := e.transcriptOf(t, s)
-			if path == "" {
-				continue
-			}
-			offset := s.PRScan
-			if s.PRScanPath != path {
-				offset = 0
-			}
-			scans = append(scans, prScan{owner: t.ID, key: key, path: path, offset: offset})
+		offset := s.PRScan
+		if s.PRScanPath != path {
+			offset = 0
 		}
+		scans = append(scans, prScan{owner: t.ID, key: key, path: path, offset: offset})
 	}
 	return scans
 }
@@ -128,8 +136,9 @@ func (e *Engine) transcriptOf(t *store.Task, s *store.Session) string {
 	return claude.TranscriptPath(s.AgentSessionID, dir)
 }
 
-// scanTranscripts adds the PRs sessions created since the last scan.
-func (e *Engine) scanTranscripts(scans []prScan) {
+// scanTranscripts adds the PRs sessions created since the last scan and
+// returns how many cards it split off.
+func (e *Engine) scanTranscripts(scans []prScan) (split int) {
 	type found struct {
 		prScan
 		urls []string
@@ -144,10 +153,11 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 		}
 	}
 	if len(results) == 0 {
-		return
+		return 0
 	}
 	var ship []*store.Task
 	e.with(func() {
+		before := len(e.state.Tasks)
 		for _, r := range results {
 			t := e.find(r.owner)
 			if t == nil || t.Sessions[r.key] == nil || e.transcriptOf(t, t.Sessions[r.key]) != r.path {
@@ -170,10 +180,12 @@ func (e *Engine) scanTranscripts(scans []prScan) {
 				}
 			}
 		}
+		split = len(e.state.Tasks) - before
 	})
 	for _, t := range ship {
 		e.shipTask(t)
 	}
+	return split
 }
 
 // refreshPR updates an open PR's card from GitHub and moves it along the

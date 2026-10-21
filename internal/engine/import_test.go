@@ -46,7 +46,7 @@ func TestImportRunningAgentLifecycle(t *testing.T) {
 	defer cancel()
 	go e.Run(ctx)
 
-	found := e.DiscoverSessions()
+	found, _ := e.DiscoverSessions(40)
 	if len(found) != 1 || !found[0].Running {
 		t.Fatalf("discover = %+v", found)
 	}
@@ -55,7 +55,7 @@ func TestImportRunningAgentLifecycle(t *testing.T) {
 	if task.ColumnID != "exec" || task.WorktreePath != root || task.Sessions[store.MainSession].Status != store.StatusExternal {
 		t.Fatalf("imported card wrong: column=%s worktree=%s", task.ColumnID, task.WorktreePath)
 	}
-	if again := e.DiscoverSessions(); len(again) != 0 {
+	if again, _ := e.DiscoverSessions(40); len(again) != 0 {
 		t.Errorf("imported session offered again: %+v", again)
 	}
 	if n := e.ImportSessions(found); n != 0 || len(e.Snapshot().Tasks) != 1 {
@@ -127,5 +127,40 @@ func TestImportLinearIssue(t *testing.T) {
 	got := e.render(task, "{{issueKey}} {{issueUrl}}", groupContext{to: config.Column{}}, "")
 	if got != "DX-1 https://linear.app/x/issue/DX-1" {
 		t.Errorf("issue placeholders = %q", got)
+	}
+}
+
+func TestImportSplitsSessionThatOpenedSeveralPRs(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := prCreatedLine
+	path := claude.TranscriptPath("sid", root)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte(created(1)+created(2)+created(1)), 0o644)
+
+	found := []claude.Found{
+		{SessionID: "sid", Title: "Auth", Cwd: root, TranscriptPath: path},
+		{SessionID: "plain", Title: "Chat", Cwd: root},
+	}
+	if n := e.ImportSessions(found); n != 3 {
+		t.Fatalf("ImportSessions added %d cards, want 3", n)
+	}
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 3 || tasks[0].PR == nil || tasks[0].PR.Number != 1 {
+		t.Fatalf("session card did not take PR one: %+v", tasks)
+	}
+	if tasks[1].PR != nil || tasks[1].GroupID != "" {
+		t.Errorf("session without PRs changed: %+v", tasks[1])
+	}
+	if split := tasks[2]; split.GroupID != tasks[0].ID || split.PR == nil || split.PR.Number != 2 {
+		t.Errorf("PR two is not split off the session card: %+v", split)
+	}
+	if n := e.ImportSessions(found); n != 0 || len(e.Snapshot().Tasks) != 3 {
+		t.Errorf("re-importing added %d cards", n)
 	}
 }
