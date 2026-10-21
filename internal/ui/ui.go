@@ -444,11 +444,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.done != "" {
 			m.setFlash(msg.done)
 		}
-		if msg.err == nil && msg.attach {
+		if msg.err == nil && msg.attach && m.mode == modeBoard {
 			if cmd, ok := m.attach(msg.id); ok {
 				return m, cmd
 			}
-			m.setFlash("The agent starts once a slot frees up")
 		}
 		return m, nil
 	case takeOverDoneMsg:
