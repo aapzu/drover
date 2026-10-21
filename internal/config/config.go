@@ -15,7 +15,6 @@ const FileName = "drover.json"
 const DefaultWorktreesDir = ".drover/worktrees"
 
 type Board struct {
-	Version               int         `json:"version"`
 	DefaultBaseBranch     string      `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string      `json:"defaultPermissionMode,omitempty"`
 	WorktreesDir          string      `json:"worktreesDir,omitempty"`
@@ -49,42 +48,33 @@ type PRFlow struct {
 }
 
 type Column struct {
-	ID                   string      `json:"id"`
-	Name                 string      `json:"name"`
-	Role                 string      `json:"role,omitempty"`
-	Color                string      `json:"color,omitempty"`
-	AutoSpawn            bool        `json:"autoSpawn,omitempty"`
-	PermissionMode       string      `json:"permissionMode,omitempty"`
-	ModelOverride        string      `json:"modelOverride,omitempty"`
-	EffortOverride       string      `json:"effortOverride,omitempty"`
-	PlanExitTarget       string      `json:"planExitTarget,omitempty"`
-	SessionTarget        string      `json:"sessionTarget,omitempty"`
-	SessionSpawnStrategy string      `json:"sessionSpawnStrategy,omitempty"`
-	Automations          Automations `json:"automations,omitzero"`
+	ID             string      `json:"id"`
+	Name           string      `json:"name"`
+	Role           string      `json:"role,omitempty"`
+	Color          string      `json:"color,omitempty"`
+	AutoSpawn      bool        `json:"autoSpawn,omitempty"`
+	PermissionMode string      `json:"permissionMode,omitempty"`
+	ModelOverride  string      `json:"modelOverride,omitempty"`
+	EffortOverride string      `json:"effortOverride,omitempty"`
+	PlanExitTarget string      `json:"planExitTarget,omitempty"`
+	Automations    Automations `json:"automations,omitzero"`
 }
 
 type Automations struct {
 	OnEnter   []Automation `json:"onEnter,omitempty"`
 	OnTurnEnd []Automation `json:"onTurnEnd,omitempty"`
-	OnExit    []Automation `json:"onExit,omitempty"`
 }
 
 type Automation struct {
-	Name           string            `json:"name,omitempty"`
-	Type           string            `json:"type"`
-	Message        string            `json:"message,omitempty"`
-	Mode           string            `json:"mode,omitempty"`
-	TargetColumn   string            `json:"targetColumn,omitempty"`
-	FinalLine      string            `json:"finalLine,omitempty"`
-	Condition      string            `json:"condition,omitempty"`
-	MaxRuns        int               `json:"maxRuns,omitempty"`
-	Script         string            `json:"script,omitempty"`
-	TimeoutMinutes int               `json:"timeoutMinutes,omitempty"`
-	URL            string            `json:"url,omitempty"`
-	Method         string            `json:"method,omitempty"`
-	Body           string            `json:"body,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Title          string            `json:"title,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Type           string `json:"type"`
+	Message        string `json:"message,omitempty"`
+	TargetColumn   string `json:"targetColumn,omitempty"`
+	Condition      string `json:"condition,omitempty"`
+	Script         string `json:"script,omitempty"`
+	TimeoutMinutes int    `json:"timeoutMinutes,omitempty"`
+	Body           string `json:"body,omitempty"`
+	Title          string `json:"title,omitempty"`
 }
 
 func (c Column) IsTodo() bool { return c.Role == "todo" }
@@ -92,11 +82,6 @@ func (c Column) IsDone() bool { return c.Role == "done" }
 
 // IsAgent columns run an agent for the cards in them.
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
-
-// Isolated columns run their own agent session instead of the task's main one.
-func (c Column) Isolated() bool { return c.SessionTarget == "isolated" }
-
-func (c Column) AlwaysSpawnNew() bool { return c.SessionSpawnStrategy == "always_spawn_new" }
 
 // Load reads drover.json and applies drover.local.json on top of it.
 // A missing file yields the default board and found=false.
@@ -242,7 +227,6 @@ func (b *Board) TodoColumn() Column {
 
 func Default() *Board {
 	return &Board{
-		Version: 1,
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},

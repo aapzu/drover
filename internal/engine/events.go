@@ -207,7 +207,6 @@ func (e *Engine) checkInterrupted() []func() {
 						task = nil
 						return
 					}
-					// sendMessage interrupts on purpose and types the next prompt.
 					if typing, ok := e.typing.Load(name); ok {
 						if !typing.(*sync.Mutex).TryLock() {
 							task = nil
@@ -282,7 +281,7 @@ func (e *Engine) planExit(taskID string, visit int) {
 	// The agent keeps working in the same turn after leaving plan mode, now
 	// with the target's permissions, so that turn belongs to the new visit.
 	e.with(func() {
-		if s := t.Sessions[sessionKey(target)]; s != nil && s.Status == store.StatusRunning {
+		if s := t.Sessions[store.MainSession]; s != nil && s.Status == store.StatusRunning {
 			s.TurnInVisit = true
 			s.SetMode(e.board.PermissionMode(target))
 			s.RespawnPending = false
@@ -386,12 +385,12 @@ func (e *Engine) prRequested(taskID string, visit int) {
 	// A turn that ended during the move had its turn end dropped as
 	// belonging to the previous visit; run it for this one.
 	e.with(func() {
-		s := t.Sessions[sessionKey(target)]
+		s := t.Sessions[store.MainSession]
 		if s == nil || s.Status != store.StatusRunning {
 			return
 		}
 		if s.Activity == store.ActivityIdle {
-			go e.runTurnEnd(taskID, sessionKey(target), t.Visit, s.LastReply)
+			go e.runTurnEnd(taskID, store.MainSession, t.Visit, s.LastReply)
 		} else {
 			s.TurnInVisit = true
 		}
@@ -414,7 +413,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		sessionKey(col) == key && (s.Relocate != "" || settingsDiffer(s, col, mode))
+		key == store.MainSession && (s.Relocate != "" || settingsDiffer(s, col, mode))
 	relocate := ""
 	if s != nil {
 		relocate = s.Relocate
@@ -485,7 +484,7 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	col := e.sessionColumn(t)
 	// The task may have moved or been stopped while waiting for its lock.
-	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting || sessionKey(col) != key {
+	if s.Status != store.StatusRunning || s.Activity != store.ActivityStarting || key != store.MainSession {
 		e.mu.Unlock()
 		return
 	}

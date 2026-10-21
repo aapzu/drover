@@ -28,22 +28,21 @@ func (e *Engine) sessionColumn(owner *store.Task) config.Column {
 
 func isAgentColumn(c config.Column) bool { return c.IsAgent() }
 
-// workColumn is where the work happens: the first agent column that is
-// neither a plan column nor runs its own session.
+// workColumn is where the work happens: the first agent column that isn't a
+// plan column.
 func workColumn(board *config.Board) (config.Column, bool) {
 	for _, c := range board.Columns {
-		if isAgentColumn(c) && board.PermissionMode(c) != "plan" && !c.Isolated() {
+		if isAgentColumn(c) && board.PermissionMode(c) != "plan" {
 			return c, true
 		}
 	}
 	return config.Column{}, false
 }
 
-// firstAgentColumn is where a card's work starts: the first agent column that
-// doesn't run its own session.
+// firstAgentColumn is where a card's work starts: the first agent column.
 func firstAgentColumn(board *config.Board) (config.Column, bool) {
 	for _, c := range board.Columns {
-		if isAgentColumn(c) && !c.Isolated() {
+		if isAgentColumn(c) {
 			return c, true
 		}
 	}

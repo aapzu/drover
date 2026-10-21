@@ -447,7 +447,7 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 	}
 	message := ""
 	if step.message != "" {
-		message = e.render(card, step.message, groupContext{to: step.to}, "")
+		message = e.render(card, step.message, groupContext{to: step.to}, false)
 	}
 	err := e.moveLocked(card.ID, step.to.ID, MoveOptions{Message: message})
 	switch {
