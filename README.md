@@ -52,6 +52,7 @@ drover
 | `r` / `S` | start or resume / suspend the agent |
 | `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
 | `u` | update the worktree from its base branch |
+| `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
 | `p`, `i`, `?` | toggle preview, task details and log, help |
