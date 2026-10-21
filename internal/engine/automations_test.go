@@ -2,7 +2,6 @@ package engine
 
 import (
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/aapzu/drover/internal/config"
@@ -85,24 +84,13 @@ func TestNotifyRunsInColumnWithoutAgent(t *testing.T) {
 	    {"name":"Ping","type":"notify","title":"{{title}}","body":"now in {{toColumn}}"},
 	    {"name":"Talk","type":"send_message","message":"hello"}]}},
 	  {"id":"done","name":"Done","role":"done"}]}`)
-	var mu sync.Mutex
-	var got []string
-	old := desktopNotify
-	desktopNotify = func(title, body string) {
-		mu.Lock()
-		defer mu.Unlock()
-		got = append(got, title+": "+body)
-	}
-	t.Cleanup(func() { desktopNotify = old })
 
-	task := e.CreateTask("Ship it", "")
+	task := e.CreateTask("Ship it now", "")
 	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	moved := e.Snapshot().Tasks[0]
-	mu.Lock()
-	defer mu.Unlock()
-	if len(got) != 1 || got[0] != "Ship it: now in In review" {
+	if got := desktopNotified("Ship it now:"); len(got) != 1 || got[0] != "Ship it now: now in In review" {
 		t.Errorf("notifications = %q", got)
 	}
 	if !hasLog(moved, `Automation "Talk" skipped: no agent runs in this column`) {

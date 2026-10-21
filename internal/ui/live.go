@@ -130,6 +130,21 @@ func liveTick(gen int) tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return liveTickMsg{gen} })
 }
 
+// syncFocus tells the engine which card you're attached to or typing into
+// in live mode.
+func (m *Model) syncFocus() {
+	want := m.attached
+	if m.mode == modeLive {
+		if t := m.current(); t != nil {
+			want = t.ID
+		}
+	}
+	if want != m.focused {
+		m.focused = want
+		m.eng.SetFocused(want)
+	}
+}
+
 func (m Model) startLive() (Model, tea.Cmd) {
 	t := m.current()
 	if t == nil {

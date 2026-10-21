@@ -32,15 +32,12 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-const DefaultMaxConcurrent = 8
-
 // ErrDirty is returned when a move to Done would delete uncommitted work.
 var ErrDirty = errors.New("worktree has uncommitted changes")
 
 type Engine struct {
 	Root                 string
 	ProjectName          string
-	MaxConcurrent        int
 	PRPollInterval       time.Duration
 	ReleaseFetchInterval time.Duration
 	exe                  string
@@ -61,13 +58,17 @@ type Engine struct {
 	state      *store.State
 	board      *config.Board
 	boardFound bool
-	boardMod   time.Time
+	boardStamp string
 
 	taskLocks sync.Map
 	typing    sync.Map // tmux session name -> *sync.Mutex
 	launching sync.Map // tmux session names dequeued but not yet started
 	busy      sync.Map // task id -> what a move is doing, shown on the card
 	notices   chan string
+
+	focused      string
+	alerted      map[string]time.Time
+	idleStopping sync.Map
 }
 
 func New(root string) (*Engine, error) {
@@ -89,7 +90,6 @@ func New(root string) (*Engine, error) {
 	e := &Engine{
 		Root:                 root,
 		ProjectName:          filepath.Base(root),
-		MaxConcurrent:        DefaultMaxConcurrent,
 		PRPollInterval:       time.Minute,
 		ReleaseFetchInterval: 5 * time.Minute,
 		exe:                  exe,
@@ -99,10 +99,9 @@ func New(root string) (*Engine, error) {
 		boardFound:           found,
 		notices:              make(chan string, 64),
 		prScanErrs:           map[string]string{},
+		alerted:              map[string]time.Time{},
 	}
-	if info, err := os.Stat(filepath.Join(root, config.FileName)); err == nil {
-		e.boardMod = info.ModTime()
-	}
+	e.boardStamp = config.Stamp(root)
 	if client, ok := linear.FromEnv(); ok {
 		e.linear = client
 	}
@@ -155,7 +154,7 @@ func (e *Engine) Snapshot() Snapshot {
 			live[t.ID] = name
 		}
 	}
-	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy, Live: live, Running: e.runningCount(), MaxConcurrent: e.MaxConcurrent, At: time.Now()}
+	return Snapshot{Board: e.board, BoardFound: e.boardFound, Tasks: tasks, Busy: busy, Live: live, Running: e.runningCount(), MaxConcurrent: e.limit(), At: time.Now()}
 }
 
 func (e *Engine) setBusy(id, what string) {
@@ -196,13 +195,15 @@ func (e *Engine) logf(t *store.Task, format string, args ...any) {
 	e.with(func() { t.AddLog(fmt.Sprintf(format, args...)) })
 }
 
+// WriteDefaultBoard writes the built-in board to drover.json, without your
+// drover.local.json settings.
 func (e *Engine) WriteDefaultBoard() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.boardFound {
 		return nil
 	}
-	if err := e.board.Save(e.Root); err != nil {
+	if err := config.Default().Save(e.Root); err != nil {
 		return err
 	}
 	e.boardFound = true
@@ -238,27 +239,25 @@ func (e *Engine) ownsWorktree(path string) bool {
 	return err == nil
 }
 
-// reloadBoard picks up edits to drover.json made while the TUI runs.
+// reloadBoard picks up edits to drover.json and drover.local.json made while
+// the TUI runs.
 func (e *Engine) reloadBoard() {
-	info, err := os.Stat(filepath.Join(e.Root, config.FileName))
-	if err != nil {
-		return
-	}
+	stamp := config.Stamp(e.Root)
 	e.mu.Lock()
-	unchanged := info.ModTime().Equal(e.boardMod)
+	unchanged := stamp == e.boardStamp
 	e.mu.Unlock()
 	if unchanged {
 		return
 	}
 	board, found, err := config.Load(e.Root)
 	e.mu.Lock()
-	e.boardMod = info.ModTime()
+	e.boardStamp = stamp
 	if err == nil {
 		e.board, e.boardFound = board, found
 	}
 	e.mu.Unlock()
 	if err != nil {
-		e.notify("drover.json: %v", err)
+		e.notify("board config: %v", err)
 		return
 	}
 	if e.isRepo {
@@ -1085,6 +1084,9 @@ func (e *Engine) initialPrompt(t *store.Task, col config.Column, enter []config.
 	return t.Title + "\n\n" + t.Prompt, enter
 }
 
+// limit is how many agents may run at once. Called with mu held.
+func (e *Engine) limit() int { return e.board.Limit() }
+
 func (e *Engine) runningCount() int {
 	n := 0
 	for _, t := range e.state.Tasks {
@@ -1108,7 +1110,7 @@ func (e *Engine) freeSlot(t *store.Task) string {
 			continue
 		}
 		for _, s := range o.Sessions {
-			if s.Status != store.StatusRunning || s.Activity != store.ActivityIdle || !s.Started || len(s.Pending) > 0 {
+			if !idle(s) {
 				continue
 			}
 			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
@@ -1137,10 +1139,10 @@ func (e *Engine) startQueuedNow(t *store.Task, key string) {
 		if s == nil || s.Status != store.StatusQueued {
 			return
 		}
-		if e.runningCount() >= e.MaxConcurrent {
+		if e.runningCount() >= e.limit() {
 			stop = e.freeSlot(t)
 		}
-		if e.runningCount() >= e.MaxConcurrent {
+		if e.runningCount() >= e.limit() {
 			return
 		}
 		start = true
@@ -1211,10 +1213,10 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,
 		}
-		if evict && e.runningCount() >= e.MaxConcurrent {
+		if evict && e.runningCount() >= e.limit() {
 			stop = e.freeSlot(t)
 		}
-		if e.runningCount() >= e.MaxConcurrent {
+		if e.runningCount() >= e.limit() {
 			queue = true
 			s.Status = store.StatusQueued
 			s.Activity = store.ActivityIdle
@@ -1224,7 +1226,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 				s.Pending = append([]store.Pending{{Text: prompt}}, s.Pending...)
 			}
 			t.AddLog("Agent queued: concurrency limit reached")
-			e.notify("#%d queued: %d agents running (limit %d). Suspend one with S to free a slot", t.Number, e.runningCount(), e.MaxConcurrent)
+			e.notify("#%d queued: %d agents running (limit %d). Suspend one with S to free a slot", t.Number, e.runningCount(), e.limit())
 			return
 		}
 		s.Status = store.StatusRunning

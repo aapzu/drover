@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -353,19 +352,4 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 		return fmt.Errorf("%w: %s", err, tail)
 	}
 	return nil
-}
-
-// desktopNotify is a variable so tests can capture notifications.
-var desktopNotify = func(title, body string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		script := fmt.Sprintf("display notification %q with title %q", body, title)
-		cmd = exec.Command("osascript", "-e", script)
-	case "linux":
-		cmd = exec.Command("notify-send", title, body)
-	default:
-		return
-	}
-	go cmd.Run()
 }

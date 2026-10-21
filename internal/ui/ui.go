@@ -78,6 +78,8 @@ type sessionStartedMsg struct {
 type Model struct {
 	eng      *engine.Engine
 	snap     engine.Snapshot
+	focused  string
+	attached string
 	branch   string
 	snapBusy bool
 
@@ -297,6 +299,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		m.frame++
+		m.syncFocus()
 		if m.flash != "" && time.Since(m.flashAt) > 6*time.Second {
 			m.flash = ""
 		}
@@ -418,6 +421,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setFlash("Attach failed: " + msg.err.Error())
 		}
+		m.attached = ""
+		m.syncFocus()
 		m.snap = m.eng.Snapshot()
 		var cmds []tea.Cmd
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
@@ -570,6 +575,8 @@ func (m Model) attach(id string) (tea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
+	m.attached = id
+	m.syncFocus()
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
 		return attachDoneMsg{id: id, paneGone: !tmux.Has(name), err: err}
 	}), true

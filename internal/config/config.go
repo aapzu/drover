@@ -12,15 +12,38 @@ import (
 
 const FileName = "drover.json"
 
-const DefaultWorktreesDir = ".drover/worktrees"
+const (
+	LocalFileName        = "drover.local.json"
+	DefaultWorktreesDir  = ".drover/worktrees"
+	DefaultMaxConcurrent = 8
+)
 
 type Board struct {
-	DefaultBaseBranch     string      `json:"defaultBaseBranch,omitempty"`
-	DefaultPermissionMode string      `json:"defaultPermissionMode,omitempty"`
-	WorktreesDir          string      `json:"worktreesDir,omitempty"`
-	Columns               []Column    `json:"columns"`
-	PRFlow                *PRFlow     `json:"prFlow,omitempty"`
-	ReviewFlow            *ReviewFlow `json:"reviewFlow,omitempty"`
+	DefaultBaseBranch     string `json:"defaultBaseBranch,omitempty"`
+	DefaultPermissionMode string `json:"defaultPermissionMode,omitempty"`
+	WorktreesDir          string `json:"worktreesDir,omitempty"`
+	// MaxConcurrent caps running agents; 0 means DefaultMaxConcurrent.
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
+	// IdleTimeoutMinutes suspends agents idle this long; 0 never does.
+	IdleTimeoutMinutes int           `json:"idleTimeoutMinutes,omitempty"`
+	Notifications      Notifications `json:"notifications"`
+	Columns            []Column      `json:"columns"`
+	PRFlow             *PRFlow       `json:"prFlow,omitempty"`
+	ReviewFlow         *ReviewFlow   `json:"reviewFlow,omitempty"`
+}
+
+// Notifications picks the agent events that raise a desktop notification and
+// a notice on the board. Each kind repeats at most once per cooldown per agent.
+type Notifications struct {
+	TurnDone        bool `json:"turnDone"`
+	NeedsYou        bool `json:"needsYou"`
+	PlanReady       bool `json:"planReady"`
+	Exited          bool `json:"exited"`
+	CooldownSeconds int  `json:"cooldownSeconds"`
+}
+
+func DefaultNotifications() Notifications {
+	return Notifications{TurnDone: true, NeedsYou: true, PlanReady: true, Exited: true, CooldownSeconds: 10}
 }
 
 // ReviewFlow moves the cards of pull requests you review. Started is where a
@@ -84,41 +107,90 @@ func (c Column) IsDone() bool { return c.Role == "done" }
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
 
 // Load reads drover.json and applies drover.local.json on top of it.
-// A missing file yields the default board and found=false.
+// A missing drover.json yields the default board and found=false.
 func Load(root string) (board *Board, found bool, err error) {
 	data, err := os.ReadFile(filepath.Join(root, FileName))
-	if errors.Is(err, os.ErrNotExist) {
-		return Default(), false, nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		board = Default()
+	case err != nil:
 		return nil, false, err
-	}
-	board = &Board{}
-	if err := json.Unmarshal(data, board); err != nil {
-		return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
-	}
-	if local, err := os.ReadFile(filepath.Join(root, "drover.local.json")); err == nil {
-		var override struct {
-			DefaultBaseBranch string `json:"defaultBaseBranch"`
-			WorktreesDir      string `json:"worktreesDir"`
+	default:
+		found = true
+		board = &Board{Notifications: DefaultNotifications()}
+		if err := json.Unmarshal(data, board); err != nil {
+			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
 		}
-		if json.Unmarshal(local, &override) == nil {
-			if override.DefaultBaseBranch != "" {
-				board.DefaultBaseBranch = override.DefaultBaseBranch
-			}
-			if override.WorktreesDir != "" {
-				board.WorktreesDir = override.WorktreesDir
-			}
-		}
+	}
+	if err := board.applyLocal(root); err != nil {
+		return nil, found, err
 	}
 	if err := board.validate(); err != nil {
-		return nil, true, err
+		return nil, found, err
 	}
 	// A worktrees dir holding the checkout itself would make it look board-owned.
 	if rel, err := filepath.Rel(board.WorktreesPath(root), root); err == nil && (rel == "." || filepath.IsLocal(rel)) {
-		return nil, true, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
+		return nil, found, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
 	}
-	return board, true, nil
+	return board, found, nil
+}
+
+// applyLocal overlays your personal settings from drover.local.json.
+func (b *Board) applyLocal(root string) error {
+	data, err := os.ReadFile(filepath.Join(root, LocalFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	var local struct {
+		DefaultBaseBranch  string          `json:"defaultBaseBranch"`
+		WorktreesDir       string          `json:"worktreesDir"`
+		MaxConcurrent      *int            `json:"maxConcurrent"`
+		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
+		Notifications      json.RawMessage `json:"notifications"`
+	}
+	if err := json.Unmarshal(data, &local); err != nil {
+		return fmt.Errorf("parse %s: %w", LocalFileName, err)
+	}
+	if local.DefaultBaseBranch != "" {
+		b.DefaultBaseBranch = local.DefaultBaseBranch
+	}
+	if local.WorktreesDir != "" {
+		b.WorktreesDir = local.WorktreesDir
+	}
+	if local.MaxConcurrent != nil {
+		b.MaxConcurrent = *local.MaxConcurrent
+	}
+	if local.IdleTimeoutMinutes != nil {
+		b.IdleTimeoutMinutes = *local.IdleTimeoutMinutes
+	}
+	if local.Notifications != nil {
+		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
+			return fmt.Errorf("parse %s: notifications: %w", LocalFileName, err)
+		}
+	}
+	return nil
+}
+
+// Stamp changes whenever drover.json or drover.local.json does.
+func Stamp(root string) string {
+	var stamp string
+	for _, name := range []string{FileName, LocalFileName} {
+		if info, err := os.Stat(filepath.Join(root, name)); err == nil {
+			stamp += info.ModTime().String() + fmt.Sprint(info.Size())
+		}
+		stamp += "|"
+	}
+	return stamp
+}
+
+// Limit is how many agents may run at once.
+func (b *Board) Limit() int {
+	if b.MaxConcurrent > 0 {
+		return b.MaxConcurrent
+	}
+	return DefaultMaxConcurrent
 }
 
 func (b *Board) validate() error {
@@ -227,6 +299,7 @@ func (b *Board) TodoColumn() Column {
 
 func Default() *Board {
 	return &Board{
+		Notifications: DefaultNotifications(),
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},

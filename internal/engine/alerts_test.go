@@ -1,0 +1,109 @@
+package engine
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/aapzu/drover/internal/store"
+)
+
+const lifecycleBoard = `{%s"columns":[
+  {"id":"todo","name":"To Do","role":"todo"},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+func startIdleAgent(t *testing.T, e *Engine, title string) *store.Task {
+	t.Helper()
+	task := e.CreateTask(title, "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, title+" to finish its turn", func(tasks []*store.Task) bool {
+		for _, other := range tasks {
+			if s := other.Sessions[store.MainSession]; other.ID == task.ID && s != nil && idle(s) {
+				return true
+			}
+		}
+		return false
+	})
+	return task
+}
+
+func TestTurnDoneNotifiesUnlessFocused(t *testing.T) {
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, ""))
+	loudBefore, quietBefore := len(desktopNotified("#2 Loud agent here:")), len(desktopNotified("#1 Quiet agent here:"))
+	quiet := e.CreateTask("Quiet agent here", "")
+	e.SetFocused(quiet.ID)
+	if err := e.Move(quiet.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	startIdleAgent(t, e, "Loud agent here")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(desktopNotified("#2 Loud agent here:")) == loudBefore && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := desktopNotified("#2 Loud agent here:")[loudBefore:]; len(got) != 1 || got[0] != "#2 Loud agent here: finished: Did the work." {
+		t.Errorf("loud notifications = %q", got)
+	}
+	if got := desktopNotified("#1 Quiet agent here:")[quietBefore:]; len(got) != 0 {
+		t.Errorf("the focused agent notified: %q", got)
+	}
+}
+
+func TestIdleTimeoutSuspendsUnfocusedAgents(t *testing.T) {
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"idleTimeoutMinutes":1,`))
+	task := startIdleAgent(t, e, "Sleepy agent")
+	e.SetFocused(task.ID)
+	backdate := func() {
+		e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	}
+	backdate()
+	time.Sleep(time.Second)
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning {
+		t.Fatalf("focused agent was suspended: %+v", s)
+	}
+
+	e.SetFocused("")
+	backdate()
+	waitFor(t, e, "the idle agent to be suspended", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Status == store.StatusSuspended && hasLog(t, "Agent suspended after 1 min idle")
+	})
+}
+
+func TestBoardSetsAgentLimit(t *testing.T) {
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"maxConcurrent":3,`))
+	if got := e.Snapshot().MaxConcurrent; got != 3 {
+		t.Errorf("limit = %d, want 3", got)
+	}
+}
+
+func TestPermissionRequestsAlertOncePerCooldown(t *testing.T) {
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"notifications":{"turnDone":false,"needsYou":true,"planReady":true,"cooldownSeconds":60},`))
+	task := startIdleAgent(t, e, "Asks a lot")
+	prefix := fmt.Sprintf("#%d Asks a lot:", task.Number)
+	before := len(desktopNotified(prefix))
+	var dir string
+	e.with(func() { dir = e.sessionDir(e.find(task.ID), store.MainSession) })
+	events, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"Bash", "Bash", "ExitPlanMode"} {
+		events.WriteString(`{"hook_event_name":"PermissionRequest","tool_name":"` + tool + `"}` + "\n")
+	}
+	events.Close()
+
+	want := []string{prefix + " needs you: permission requested", prefix + " has a plan ready for review"}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(desktopNotified(prefix))-before < len(want) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if got := desktopNotified(prefix)[before:]; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("notifications = %q, want %q", got, want)
+	}
+}

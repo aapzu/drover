@@ -59,9 +59,11 @@ func (e *Engine) Tick() {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
 					t.AddLog("Agent exited")
+					e.alert(t, alertExited, "agent exited")
 				}
 			}
 		}
+		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
 		followUps = append(followUps, e.dequeue()...)
 		if time.Since(e.lastPoll) > 1500*time.Millisecond {
@@ -85,7 +87,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 	}
 	s.EventsOffset = offset
 	s.UpdatedAt = time.Now()
-	taskID, visit, number := t.ID, t.Visit, t.Number
+	taskID, visit := t.ID, t.Visit
 	var out []func()
 	for _, ev := range events {
 		if ev.PermissionMode != "" {
@@ -149,7 +151,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 		case "PermissionRequest":
 			s.Activity = store.ActivityPermission
-			e.notify("#%d needs you: permission requested", number)
+			if ev.ToolName == "ExitPlanMode" {
+				e.alert(t, alertPlanReady, "has a plan ready for review")
+			} else {
+				e.alert(t, alertNeedsYou, "needs you: permission requested")
+			}
 		case "Notification":
 			if ev.NotificationType == "permission_prompt" {
 				s.Activity = store.ActivityPermission
@@ -175,7 +181,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				then := next
 				next = func() { e.respawnPending(taskID, key); then() }
 			}
-			out = append(out, next)
+			out = append(out, func() { next(); e.alertTurnDone(taskID, key, reply) })
 		}
 	}
 	return out
@@ -436,7 +442,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 
 // dequeue starts queued sessions while there are free slots. Called with mu held.
 func (e *Engine) dequeue() []func() {
-	free := e.MaxConcurrent - e.runningCount()
+	free := e.limit() - e.runningCount()
 	var out []func()
 	for _, t := range e.state.Tasks {
 		for key, s := range t.Sessions {
