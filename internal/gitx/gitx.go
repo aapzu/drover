@@ -1,5 +1,5 @@
 // Package gitx creates and removes the per-task worktrees under
-// <worktrees dir>/<task number>.
+// <worktrees dir>/drover-<task number>.
 package gitx
 
 import (

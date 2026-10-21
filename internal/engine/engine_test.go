@@ -176,7 +176,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := e.Snapshot().Tasks[0]
-	if moved.WorktreePath != filepath.Join(root, ".drover", "worktrees", "1") {
+	if moved.WorktreePath != filepath.Join(root, ".drover", "worktrees", "drover-1") {
 		t.Errorf("worktree path = %q", moved.WorktreePath)
 	}
 	if !strings.HasPrefix(moved.Branch, "fix-the-login-bug-") {
@@ -190,7 +190,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 		}
 		t.Errorf("worktree not removed: %s", done.WorktreePath)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".drover", "worktrees", "1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, ".drover", "worktrees", "drover-1")); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still exists")
 	}
 	for key, s := range done.Sessions {
@@ -410,7 +410,7 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 		t.Errorf("typed message arrived garbled:\n%s", typed)
 	}
 
-	os.WriteFile(filepath.Join(root, ".drover", "worktrees", "1", "wip.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(root, ".drover", "worktrees", "drover-1", "wip.txt"), []byte("x"), 0o644)
 	if err := e.Move(task.ID, "done", MoveOptions{}); err != ErrDirty {
 		t.Fatalf("move to Done with dirty worktree: err = %v, want ErrDirty", err)
 	}
@@ -445,17 +445,28 @@ func TestWorktreesDirSetting(t *testing.T) {
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(root, ".claude", "worktrees", "1")
+	want := filepath.Join(root, ".claude", "worktrees", "drover-1")
 	if got := e.Snapshot().Tasks[0].WorktreePath; got != want {
 		t.Fatalf("worktree path = %q, want %q", got, want)
 	}
-	for _, path := range []string{want, filepath.Join(root, ".drover", "worktrees", "1")} {
+	for _, path := range []string{
+		want,
+		filepath.Join(want, "sub"),
+		filepath.Join(root, ".drover", "worktrees", "drover-1"),
+		filepath.Join(root, ".drover", "worktrees", "1"),
+	} {
 		if !e.ownsWorktree(path) {
 			t.Errorf("%s not recognised as a board worktree", path)
 		}
 	}
-	if e.ownsWorktree(root) {
-		t.Errorf("the main checkout counts as a board worktree")
+	for _, path := range []string{
+		root,
+		filepath.Join(root, ".claude", "worktrees", "feat"),
+		filepath.Join(root, ".claude", "worktrees", "1"),
+	} {
+		if e.ownsWorktree(path) {
+			t.Errorf("%s counts as a board worktree", path)
+		}
 	}
 
 	if err := e.Move(task.ID, "todo", MoveOptions{Force: true}); err != nil {
