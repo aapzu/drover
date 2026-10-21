@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -44,6 +45,15 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case msg.Action == tea.MouseActionPress && tea.MouseEvent(msg).IsWheel():
 		h := l.hitTest(m, msg.X, msg.Y)
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
+			if name, ok := m.wheelTarget(); ok {
+				code := 65 // SGR wheel down
+				if msg.Button == tea.MouseButtonWheelUp {
+					code = 64
+				}
+				x, y := clamp(msg.X, 1, m.width-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+				m.keys.send(keyJob{session: name, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)})
+				return m, nil
+			}
 			if msg.Button == tea.MouseButtonWheelUp {
 				return m.scrollPreview(3)
 			}

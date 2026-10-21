@@ -153,16 +153,18 @@ func Stop(name string) {
 }
 
 // Capture returns the visible screen plus up to scrollback lines of history,
-// with colors, and how many lines of history the pane has.
-func Capture(name string, scrollback int) (string, int, error) {
+// with colors, how many lines of history the pane has, and whether its app has
+// enabled mouse tracking with SGR encoding. Alternate-screen apps have no history.
+func Capture(name string, scrollback int) (out string, history int, mouse bool, err error) {
 	target := "=" + name + ":"
-	size, err := run("display-message", "-p", "-t", target, "#{history_size}")
+	info, err := run("display-message", "-p", "-t", target, "#{history_size} #{mouse_any_flag}#{mouse_sgr_flag}")
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
-	history, _ := strconv.Atoi(strings.TrimSpace(size))
-	out, err := run("capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback))
-	return out, history, err
+	size, flags, _ := strings.Cut(strings.TrimSpace(info), " ")
+	history, _ = strconv.Atoi(size)
+	out, err = run("capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback))
+	return out, history, flags == "11", err
 }
 
 // Screen returns the visible screen as plain text.
