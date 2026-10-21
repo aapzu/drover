@@ -180,6 +180,21 @@ func waitFor(t *testing.T, e *Engine, what string, cond func(*store.Task) bool) 
 	return nil
 }
 
+// runEngine runs e until the test ends, then waits for its work to finish so
+// nothing writes into the test's directories after they are removed.
+func runEngine(t *testing.T, e *Engine) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		e.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+}
+
 func hasLog(task *store.Task, text string) bool {
 	for _, l := range task.Log {
 		if strings.Contains(l.Text, text) {
@@ -208,9 +223,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Fix the login bug", "Users cannot log in")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -273,9 +286,7 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("SLOW work", "")
 	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
@@ -321,9 +332,7 @@ func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Inherit", "")
 	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
@@ -391,9 +400,7 @@ func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Round trip", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -430,9 +437,7 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Typed messages", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -481,9 +486,7 @@ func TestWorktreesDirSetting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Custom dir", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -542,9 +545,7 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("PLAN the refactor", "")
 	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
@@ -578,9 +579,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Do the work", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -614,9 +613,7 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	// A busy agent is never suspended to make room.
 	first := e.CreateTask("First SLOW", "")
@@ -697,9 +694,7 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Refactor auth", "PRS")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -797,9 +792,7 @@ func startWithBoard(t *testing.T, board string) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go e.Run(ctx)
+	runEngine(t, e)
 	return e
 }
 
@@ -931,9 +924,7 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.PRPollInterval, e.ReleaseFetchInterval = 200*time.Millisecond, 200*time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Auth", "ONEPR")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -1019,9 +1010,7 @@ func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	os.WriteFile(path, []byte(created(1)), 0o644)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	waitForAll(t, e, "the session card to take the PR from the transcript", func(tasks []*store.Task) bool {
 		return len(tasks) == 1 && tasks[0].PR != nil && tasks[0].PR.Title == "PR one"
@@ -1079,9 +1068,7 @@ func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := func(id string) *store.Task {
 		for _, task := range e.Snapshot().Tasks {
@@ -1135,9 +1122,7 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Go FORK", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -1170,9 +1155,7 @@ func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	for _, title := range []string{"First", "Second"} {
 		task := e.CreateTask(title, "")
@@ -1425,9 +1408,7 @@ func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	if _, err := e.NewSession(); err != nil {
 		t.Fatal(err)
@@ -1479,9 +1460,7 @@ func TestNewSessionMovesWhileAgentWorks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	if _, err := e.NewSession(); err != nil {
 		t.Fatal(err)
@@ -1512,9 +1491,7 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task, err := e.NewSession()
 	if err != nil {
@@ -1577,9 +1554,7 @@ func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	task := e.CreateTask("Retune", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
@@ -1641,9 +1616,7 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			go e.Run(ctx)
+			runEngine(t, e)
 
 			task, err := e.NewSession()
 			if err != nil {
@@ -1709,9 +1682,7 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	if _, err := e.NewSession(); err != nil {
 		t.Fatal(err)
@@ -1812,9 +1783,7 @@ esac
 		t.Fatal(err)
 	}
 	e.PRPollInterval = 200 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go e.Run(ctx)
+	runEngine(t, e)
 	r.e = e
 	return r
 }

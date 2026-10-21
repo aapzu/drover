@@ -6,11 +6,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -198,18 +201,85 @@ func RemoveWorktree(root, path string) error {
 	return nil
 }
 
-// Dirty reports uncommitted changes in the worktree, ignoring the
-// node_modules link this package creates.
-func Dirty(path string) bool {
+// CopyFiles copies files and directories that git doesn't track, such as
+// .env, from root into a new worktree. Symlinks are copied as the files they
+// point to. Missing paths and paths outside root are skipped, and so is
+// .claude/, which Claude already finds in the main checkout.
+func CopyFiles(root, worktree string, paths []string) error {
+	for _, p := range paths {
+		p = filepath.Clean(p)
+		if !filepath.IsLocal(p) || p == ".claude" || strings.HasPrefix(p, ".claude"+string(filepath.Separator)) {
+			continue
+		}
+		src := filepath.Join(root, p)
+		if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, _ := filepath.Rel(root, path)
+			return copyFile(path, filepath.Join(worktree, rel))
+		})
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// Dirty reports uncommitted changes in the worktree, ignoring untracked
+// files under the node_modules link this package creates and the given
+// paths, such as the files CopyFiles brought in.
+func Dirty(path string, ignore ...string) bool {
 	if path == "" {
 		return false
 	}
-	out, err := run(path, "status", "--porcelain")
+	out, err := run(path, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return false
 	}
+	ignore = append(slices.Clip(ignore), "node_modules")
 	for _, line := range strings.Split(out, "\n") {
-		if line != "" && !strings.HasSuffix(line, " node_modules") {
+		if len(line) > 3 && !(strings.HasPrefix(line, "?? ") && ignored(line[3:], ignore)) {
+			return true
+		}
+	}
+	return false
+}
+
+func ignored(path string, ignore []string) bool {
+	path = strings.TrimSuffix(path, "/")
+	for _, p := range ignore {
+		p = filepath.ToSlash(filepath.Clean(p))
+		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}
 	}
@@ -235,13 +305,50 @@ func FetchRelease(root, branch string) (string, error) {
 	}
 	var errs []error
 	for _, b := range candidates {
-		_, err := run(root, "fetch", "--quiet", "origin", b)
+		ref, err := Fetch(root, b)
 		if err == nil {
-			return "refs/remotes/origin/" + b, nil
+			return ref, nil
 		}
 		errs = append(errs, err)
 	}
 	return "", errors.Join(errs...)
+}
+
+func HasOrigin(root string) bool {
+	_, err := run(root, "remote", "get-url", "origin")
+	return err == nil
+}
+
+// Fetch fetches branch from origin and returns its remote-tracking ref.
+func Fetch(root, branch string) (string, error) {
+	if _, err := run(root, "fetch", "--quiet", "origin", branch); err != nil {
+		return "", err
+	}
+	return "refs/remotes/origin/" + branch, nil
+}
+
+var ErrDiverged = errors.New("branch has diverged")
+
+// FastForward moves the worktree's branch up to ref and returns how many
+// commits it gained.
+func FastForward(dir, ref string) (int, error) {
+	out, err := run(dir, "rev-list", "--count", "HEAD.."+ref)
+	if err != nil {
+		return 0, err
+	}
+	behind, _ := strconv.Atoi(out)
+	if behind == 0 {
+		return 0, nil
+	}
+	if ok, err := Contains(dir, ref, "HEAD"); err != nil {
+		return 0, err
+	} else if !ok {
+		return 0, ErrDiverged
+	}
+	if _, err := run(dir, "merge", "--ff-only", "--quiet", ref); err != nil {
+		return 0, err
+	}
+	return behind, nil
 }
 
 // Contains reports whether commit is reachable from ref. A commit git doesn't

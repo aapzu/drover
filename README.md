@@ -50,6 +50,8 @@ drover
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
 | `s` | send the agent a message |
 | `r` / `S` | start or resume / suspend the agent |
+| `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
+| `u` | update the worktree from its base branch |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
 | `p`, `i`, `?` | toggle preview, task details and log, help |
@@ -89,6 +91,15 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   To Do removes the worktree and resets the conversation. Done suspends the
   agent and removes the worktree, asking first if there are uncommitted
   changes. Branches are never deleted.
+- **Worktree setup.** `copyFiles` lists paths git doesn't track, such as
+  `.env`, to copy from the main checkout into each new worktree. They never
+  count as uncommitted changes. `initScript` then runs with `sh -c` in the new
+  worktree before the agent starts, for example `pnpm install`. If it fails,
+  so does the move, and the next start runs it again.
+- **Keeping up with the base branch.** `u` fetches the card's base branch and
+  fast-forwards the worktree to it. When the branch has commits of its own,
+  a running agent is asked to merge it instead. `u` refuses while the agent
+  is working or the worktree has uncommitted changes.
 - **Column settings.** `autoSpawn`, `permissionMode`, `modelOverride` and
   `effortOverride` become `claude --permission-mode/--model/--effort`. Columns
   without `permissionMode` use the board's `defaultPermissionMode`, or Claude

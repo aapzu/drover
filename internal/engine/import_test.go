@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,9 +41,7 @@ func TestImportRunningAgentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	found, _ := e.DiscoverSessions(40)
 	if len(found) != 1 || !found[0].Running {
