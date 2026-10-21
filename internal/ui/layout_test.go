@@ -295,6 +295,19 @@ func TestSiblingsOfSelectedCardStandOut(t *testing.T) {
 	}
 }
 
+func TestSelectedCardHasDoubleBorder(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	task := &store.Task{ID: "t", Number: 1, Title: "Task", ColumnID: "c0"}
+	m.snap.Tasks = []*store.Task{task}
+
+	if got := ansi.Strip(m.renderCard(task, 30, true, false)); !strings.HasPrefix(got, "╔") {
+		t.Errorf("selected card isn't double-bordered:\n%s", got)
+	}
+	if got := ansi.Strip(m.renderCard(task, 30, false, false)); !strings.HasPrefix(got, "╭") {
+		t.Errorf("unselected card changed border:\n%s", got)
+	}
+}
+
 func TestGroupsGetDistinctColors(t *testing.T) {
 	m := testModel(120, 40, 1, 0)
 	var owners, splits []*store.Task

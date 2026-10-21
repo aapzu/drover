@@ -18,6 +18,7 @@ var (
 	accent     = lipgloss.Color("#8b5cf6")
 	dim        = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
 	bold       = lipgloss.NewStyle().Bold(true)
+	activeText = bold.Underline(true)
 	thinking   = lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b"))
 	needsYou   = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Bold(true)
 	alert      = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
@@ -25,7 +26,7 @@ var (
 	muted      = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ca3af"))
 	headerBar  = lipgloss.NewStyle().Background(lipgloss.Color("#1f2937")).Foreground(lipgloss.Color("#e5e7eb"))
 	cardStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#374151")).Padding(0, 1)
-	cardActive = cardStyle.BorderForeground(accent)
+	cardActive = cardStyle.Border(lipgloss.DoubleBorder()).BorderForeground(lipgloss.Color("#f9fafb"))
 	panelStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#374151"))
 	modalStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(accent).Padding(1, 2)
 	spinner    = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -328,7 +329,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 		status := strings.TrimSpace(group + " " + m.status(t))
 		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
 		if active {
-			line = bold.Render(line)
+			line = activeText.Render(line)
 		}
 		if status != "" {
 			line += strings.Repeat(" ", max(1, content-lipgloss.Width(line)-lipgloss.Width(status))) + status
@@ -342,7 +343,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 		line2 = ansi.Truncate(strings.Join(wrapped[1:], " "), content, "…")
 	}
 	if active {
-		line1, line2 = bold.Render(line1), bold.Render(line2)
+		line1, line2 = activeText.Render(line1), activeText.Render(line2)
 	}
 	var meta []string
 	for _, part := range []string{group, m.status(t), m.cardRef(t)} {
