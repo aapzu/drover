@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,6 +79,29 @@ func TestBoardSetsAgentLimit(t *testing.T) {
 	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"maxConcurrent":3,`))
 	if got := e.Snapshot().MaxConcurrent; got != 3 {
 		t.Errorf("limit = %d, want 3", got)
+	}
+}
+
+func TestUsageAddsUpAcrossTranscripts(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, ""))
+	task := startIdleAgent(t, e, "Count my tokens")
+	write := func(id string) {
+		var path string
+		e.with(func() {
+			s := e.find(task.ID).Sessions[store.MainSession]
+			s.AgentSessionID = id
+			path = e.transcriptOf(e.find(task.ID), s)
+		})
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(`{"type":"assistant","message":{"id":"`+id+`","model":"claude-sonnet-5-5","usage":{"input_tokens":100000,"output_tokens":100000}}}`+"\n"), 0o644)
+		e.scanUsage(task.ID, store.MainSession)
+	}
+	write("first")
+	write("after-clear")
+	u := e.Snapshot().Tasks[0].Sessions[store.MainSession].Usage
+	if math.Abs(u.Cost-2.4) > 1e-9 || u.Context != 100_000 {
+		t.Errorf("usage = %+v, want $2.40 and the last prompt's 100K tokens", u)
 	}
 }
 

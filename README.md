@@ -110,6 +110,10 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 - **Automations.** Columns run rows when a card enters them or an agent's
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
   once its plan is approved.
+- **Context and cost.** After each turn the board reads the conversation's
+  transcript. Cards show how full the agent's context is and an estimate of
+  what the conversation has cost at list prices, like `42% · $1.20`, and the
+  header shows the board's total.
 - **Activity.** A `--settings` file adds Claude Code hooks that append events
   to `sessions/…/events.jsonl` in the state directory. The board reads them
   to show working, idle and needs-you states and to run turn-end automations.

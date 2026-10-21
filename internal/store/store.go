@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+
+	"github.com/aapzu/drover/internal/claude"
 )
 
 type SessionStatus string
@@ -104,12 +106,15 @@ type Session struct {
 	Scratch   bool `json:"scratch,omitempty"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
-	Forked         bool      `json:"forked,omitempty"`
-	PID            int       `json:"pid,omitempty"`
-	TranscriptPath string    `json:"transcriptPath,omitempty"`
-	PRScanPath     string    `json:"prScanPath,omitempty"`
-	PRScan         int64     `json:"prScan,omitempty"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	Forked         bool         `json:"forked,omitempty"`
+	PID            int          `json:"pid,omitempty"`
+	TranscriptPath string       `json:"transcriptPath,omitempty"`
+	PRScanPath     string       `json:"prScanPath,omitempty"`
+	PRScan         int64        `json:"prScan,omitempty"`
+	Usage          claude.Usage `json:"usage,omitzero"`
+	UsageScanPath  string       `json:"usageScanPath,omitempty"`
+	UsageScan      int64        `json:"usageScan,omitempty"`
+	UpdatedAt      time.Time    `json:"updatedAt"`
 }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves

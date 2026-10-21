@@ -136,6 +136,36 @@ func (e *Engine) transcriptOf(t *store.Task, s *store.Session) string {
 	return claude.TranscriptPath(s.AgentSessionID, dir)
 }
 
+// scanUsage adds what the session's latest turns used to its totals.
+func (e *Engine) scanUsage(taskID, key string) {
+	e.mu.Lock()
+	var s *store.Session
+	path := ""
+	if t := e.find(taskID); t != nil {
+		if s = t.Sessions[key]; s != nil {
+			path = e.transcriptOf(t, s)
+		}
+	}
+	if path == "" {
+		e.mu.Unlock()
+		return
+	}
+	offset, usage := s.UsageScan, s.Usage
+	if filepath.Base(s.UsageScanPath) != filepath.Base(path) {
+		offset = 0
+	}
+	e.mu.Unlock()
+	next, err := claude.ScanUsage(path, offset, &usage)
+	if err != nil {
+		return
+	}
+	e.with(func() {
+		if t := e.find(taskID); t != nil && t.Sessions[key] == s && e.transcriptOf(t, s) == path {
+			s.Usage, s.UsageScanPath, s.UsageScan = usage, path, next
+		}
+	})
+}
+
 // scanTranscripts adds the PRs sessions created since the last scan and
 // returns how many cards it split off.
 func (e *Engine) scanTranscripts(scans []prScan) (split int) {

@@ -3,6 +3,7 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -230,5 +231,64 @@ func TestInterrupted(t *testing.T) {
 	}
 	if Interrupted(filepath.Join(t.TempDir(), "missing.jsonl"), turnStart) {
 		t.Error("a missing transcript is not interrupted")
+	}
+}
+
+func TestScanUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	line := func(id, model string, in, write, read, out int) string {
+		return fmt.Sprintf(`{"type":"assistant","message":{"id":%q,"model":%q,"usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,"output_tokens":%d}}}`+"\n", id, model, in, write, read, out)
+	}
+	os.WriteFile(path, []byte(
+		`{"type":"user","message":{"content":"hi"}}`+"\n"+
+			line("a", "claude-opus-5-5", 1_000_000, 0, 0, 0)+
+			line("b", "claude-opus-5-5", 0, 1_000_000, 0, 10)+
+			line("b", "claude-opus-5-5", 0, 1_000_000, 0, 1_000_000)+
+			`{"type":"assistant","message":{"id":"c","model":"<synthetic>","usage":{"input_tokens":5}}}`+"\n"), 0o644)
+
+	var u Usage
+	offset, err := ScanUsage(path, 0, &u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 4.0 + 5 + 20; math.Abs(u.Cost-want) > 1e-9 {
+		t.Errorf("cost = %v, want %v", u.Cost, want)
+	}
+	if u.Context != 1_000_000 || u.Model != "claude-opus-5-5" || ContextWindow(u.Model) != 1_000_000 {
+		t.Errorf("usage = %+v", u)
+	}
+
+	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(line("d", "claude-haiku-4-5-20251001", 0, 0, 150_000, 0))
+	f.WriteString(line("e", "claude-unknown-9", 100, 0, 0, 100))
+	f.Close()
+	if _, err := ScanUsage(path, offset, &u); err != nil {
+		t.Fatal(err)
+	}
+	if want := 29 + 0.015; math.Abs(u.Cost-want) > 1e-9 {
+		t.Errorf("cost after more turns = %v, want %v", u.Cost, want)
+	}
+	if u.Context != 100 || ContextWindow(u.Model) != 0 {
+		t.Errorf("unknown model: %+v", u)
+	}
+}
+
+func TestScanUsageSkipsHistoryAForkCopies(t *testing.T) {
+	dir := t.TempDir()
+	line := func(id, at string) string {
+		return `{"type":"assistant","timestamp":"` + at + `","message":{"id":"` + id + `","model":"claude-opus-5-5","usage":{"input_tokens":1000000}}}` + "\n"
+	}
+	old := line("a", "2026-10-21T10:00:00.000Z")
+	os.WriteFile(filepath.Join(dir, "old.jsonl"), []byte(old), 0o644)
+	os.WriteFile(filepath.Join(dir, "fork.jsonl"), []byte(old+line("b", "2026-10-21T11:00:00.000Z")), 0o644)
+
+	var u Usage
+	for _, name := range []string{"old.jsonl", "fork.jsonl"} {
+		if _, err := ScanUsage(filepath.Join(dir, name), 0, &u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if math.Abs(u.Cost-8) > 1e-9 {
+		t.Errorf("cost = %v, want $8 for two messages", u.Cost)
 	}
 }
