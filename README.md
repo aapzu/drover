@@ -84,7 +84,7 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   worktree and branch and resumes the same conversation there; if you're
   attached, you follow it. Move it yourself to go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
-  `.drover/worktrees/<N>` on branch `<slug>-<id8>` from the base branch.
+  `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
   agent and removes the worktree, asking first if there are uncommitted
   changes. Branches are never deleted.

@@ -214,10 +214,18 @@ func (e *Engine) worktreesDir() string {
 	return e.board.WorktreesPath(e.Root)
 }
 
-// ownsWorktree reports whether path is under the configured worktrees
-// directory or the default one.
+// worktreeFolderPrefix marks the folders the board creates, so a shared
+// directory such as .claude/worktrees can also hold other tools' worktrees.
+const worktreeFolderPrefix = "drover-"
+
+// ownsWorktree reports whether path is under the default worktrees directory
+// or a drover-prefixed folder of the configured one.
 func (e *Engine) ownsWorktree(path string) bool {
-	return claude.Within(e.worktreesDir(), path) || claude.Within(filepath.Join(e.Root, config.DefaultWorktreesDir), path)
+	if claude.Within(filepath.Join(e.Root, config.DefaultWorktreesDir), path) {
+		return true
+	}
+	rel, err := filepath.Rel(e.worktreesDir(), path)
+	return err == nil && filepath.IsLocal(rel) && strings.HasPrefix(rel, worktreeFolderPrefix)
 }
 
 // reloadBoard picks up edits to drover.json made while the TUI runs.
@@ -689,7 +697,7 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 		branch = gitx.BranchName(title, id)
 	}
 	e.setBusy(busyID, "creating worktree")
-	path, err = gitx.CreateWorktree(e.Root, e.worktreesDir(), fmt.Sprint(number), branch, resolved)
+	path, err = gitx.CreateWorktree(e.Root, e.worktreesDir(), fmt.Sprintf("%s%d", worktreeFolderPrefix, number), branch, resolved)
 	e.setBusy(busyID, "starting agent")
 	if err != nil {
 		return "", err
