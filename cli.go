@@ -23,13 +23,13 @@ const cliUsage = `Change the board from outside it:
   drover list [--json]                      list the cards
   drover add <title> [-p prompt] [-c column]
   drover add --linear <key or url> [-c column]
-  drover move <number> <column> [--force]
+  drover move <number> <column>
   drover edit <number> [--title t] [--prompt p]
   drover rm <number> [--force]
 
 Cards are addressed by the number list shows. Columns are ids or names. A
-prompt of - is read from stdin. --force discards a dirty worktree. Changes go
-through the open board, or are applied the next time it opens.
+prompt of - is read from stdin. --force lets rm discard a dirty worktree.
+Changes go through the open board, or are applied the next time it opens.
 `
 
 // waitForBoard is how long a command waits for the open board to answer.
@@ -247,19 +247,18 @@ func promptArg(s string) (string, error) {
 
 func cmdMove(root string, args []string) error {
 	fs := flag.NewFlagSet("move", flag.ContinueOnError)
-	force := fs.Bool("force", false, "")
 	rest, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(rest) != 2 {
-		return errors.New("usage: drover move <number> <column> [--force]")
+		return errors.New("usage: drover move <number> <column>")
 	}
 	n, err := parseNumber(rest[0])
 	if err != nil {
 		return err
 	}
-	return send(root, inbox.Request{Op: inbox.OpMove, Number: n, Column: rest[1], Force: *force}, func(r inbox.Result) string {
+	return send(root, inbox.Request{Op: inbox.OpMove, Number: n, Column: rest[1]}, func(r inbox.Result) string {
 		return fmt.Sprintf("Moved #%d to %s", r.Number, r.Column)
 	})
 }

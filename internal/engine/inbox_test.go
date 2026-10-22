@@ -216,21 +216,15 @@ func TestCLIRemoveRefusesADirtyWorktreeUnlessForced(t *testing.T) {
 	}
 }
 
-func TestCLIMoveToDoneRefusesADirtyWorktreeUnlessForced(t *testing.T) {
+func TestCLIMoveToDoneKeepsADirtyWorktree(t *testing.T) {
 	e, root := running(t)
 	c := startedCard(t, e, root)
 
-	if res := ask(t, root, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "done"}); !strings.Contains(res.Error, "--force") {
-		t.Fatalf("move of a dirty card = %+v", res)
+	if res := ask(t, root, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "done"}); res.Error != "" {
+		t.Fatalf("move = %+v", res)
 	}
-	if got := cardNumbered(e, 1); got.ColumnID != "exec" || !exists(c.WorktreePath) {
-		t.Fatalf("a refused move still moved the card: %+v", got)
-	}
-	if res := ask(t, root, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "done", Force: true}); res.Error != "" {
-		t.Fatalf("forced move = %+v", res)
-	}
-	if cardNumbered(e, 1).ColumnID != "done" || exists(c.WorktreePath) {
-		t.Error("forced move left the card or its worktree")
+	if got := cardNumbered(e, 1); got.ColumnID != "done" || !exists(c.WorktreePath) {
+		t.Fatalf("move to Done should keep the worktree: %+v", got)
 	}
 }
 

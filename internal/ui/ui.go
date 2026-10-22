@@ -48,13 +48,14 @@ type previewMsg struct {
 type noticeMsg string
 type snapMsg engine.Snapshot
 type actionDoneMsg struct {
-	id        string
-	at        time.Time
-	err       error
-	done      string
-	snap      engine.Snapshot
-	retryDone func() tea.Cmd
-	attach    bool
+	id          string
+	at          time.Time
+	err         error
+	done        string
+	snap        engine.Snapshot
+	confirmText string
+	confirm     func() tea.Cmd
+	attach      bool
 }
 type attachDoneMsg struct {
 	id       string
@@ -428,10 +429,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			delete(m.busy, msg.id)
 		}
 		m.applySnap(msg.snap)
-		if errors.Is(msg.err, engine.ErrDirty) && msg.retryDone != nil {
+		if msg.confirm != nil {
 			m.mode = modeConfirm
-			m.confirmText = "The worktree has uncommitted changes. Move to Done and delete the worktree anyway? (y/N)"
-			m.confirmAction = msg.retryDone
+			m.confirmText = msg.confirmText
+			m.confirmAction = msg.confirm
 			return m, nil
 		}
 		var ext *engine.ExternalError
@@ -669,21 +670,36 @@ func attachExternal(cmd *exec.Cmd) tea.Cmd {
 }
 
 func (m Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
-	return moveTo(m.eng, m.busy, t.ID, t.Number, target, false)
+	return moveTo(m.eng, m.busy, t.ID, t.Number, target)
 }
 
 // moveTo shows the card in the target column straight away while the engine
-// works. A move that fails, or needs confirming (ErrDirty), puts the card back;
-// force is the retry after that confirmation.
-func moveTo(eng mover, busy map[string]op, id string, number int, target config.Column, force bool) tea.Cmd {
+// works. A move that fails puts the card back.
+func moveTo(eng mover, busy map[string]op, id string, number int, target config.Column) tea.Cmd {
 	return runOp(eng, busy, id, op{label: "moving", column: target.ID}, func() actionDoneMsg {
-		err := eng.Move(id, target.ID, engine.MoveOptions{Force: force})
+		err := eng.Move(id, target.ID, engine.MoveOptions{})
+		msg := actionDoneMsg{err: err}
+		if err == nil {
+			msg.done = fmt.Sprintf("Moved #%d to %s", number, target.Name)
+		}
+		return msg
+	})
+}
+
+// archiveCard archives or restores a card off the UI thread. A worktree with
+// uncommitted changes asks first, then retries with force.
+func archiveCard(eng *engine.Engine, busy map[string]op, id string, number int, archive, force bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "archiving"}, func() actionDoneMsg {
+		err := eng.ArchiveTask(id, archive, force)
 		msg := actionDoneMsg{err: err}
 		switch {
+		case err == nil && archive:
+			msg.done = fmt.Sprintf("Archived #%d. v shows archived cards.", number)
 		case err == nil:
-			msg.done = fmt.Sprintf("Moved #%d to %s", number, target.Name)
+			msg.done = fmt.Sprintf("Restored #%d", number)
 		case errors.Is(err, engine.ErrDirty):
-			msg.retryDone = func() tea.Cmd { return moveTo(eng, busy, id, number, target, true) }
+			msg.confirmText = fmt.Sprintf("#%d's worktree has uncommitted changes. Archive and delete the worktree anyway? (y/N)", number)
+			msg.confirm = func() tea.Cmd { return archiveCard(eng, busy, id, number, archive, true) }
 		}
 		return msg
 	})
@@ -916,17 +932,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		archive := !t.Archived
-		if err := m.eng.ArchiveTask(t.ID, archive); err != nil {
-			m.setFlash("Error: " + err.Error())
-			break
-		}
-		m.snap = m.eng.Snapshot()
-		if archive {
-			m.setFlash(fmt.Sprintf("Archived #%d. v shows archived cards.", t.Number))
-		} else {
-			m.setFlash(fmt.Sprintf("Restored #%d", t.Number))
-		}
+		return m, archiveCard(m.eng, m.busy, t.ID, t.Number, !t.Archived, false)
 	case "C":
 		if !cols[m.col].IsDone() {
 			m.setFlash("Only the Done column can be archived")
@@ -944,7 +950,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		eng, colID := m.eng, cols[m.col].ID
 		m.mode = modeConfirm
-		m.confirmText = fmt.Sprintf("Archive %s in %s? They are hidden, not deleted; v shows them. (y/N)", pluralCards(n), cols[m.col].Name)
+		m.confirmText = fmt.Sprintf("Archive %s in %s? They are hidden and their worktrees removed unless dirty; v shows them. (y/N)", pluralCards(n), cols[m.col].Name)
 		m.confirmAction = func() tea.Cmd {
 			return func() tea.Msg {
 				eng.ArchiveColumn(colID)
