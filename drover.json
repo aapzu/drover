@@ -24,8 +24,14 @@
     },
     {
       "id": "self-review",
-      "name": "Self-review",
+      "name": "Waiting for me",
       "color": "#06b6d4",
+      "autoSpawn": true
+    },
+    {
+      "id": "in-review",
+      "name": "In review",
+      "color": "#f59e0b",
       "autoSpawn": true,
       "automations": {
         "onEnter": [
@@ -48,6 +54,12 @@
             "name": "Build",
             "type": "run_script",
             "script": "go build ./... && go vet ./..."
+          },
+          {
+            "name": "Ping",
+            "type": "notify",
+            "title": "{{title}}",
+            "body": "PR #{{prNumber}} is in review"
           }
         ],
         "onTurnEnd": [
@@ -56,21 +68,6 @@
             "type": "send_message",
             "message": "Apply the fixes the review found, then run go test ./...",
             "condition": "The message lists specific review findings that are still unfixed"
-          }
-        ]
-      }
-    },
-    {
-      "id": "in-review",
-      "name": "In review",
-      "color": "#f59e0b",
-      "automations": {
-        "onEnter": [
-          {
-            "name": "Ping",
-            "type": "notify",
-            "title": "{{title}}",
-            "body": "PR #{{prNumber}} is in review"
           }
         ]
       }
