@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -271,5 +272,57 @@ func TestLiveSessionComesFromTheSnapshot(t *testing.T) {
 	}
 	if _, ok := m.liveSession("other"); ok {
 		t.Error("an unknown card has no live session")
+	}
+}
+
+func TestCursorFollowsCardMovedElsewhere(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeLive
+	card := m.current()
+
+	snap := m.snap
+	snap.At = time.Now()
+	snap.Tasks = slices.Clone(snap.Tasks)
+	moved := *card
+	moved.ColumnID = "c2"
+	snap.Tasks[0] = &moved
+	m.applySnap(snap)
+
+	if got := m.current(); m.col != 2 || got == nil || got.ID != card.ID || m.mode != modeLive {
+		t.Errorf("col %d current %v mode %v, want the cursor on %s in column 2", m.col, got, m.mode, card.ID)
+	}
+}
+
+func TestCursorStaysWhenOtherCardMoves(t *testing.T) {
+	m := testModel(120, 40, 3, 2)
+	card := m.current()
+
+	snap := m.snap
+	snap.At = time.Now()
+	snap.Tasks = slices.Clone(snap.Tasks)
+	moved := *snap.Tasks[1]
+	moved.ColumnID = "c2"
+	snap.Tasks[1] = &moved
+	m.applySnap(snap)
+
+	if got := m.current(); m.col != 0 || got == nil || got.ID != card.ID {
+		t.Errorf("col %d current %v, want the cursor to stay on %s", m.col, got, card.ID)
+	}
+}
+
+func TestCursorStaysWhenAnotherCardFinishesMoving(t *testing.T) {
+	m := testModel(120, 40, 3, 2)
+	card, other := m.current(), m.snap.Tasks[1]
+	eng := fakeFor(m, nil)
+	eng.snap.Tasks = slices.Clone(eng.snap.Tasks)
+	moved := *other
+	moved.ColumnID = "c2"
+	eng.snap.Tasks[1] = &moved
+
+	next, _ := m.Update(moveTo(eng, m.busy, other.ID, other.Number, m.columns()[2])())
+	m = next.(Model)
+
+	if got := m.current(); m.col != 0 || got == nil || got.ID != card.ID {
+		t.Errorf("col %d current %v, want the cursor to stay on %s", m.col, got, card.ID)
 	}
 }

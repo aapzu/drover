@@ -489,7 +489,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.attached = ""
 		m.syncFocus()
-		m.snap = m.eng.Snapshot()
+		m.applySnap(m.eng.Snapshot())
 		var cmds []tea.Cmd
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
@@ -538,9 +538,16 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	if snap.Board == nil || snap.At.Before(m.snap.At) {
 		return
 	}
+	var curID, curCol string
+	if cur := m.current(); cur != nil {
+		curID, curCol = cur.ID, m.columnOf(cur)
+	}
 	m.snap = snap
 	if m.col >= len(m.columns()) {
 		m.col = len(m.columns()) - 1
+	}
+	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
+		m.selectTask(t)
 	}
 	if (m.mode == modeMove || m.mode == modeSend) && m.task(m.modalTask) == nil {
 		m.mode = modeBoard
