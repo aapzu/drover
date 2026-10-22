@@ -365,3 +365,27 @@ func TestMovePickerEnterOnCurrentColumnDoesNotMove(t *testing.T) {
 		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
 	}
 }
+
+func TestMovePickerOpensOnCardsColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.col = 2
+	m.selected["c2"] = "c2-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.mode != modeMove || m.moveSel != 2 {
+		t.Errorf("mode = %v, moveSel = %d after m on column 2, want the picker open on column 2", m.mode, m.moveSel)
+	}
+}
+
+func TestMovePickerDigitOnCurrentColumnDoesNotMove(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+
+	next, cmd := m.updateMove(key("1"))
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
+	}
+}
