@@ -173,7 +173,7 @@ func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 		m.setFlash("Starting the assistant failed: " + msg.err.Error())
 		return nil
 	}
-	m.assist.session, m.assist.lastErr = sessionRunning, nil
+	m.assist.session = sessionRunning
 	return m.captureAssistantCmd()
 }
 

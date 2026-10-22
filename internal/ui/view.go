@@ -551,6 +551,7 @@ func titledBox(style lipgloss.Style, title, body string, width, height int) stri
 		lines = lines[len(lines)-rows:]
 	}
 	box := style.Width(inner).Height(rows).Render(strings.Join(lines, "\n"))
+	// Draw the title into the top border.
 	top, rest, _ := strings.Cut(box, "\n")
 	label := ansi.Truncate(title, inner-2, "…")
 	top = ansi.Truncate(top, 2, "") + label + ansi.TruncateLeft(top, 2+lipgloss.Width(label), "")

@@ -555,7 +555,8 @@ drover ask --new "start over: what's in Planning?"
   exits (hiding the panel doesn't stop it), since two Claudes must not share a
   conversation. The error names the `tmux -L drover kill-session` command that
   ends the session, for when a board died without quitting. `--new` forgets the
-  conversation.
+  conversation, but is refused too while the session runs (press `N` on the
+  board instead).
 - A question of `-` is read from stdin. A question that gets no answer within
   ten minutes fails, and the board may have been partly changed. A saved
   conversation whose transcript is gone starts over by itself. If `claude`

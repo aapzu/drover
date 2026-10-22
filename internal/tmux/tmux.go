@@ -210,6 +210,8 @@ func Paste(name, text string) error {
 	return err
 }
 
+// Resize pins the window to the size the board draws it at so the board shows
+// the session's whole screen. It does nothing when the size already matches.
 func Resize(name string, width, height int) error {
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
 	if err == nil && strings.TrimSpace(size) == fmt.Sprintf("%dx%d", width, height) {

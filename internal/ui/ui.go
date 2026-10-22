@@ -599,6 +599,8 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	}
 }
 
+// scrollbackFor asks for extra history so the anchored view can grow before the
+// next capture.
 func scrollbackFor(scroll, h int) int {
 	if scroll <= 0 {
 		return 0
