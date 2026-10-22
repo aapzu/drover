@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,7 +42,7 @@ var (
 	stopSession   = tmux.Stop
 	hasTranscript = func(root, id string) (bool, error) {
 		_, err := os.Stat(claude.TranscriptPath(id, root))
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) {
 			return false, nil
 		}
 		return err == nil, err
@@ -179,7 +178,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	out, err := runClaude(ctx, root, append([]string{"claude", "-p"}, argv(exe, root, id, resume, systemPrompt(exe, root, board))...), question)
 	if err != nil {
 		if resume {
-			err = fmt.Errorf("%w (to start a new conversation: drover ask --new, or N on the board)", err)
+			err = fmt.Errorf("%w (to start a new conversation: drover ask --new)", err)
 		}
 		return "", fmt.Errorf("the assistant failed: %w", err)
 	}
@@ -369,7 +368,7 @@ func describeColumns(b *config.Board) string {
 
 func loadID(root string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(store.Dir(root), sessionFile))
-	if errors.Is(err, fs.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	if err != nil {
