@@ -1007,6 +1007,143 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	})
 }
 
+type mergedRig struct {
+	e       *Engine
+	task    *store.Task
+	agent   *exec.Cmd
+	pr      func(state string)
+	polls   func() int
+	release func()
+}
+
+func newMergedRig(t *testing.T, board string) *mergedRig {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	os.MkdirAll(filepath.Join(claudeDir, "sessions"), 0o755)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\necho x >> \"$FAKE_GH.calls\"\ncat \"$FAKE_GH\"\n"), 0o755)
+	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
+	t.Setenv("FAKE_GH", ghFile)
+	r := &mergedRig{pr: func(state string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":%q,"headRefOid":"aaa",
+		  "reviewDecision":"","latestReviews":[],"mergeCommit":null}`, state)), 0o644)
+	}, polls: func() int {
+		data, _ := os.ReadFile(ghFile + ".calls")
+		return strings.Count(string(data), "\n")
+	}}
+	r.pr("OPEN")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	runEngine(t, e)
+	r.e = e
+
+	r.task = e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(r.task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the card waits in review", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].ColumnID == "review" && tasks[0].Sessions[store.MainSession].AgentSessionID != ""
+	})
+
+	// The conversation is also open in another terminal, which blocks moves
+	// that would end the card.
+	r.agent = exec.Command("sleep", "60")
+	if err := r.agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.agent.Process.Kill() })
+	sid := e.Snapshot().Tasks[0].Sessions[store.MainSession].AgentSessionID
+	e.with(func() { e.find(r.task.ID).Sessions[store.MainSession].Imported = true })
+	entry, _ := json.Marshal(claude.Live{PID: r.agent.Process.Pid, SessionID: sid, Cwd: root, Status: "busy"})
+	os.WriteFile(filepath.Join(claudeDir, "sessions", fmt.Sprintf("%d.json", r.agent.Process.Pid)), entry, 0o644)
+	r.release = func() {
+		r.agent.Process.Kill()
+		r.agent.Wait()
+	}
+	return r
+}
+
+func (r *mergedRig) holdMerged(t *testing.T) *store.Task {
+	r.pr("MERGED")
+	waitForAll(t, r.e, "the blocked move to be logged", func(tasks []*store.Task) bool {
+		return hasLog(tasks[0], "Moving to Done failed")
+	})
+	polled := r.polls()
+	waitForAll(t, r.e, "more polls of the merged PR", func([]*store.Task) bool { return r.polls() >= polled+3 })
+	return r.e.Snapshot().Tasks[0]
+}
+
+const mergedBoard = `{
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "review", "name": "In review"},
+    {"id": "parked", "name": "Parked"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ],
+  "prFlow": {"opened": "In review", "merged": "done"}
+}`
+
+func TestMergedPRRetriesMoveBlockedByExternalSession(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	c := r.holdMerged(t)
+	if c.ColumnID != "review" || !c.PR.MergeMovePending {
+		t.Fatalf("a live external session should hold the merged card in review: %s %+v", c.ColumnID, c.PR)
+	}
+	blocked := 0
+	for _, l := range c.Log {
+		if strings.Contains(l.Text, "Moving to Done failed") {
+			blocked++
+		}
+	}
+	if blocked != 1 {
+		t.Errorf("the blocked move was logged %d times, want once", blocked)
+	}
+
+	r.release()
+	waitForAll(t, r.e, "the merged card to reach done", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "done" && !tasks[0].PR.MergeMovePending
+	})
+}
+
+func TestMovingAMergedCardByHandStopsTheRetry(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	r.holdMerged(t)
+	if err := r.e.Move(r.task.ID, "parked", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r.release()
+	polled := r.polls()
+	time.Sleep(3 * r.e.PRPollInterval)
+	if c := r.e.Snapshot().Tasks[0]; c.ColumnID != "parked" || c.PR.MergeMovePending {
+		t.Fatalf("the card you moved was pulled back or is still pending: %s %+v", c.ColumnID, c.PR)
+	}
+	if after := r.polls(); after != polled {
+		t.Errorf("the merged PR was polled %d more times after you moved the card", after-polled)
+	}
+}
+
+func TestMergedPRWithoutMergedColumnIsNotRetried(t *testing.T) {
+	r := newMergedRig(t, `{
+  "columns": [
+    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "review", "name": "In review"}
+  ],
+  "prFlow": {"opened": "In review"}
+}`)
+	r.pr("MERGED")
+	waitForAll(t, r.e, "the merge to be seen", func(tasks []*store.Task) bool { return tasks[0].PR.State == "MERGED" })
+	if c := r.e.Snapshot().Tasks[0]; c.ColumnID != "review" || c.PR.MergeMovePending {
+		t.Fatalf("a merge with nowhere to go should leave the card alone: %s %+v", c.ColumnID, c.PR)
+	}
+}
+
 func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
