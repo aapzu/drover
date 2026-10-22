@@ -49,8 +49,6 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderHelp())
 	case modeImport:
 		body = m.place(bodyHeight, m.renderImport(bodyHeight))
-	case modeAsk:
-		body = m.renderAsk(bodyHeight)
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
@@ -134,9 +132,6 @@ func (m Model) renderFooter() string {
 	if m.mode == modeSend {
 		return " " + bold.Render("Send ›") + " " + m.sendInput.View()
 	}
-	if m.mode == modeAsk {
-		return m.renderAskFooter()
-	}
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
@@ -144,24 +139,28 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : ask  ? help  q quit",
-		modePalette: "↑↓ select  enter run  esc cancel",
-		modeLive:    "LIVE: ctrl+q back to board",
-		modeForm:    "tab switch field  ctrl+s save  esc cancel",
-		modeMove:    "1-9 pick column  any other key cancels",
-		modeConfirm: "y confirm  any other key cancels",
-		modeDetail:  "↑↓ scroll  esc close",
-		modeHelp:    "any key closes",
+		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
+		modePalette:   "↑↓ select  enter run  esc cancel",
+		modeLive:      "LIVE: ctrl+q back to board",
+		modeAssistant: "ASSISTANT: ctrl+q back to board",
+		modeForm:      "tab switch field  ctrl+s save  esc cancel",
+		modeMove:      "1-9 pick column  any other key cancels",
+		modeConfirm:   "y confirm  any other key cancels",
+		modeDetail:    "↑↓ scroll  esc close",
+		modeHelp:      "any key closes",
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
 
 func (m Model) renderMain(l layout) string {
-	board := m.renderBoard(l)
-	if l.previewH == 0 {
-		return board
+	main := m.renderBoard(l)
+	if l.previewH > 0 {
+		main = lipgloss.JoinVertical(lipgloss.Left, main, m.renderPreview(l.previewH))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, board, m.renderPreview(l.previewH))
+	if l.assistantW == 0 {
+		return main
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, main, m.renderAssistant(l.assistantW, l.bodyH))
 }
 
 func (m Model) renderBoard(l layout) string {
@@ -172,7 +171,7 @@ func (m Model) renderBoard(l layout) string {
 	}
 	board := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	if l.hiddenColumns {
-		board = lipgloss.PlaceHorizontal(m.width, lipgloss.Left, board)
+		board = lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, board)
 	}
 	return board
 }
@@ -535,16 +534,21 @@ func (m Model) renderPreview(height int) string {
 	} else if m.drag.kind == dragPreview {
 		style = style.BorderForeground(accent)
 	}
-	inner := m.width - 2
+	return titledBox(style, title, body, m.boardWidth(), height)
+}
+
+// titledBox draws body in a bordered box of width x height, with title in the
+// top border and the bottom lines of body kept when it doesn't fit.
+func titledBox(style lipgloss.Style, title, body string, width, height int) string {
+	inner, rows := width-2, max(0, height-2)
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, inner, "")
 	}
-	if len(lines) > height-2 {
-		lines = lines[len(lines)-(height-2):]
+	if len(lines) > rows {
+		lines = lines[len(lines)-rows:]
 	}
-	box := style.Width(inner).Height(height - 2).Render(strings.Join(lines, "\n"))
-	// Draw the title into the top border.
+	box := style.Width(inner).Height(rows).Render(strings.Join(lines, "\n"))
 	top, rest, _ := strings.Cut(box, "\n")
 	label := ansi.Truncate(title, inner-2, "…")
 	top = ansi.Truncate(top, 2, "") + label + ansi.TruncateLeft(top, 2+lipgloss.Width(label), "")
@@ -622,7 +626,8 @@ func (m Model) renderHelp() string {
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
-		{":", "ask the board's assistant about cards, or have it move them"},
+		{":", "open and type into the assistant panel (Ctrl-q returns, again hides it)"},
+		{"N", "start a new assistant conversation"},
 		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},
@@ -653,6 +658,7 @@ func (m Model) renderHelp() string {
 		{"drag column edge", "resize the column"},
 		{"drag preview top", "resize the preview"},
 		{"click preview", "type into the agent"},
+		{"click assistant", "type into the assistant"},
 	}) + "\n\n" + section("Live mode", [][2]string{
 		{"ctrl+q", "back to board"},
 		{"mouse wheel", "scroll the agent's history"},

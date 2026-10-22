@@ -88,7 +88,9 @@ func run(dir string) error {
 	<-stopped
 	m, ok := final.(ui.Model)
 	if ok {
-		m.StopAsk()
+		if err := m.StopAssistant(); err != nil {
+			fmt.Fprintln(os.Stderr, "drover:", err)
+		}
 	}
 	if ok && m.SuspendAllRequested() {
 		fmt.Println("Suspending all agents…")

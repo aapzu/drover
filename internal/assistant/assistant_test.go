@@ -10,9 +10,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
+
+var realHasTranscript = hasTranscript
+
+func init() {
+	hasTranscript = func(string, string) (bool, error) { return true, nil }
+	hasSession = func(string) bool { return false }
+}
+
+type panel struct {
+	live  bool
+	calls [][]string
+	dirs  []string
+	stops int
+}
+
+func fakePanel(t *testing.T) *panel {
+	t.Helper()
+	p := &panel{}
+	origHas, origNew, origStop := hasSession, newSession, stopSession
+	t.Cleanup(func() { hasSession, newSession, stopSession = origHas, origNew, origStop })
+	hasSession = func(string) bool { return p.live }
+	newSession = func(name, dir string, argv []string, env map[string]string) error {
+		p.calls, p.dirs, p.live = append(p.calls, argv), append(p.dirs, dir), true
+		return nil
+	}
+	stopSession = func(string) { p.live, p.stops = false, p.stops+1 }
+	return p
+}
 
 type call struct {
 	argv  []string
@@ -272,7 +301,7 @@ func TestAskReportsWhatWentWrong(t *testing.T) {
 func TestAnswerSurvivesAFailedSave(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(store.Dir(root), sessionFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(store.Dir(root), sessionFile+".tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	fakeClaude(t, "moved it", nil)
@@ -347,5 +376,323 @@ func TestRunClaudeExplainsFailures(t *testing.T) {
 	defer cancel()
 	if _, err := run(ctx, t.TempDir(), []string{"sleep", "30"}, ""); err == nil || !strings.Contains(err.Error(), "no answer after") {
 		t.Errorf("timeout: error = %v", err)
+	}
+}
+
+func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	hasTranscript = func(string, string) (bool, error) { return false, nil }
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	p := fakePanel(t)
+	exe := "/bin/drover"
+
+	if err := Start(root, exe, &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(root, exe, &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.calls) != 1 || p.dirs[0] != root {
+		t.Fatalf("Start twice should open one session in the repo: %q in %q", p.calls, p.dirs)
+	}
+	args := p.calls[0]
+	if args[0] != "claude" || slices.Contains(args, "-p") {
+		t.Errorf("the panel should run the interactive claude: %q", args)
+	}
+	if flagValue(args, "--permission-mode") != "dontAsk" || flagValue(args, "--tools") != "Bash" {
+		t.Errorf("permission mode %q, tools %q", flagValue(args, "--permission-mode"), flagValue(args, "--tools"))
+	}
+	if !slices.Contains(args, "Bash("+exe+" list)") || !slices.Contains(args, "Bash("+exe+" rm *-force*)") {
+		t.Errorf("the panel lacks the drover-only rules: %q", args)
+	}
+	id := flagValue(args, "--session-id")
+	if saved, ok := load(root); !ok || saved != id {
+		t.Errorf("saved id = %q, %v; want %q", saved, ok, id)
+	}
+}
+
+func TestPanelResumesOnceTheConversationHasATranscript(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if flagValue(p.calls[0], "--resume") != id || slices.Contains(p.calls[0], "--session-id") {
+		t.Errorf("should resume %s: %q", id, p.calls[0])
+	}
+}
+
+func TestAskDoesNotResumeAConversationThatNeverGotAMessage(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	hasTranscript = func(string, string) (bool, error) { return false, nil }
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	calls := fakeClaude(t, "ok", nil)
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*calls)[0].argv; slices.Contains(got, "--resume") {
+		t.Errorf("there is nothing to resume yet: %q", got)
+	}
+}
+
+func TestAskAndResetRefuseWhileThePanelRuns(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	calls := fakeClaude(t, "ok", nil)
+	p.live = true
+
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); !errors.Is(err, errPanelOpen) {
+		t.Errorf("Ask = %v", err)
+	}
+	if err := Reset(root); !errors.Is(err, errPanelOpen) {
+		t.Errorf("Reset = %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("claude ran %d times beside the panel", len(*calls))
+	}
+	Stop(root)
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
+		t.Errorf("Ask after the panel closed: %v", err)
+	}
+}
+
+func TestRestartStartsAFreshConversation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restart(root, "/bin/drover", &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if p.stops != 1 || len(p.calls) != 2 {
+		t.Fatalf("stops = %d, sessions = %d", p.stops, len(p.calls))
+	}
+	if flagValue(p.calls[0], "--session-id") == flagValue(p.calls[1], "--session-id") {
+		t.Error("the restarted panel continued the old conversation")
+	}
+}
+
+func TestSessionNameIsSafeAndPerProject(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a, b := SessionName("/work/a/my repo.x"), SessionName("/work/b/my repo.x")
+	if a == b {
+		t.Errorf("two repos named alike share %q", a)
+	}
+	if strings.ContainsAny(a, " .:") || !strings.HasSuffix(a, "-assistant") {
+		t.Errorf("session name %q", a)
+	}
+}
+
+func TestRealTranscriptLookupFollowsClaudesProjectDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	hasTranscript = realHasTranscript
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	root := filepath.Join(t.TempDir(), "repo")
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, resume, _ := conversation(root); resume {
+		t.Error("a conversation without a transcript was resumed")
+	}
+	path := claude.TranscriptPath(id, root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, resume, _ := conversation(root); !resume || got != id {
+		t.Errorf("conversation = %q, %v; want %s resumed", got, resume, id)
+	}
+}
+
+func TestPanelKeepsTheSavedIdUntilItHasATranscript(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	hasTranscript = func(string, string) (bool, error) { return false, nil }
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	if flagValue(p.calls[0], "--session-id") != id || slices.Contains(p.calls[0], "--resume") {
+		t.Errorf("should start under the saved id %s: %q", id, p.calls[0])
+	}
+	if saved, _ := load(root); saved != id {
+		t.Errorf("saved id changed to %q", saved)
+	}
+}
+
+func TestStopWaitsForAStartInProgress(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	unlock, err := lock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { Stop(root); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop ran while a Start held the conversation")
+	case <-time.After(100 * time.Millisecond):
+	}
+	p.live = true
+	unlock()
+	<-stopped
+	if p.live || p.stops != 1 {
+		t.Errorf("live %v, stops %d; Stop should end the session the Start made", p.live, p.stops)
+	}
+}
+
+func TestSessionIDIsTheSavedConversation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	if id := SessionID(root); id != "" {
+		t.Errorf("SessionID before any conversation = %q", id)
+	}
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := SessionID(root); got != id {
+		t.Errorf("SessionID = %q, want %q", got, id)
+	}
+}
+
+func TestStartAndRestartDoNotWaitForAQuestion(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	unlock, err := lock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	if err := Start(root, "/bin/drover", &config.Board{}); !errors.Is(err, errBusy) {
+		t.Errorf("Start = %v", err)
+	}
+	if err := Restart(root, "/bin/drover", &config.Board{}); !errors.Is(err, errBusy) {
+		t.Errorf("Restart = %v", err)
+	}
+	if len(p.calls) != 0 || p.stops != 0 {
+		t.Errorf("a busy conversation was touched: %d sessions, %d stops", len(p.calls), p.stops)
+	}
+}
+
+func TestStopDoesNotHangBehindALongQuestion(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	p.live = true
+	unlock, err := lock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	start := time.Now()
+	if err := Stop(root); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > stopWait+time.Second || p.live {
+		t.Errorf("Stop took %v, live %v", took, p.live)
+	}
+}
+
+func TestStopReportsASessionThatWontDie(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	p.live = true
+	stopSession = func(string) {}
+	if err := Stop(root); err == nil || !strings.Contains(err.Error(), "kill-session") {
+		t.Errorf("Stop = %v; want the command that ends it", err)
+	}
+}
+
+func TestUnreadableConversationStateIsAnErrorNotANewConversation(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(store.Dir(root), sessionFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := fakePanel(t)
+	calls := fakeClaude(t, "ok", nil)
+	if err := Start(root, "/bin/drover", &config.Board{}); err == nil || len(p.calls) != 0 {
+		t.Errorf("Start = %v with %d sessions", err, len(p.calls))
+	}
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err == nil || len(*calls) != 0 {
+		t.Errorf("Ask = %v with %d runs", err, len(*calls))
+	}
+
+	hasTranscript = func(string, string) (bool, error) { return false, errors.New("permission denied") }
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	root = filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(root, "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(root, "/bin/drover", &config.Board{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Errorf("Start = %v; a transcript that can't be checked shouldn't pass for a missing one", err)
+	}
+}
+
+func TestSaveLeavesNoPartialFile(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(store.Dir(root))
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("left %s behind", e.Name())
+		}
+	}
+	if got, _ := load(root); got != id {
+		t.Errorf("load = %q", got)
 	}
 }

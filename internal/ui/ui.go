@@ -37,7 +37,7 @@ const (
 	modeLive
 	modeFilter
 	modePalette
-	modeAsk
+	modeAssistant
 )
 
 type tickMsg time.Time
@@ -140,11 +140,7 @@ type Model struct {
 
 	detail viewport.Model
 
-	askInput textinput.Model
-	askView  viewport.Model
-	askLog   []askEntry
-	askBusy  bool
-	askRun   *askRun
+	assist assistantPane
 
 	imp importState
 }
@@ -174,9 +170,6 @@ func New(eng *engine.Engine) Model {
 		sendInput:   si,
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
-		askInput:    newAskInput(),
-		askView:     viewport.New(80, 20),
-		askRun:      newAskRun(),
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
@@ -379,8 +372,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
-		m.askInput.Width = max(20, m.width-14)
-		m.syncAsk()
+		if m.assist.open && m.assistantFits() == 0 {
+			m.hideAssistant()
+			m.setFlash("The terminal is too small for the assistant panel")
+		}
 		return m, nil
 	case tickMsg:
 		m.frame++
@@ -398,8 +393,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.snapBusy = true
 			cmds = append(cmds, m.snapshot())
 		}
-		if !m.prefs.HidePreview && m.mode != modeLive && m.mode != modeAsk && m.frame%2 == 0 {
+		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
+		}
+		if m.assistantCapturing() && m.mode != modeAssistant && m.frame%2 == 0 {
+			cmds = append(cmds, m.captureAssistantCmd())
 		}
 		switch {
 		case m.follow == "":
@@ -445,12 +443,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMouse(msg)
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
-	case askDoneMsg:
-		m.finishAsk(msg)
+	case assistantStartedMsg:
+		return m, m.finishAssistantStart(msg)
+	case assistantFrameMsg:
+		m.applyAssistantFrame(msg)
 		return m, nil
-	case askResetMsg:
-		m.finishReset(msg)
-		return m, nil
+	case assistantTickMsg:
+		if m.mode != modeAssistant || !m.assist.open || msg.gen != m.assist.gen {
+			return m, nil
+		}
+		if !m.assistantCapturing() {
+			return m, assistantTick(m.assist.gen)
+		}
+		return m, tea.Batch(assistantTick(m.assist.gen), m.captureAssistantCmd())
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -552,8 +557,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case modePalette:
 			return m.updatePalette(msg)
-		case modeAsk:
-			return m.updateAsk(msg)
+		case modeAssistant:
+			return m.updateAssistant(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -596,7 +601,7 @@ func (m Model) capturePreview() tea.Cmd {
 	id := t.ID
 	name, ok := m.liveSession(id)
 	l := m.layout()
-	w, h := m.width-2, l.previewH-2
+	w, h := l.boardW-2, l.previewH-2
 	// Extra history lets the anchored view grow before the next capture.
 	scrollback := 0
 	if m.previewScroll > 0 {
@@ -773,8 +778,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case paletteKey:
 		return m, m.openPalette()
 	case askKey:
-		cmd := m.openAsk()
-		return m, cmd
+		return m, m.openAssistant(false)
+	case newAskKey:
+		return m, m.openAssistant(true)
+	case liveExitKey:
+		m.hideAssistant()
 	case "left", "h":
 		m.col = max(0, m.col-1)
 	case "right", "l":
@@ -947,7 +955,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if msg.String() == "<" {
 				step = -4
 			}
-			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.width)
+			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.boardWidth())
 			m.savePrefs()
 		}
 	case "0":

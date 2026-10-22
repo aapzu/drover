@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -60,6 +61,35 @@ func tmuxKey(msg tea.KeyMsg) (literal, key string) {
 		return "", ""
 	}
 	return "", mods.String() + s
+}
+
+// keyJobFor is the job that types msg into session; ok is false for a key tmux
+// has no name for.
+func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
+	job = keyJob{session: session}
+	if msg.Paste {
+		job.paste = string(msg.Runes)
+		return job, true
+	}
+	job.literal, job.key = tmuxKey(msg)
+	return job, job.literal != "" || job.key != ""
+}
+
+// afterKey runs capture once the app has had time to react to a key.
+func afterKey(capture tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(40 * time.Millisecond)
+		return capture()
+	}
+}
+
+// wheelJob is the SGR mouse report that scrolls the app in session at x, y.
+func wheelJob(session string, up bool, x, y int) keyJob {
+	code := 65
+	if up {
+		code = 64
+	}
+	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)}
 }
 
 type keyJob struct {
@@ -177,20 +207,11 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setFlash("No running agent here. Ctrl-q returns to the board.")
 		return m, nil
 	}
-	job := keyJob{session: name}
-	if msg.Paste {
-		job.paste = string(msg.Runes)
-	} else {
-		job.literal, job.key = tmuxKey(msg)
-		if job.literal == "" && job.key == "" {
-			return m, nil
-		}
+	job, ok := keyJobFor(name, msg)
+	if !ok {
+		return m, nil
 	}
 	m.keys.send(job)
 	m.previewScroll = 0
-	capture := m.capturePreview()
-	return m, func() tea.Msg {
-		time.Sleep(40 * time.Millisecond)
-		return capture()
-	}
+	return m, afterKey(m.capturePreview())
 }
