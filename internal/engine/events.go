@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,14 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		if s.Relocate != "" && (ev.Name == "Stop" || ev.ToolName == "EnterWorktree") && sameDir(ev.Cwd, s.Relocate) {
 			s.Relocate = ""
 			t.AddLog("Agent moved into the worktree")
+		}
+		if n := len(s.Pending); ev.Cwd != "" && n > 0 {
+			s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool {
+				return p.Relocate != "" && sameDir(ev.Cwd, p.Relocate)
+			})
+			if len(s.Pending) < n {
+				t.AddLog("Agent is already in the worktree")
+			}
 		}
 		switch ev.Name {
 		case "SessionStart":

@@ -1839,6 +1839,58 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 	}
 }
 
+func TestQueuedRelocation(t *testing.T) {
+	for _, there := range []bool{true, false} {
+		t.Run(fmt.Sprintf("already there=%v", there), func(t *testing.T) {
+			root, log := setupProject(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+
+			if _, err := e.NewSession(); err != nil {
+				t.Fatal(err)
+			}
+			ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s != nil && s.Activity == store.ActivityIdle
+			})
+			worktree := t.TempDir()
+			e.with(func() {
+				s := e.find(ready.ID).Sessions[store.MainSession]
+				s.Activity = store.ActivityThinking
+				s.Pending = []store.Pending{{Relocate: worktree, Text: "Call the EnterWorktree tool with path " + worktree}}
+			})
+			cwd := root
+			if there {
+				cwd = worktree
+			}
+			events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer events.Close()
+			events.WriteString(`{"hook_event_name":"Stop","cwd":"` + cwd + `"}` + "\n")
+			waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s.Activity == store.ActivityIdle && len(s.Pending) == 0 || s.Relocate != ""
+			})
+			if there {
+				time.Sleep(time.Second)
+				if strings.Contains(readFile(log), "EnterWorktree") {
+					t.Errorf("the agent was asked to move into a worktree it was already in:\n%s", readFile(log))
+				}
+				return
+			}
+			waitForAll(t, e, "the agent to be asked to move", func([]*store.Task) bool {
+				return strings.Contains(readFile(log), "typed:Call the EnterWorktree")
+			})
+		})
+	}
+}
+
 func TestInterruptedTurnGoesIdle(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
