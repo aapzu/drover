@@ -55,6 +55,7 @@ drover
 | `r` / `S` | start or resume / suspend the agent |
 | `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
 | `u` | update the worktree from its base branch |
+| `:` | ask the board's assistant a question, or have it move cards (`ctrl+n` starts over) |
 | `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
@@ -385,6 +386,7 @@ drover add --linear DX-123
 drover move 4 "In review"
 drover edit 4 --title "Fix signup" --prompt "…"
 drover rm 4
+drover ask "which cards are waiting on review?"
 ```
 
 - Cards are addressed by the number `list` shows (`4`; quote it as `'#4'` if you
@@ -401,8 +403,39 @@ drover rm 4
 - With no board open, the change is queued and applied the next time one opens.
   Errors then show up on the board, not in your shell. `list` reads the saved
   state, so it shows applied changes only.
-- `list`, `add`, `move`, `edit` and `rm` are commands, so a directory with one
-  of those names needs `./`.
+- `list`, `add`, `move`, `edit`, `rm` and `ask` are commands, so a directory
+  with one of those names needs `./`.
+- `list --json` also gives each card's `branch`, `worktree` and `agent` state
+  (`working`, `idle`, `needs you`, `starting`, `queued`, `suspended`, `exited`),
+  left out when empty. Cards that share one agent report the same three.
+
+### Asking the board
+
+`drover ask <question>` (or `:` on the board) asks an assistant that knows the
+repo, the board's columns, and every card's column, branch, worktree and agent
+state. It can move, add, edit and delete cards when you tell it to. It is a
+headless `claude -p --model sonnet` session that runs the commands above, so
+changes go through the open board like any other. It takes no agent slot and
+isn't a card.
+
+```sh
+drover ask "what needs me right now?"
+drover ask "move #4 and #7 to In review"
+drover ask --new "start over: what's in Planning?"
+```
+
+- One conversation per project continues across questions, so "and #3 too"
+  works. `--new` (or `ctrl+n` in the pane) forgets it. Claude keeps the
+  conversation itself; drover keeps only its id, in `assistant-session` in the
+  project's state directory. The pane's history is not kept between runs of the
+  board, but the conversation is. If a saved conversation can no longer be
+  resumed, every question fails until you use `--new`.
+- It may only run `drover list`, `move`, `add`, `edit` and `rm`, and never
+  `--force`. It is told to ask you before deleting a card or moving one to To
+  Do, which removes its worktree. In a one-off `drover ask` you answer that
+  in the next question.
+- A question of `-` is read from stdin. A question that gets no answer within
+  ten minutes fails, and the board may have been partly changed.
 
 ## Notes
 

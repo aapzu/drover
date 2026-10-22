@@ -37,6 +37,7 @@ const (
 	modeLive
 	modeFilter
 	modePalette
+	modeAsk
 )
 
 type tickMsg time.Time
@@ -139,6 +140,11 @@ type Model struct {
 
 	detail viewport.Model
 
+	askInput textinput.Model
+	askView  viewport.Model
+	askLog   []askEntry
+	askBusy  bool
+
 	imp importState
 }
 
@@ -167,6 +173,8 @@ func New(eng *engine.Engine) Model {
 		sendInput:   si,
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
+		askInput:    newAskInput(),
+		askView:     viewport.New(80, 20),
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
@@ -369,6 +377,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
+		m.askInput.Width = max(20, m.width-14)
+		m.syncAsk()
 		return m, nil
 	case tickMsg:
 		m.frame++
@@ -386,7 +396,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.snapBusy = true
 			cmds = append(cmds, m.snapshot())
 		}
-		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
+		if !m.prefs.HidePreview && m.mode != modeLive && m.mode != modeAsk && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
 		}
 		switch {
@@ -433,6 +443,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMouse(msg)
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
+	case askDoneMsg:
+		m.finishAsk(msg)
+		return m, nil
+	case askResetMsg:
+		m.finishReset(msg)
+		return m, nil
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -534,6 +550,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case modePalette:
 			return m.updatePalette(msg)
+		case modeAsk:
+			return m.updateAsk(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -752,6 +770,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeHelp
 	case paletteKey:
 		return m, m.openPalette()
+	case askKey:
+		cmd := m.openAsk()
+		return m, cmd
 	case "left", "h":
 		m.col = max(0, m.col-1)
 	case "right", "l":

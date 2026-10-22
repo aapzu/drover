@@ -75,13 +75,22 @@ type Engine struct {
 	idleStopping sync.Map
 }
 
-func New(root string) (*Engine, error) {
+// Executable is the path of the running drover binary, symlinks resolved.
+func Executable() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
+	}
+	return exe, nil
+}
+
+func New(root string) (*Engine, error) {
+	exe, err := Executable()
+	if err != nil {
+		return nil, err
 	}
 	board, found, err := config.Load(root)
 	if err != nil {
@@ -116,6 +125,9 @@ func New(root string) (*Engine, error) {
 	e.reconcile()
 	return e, nil
 }
+
+// Exe is the drover binary that agents and the assistant call back into.
+func (e *Engine) Exe() string { return e.exe }
 
 // Notices delivers short messages the UI should flash.
 func (e *Engine) Notices() <-chan string { return e.notices }

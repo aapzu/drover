@@ -49,6 +49,8 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderHelp())
 	case modeImport:
 		body = m.place(bodyHeight, m.renderImport(bodyHeight))
+	case modeAsk:
+		body = m.renderAsk(bodyHeight)
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
@@ -132,6 +134,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeSend {
 		return " " + bold.Render("Send ›") + " " + m.sendInput.View()
 	}
+	if m.mode == modeAsk {
+		return m.renderAskFooter()
+	}
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
@@ -139,7 +144,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : ask  ? help  q quit",
 		modePalette: "↑↓ select  enter run  esc cancel",
 		modeLive:    "LIVE: ctrl+q back to board",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
@@ -240,16 +245,7 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 // sessionFor returns the session a card shows: its own, or for a card split
 // off a session that opened several PRs, the one its group shares.
 func (m Model) sessionFor(t *store.Task) *store.Session {
-	owner := store.Owner(m.snap.Tasks, t)
-	if s := owner.Sessions[store.MainSession]; s != nil {
-		return s
-	}
-	for _, s := range owner.Sessions {
-		if s.Status == store.StatusRunning {
-			return s
-		}
-	}
-	return nil
+	return store.Owner(m.snap.Tasks, t).AgentSession()
 }
 
 func (m Model) status(t *store.Task) string {
@@ -626,6 +622,7 @@ func (m Model) renderHelp() string {
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
+		{":", "ask the board's assistant about cards, or have it move them"},
 		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},

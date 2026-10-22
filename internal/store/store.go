@@ -178,6 +178,20 @@ type LogEntry struct {
 
 const maxLog = 200
 
+// AgentSession is the session a card shows, taken from its owner: the main one,
+// else any that is running.
+func (t *Task) AgentSession() *Session {
+	if s := t.Sessions[MainSession]; s != nil {
+		return s
+	}
+	for _, s := range t.Sessions {
+		if s.Status == StatusRunning {
+			return s
+		}
+	}
+	return nil
+}
+
 func (t *Task) AddLog(text string) {
 	t.Log = append(t.Log, LogEntry{At: time.Now(), Text: text})
 	if len(t.Log) > maxLog {
