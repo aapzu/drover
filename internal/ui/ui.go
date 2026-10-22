@@ -144,6 +144,7 @@ type Model struct {
 	askView  viewport.Model
 	askLog   []askEntry
 	askBusy  bool
+	askRun   *askRun
 
 	imp importState
 }
@@ -175,6 +176,7 @@ func New(eng *engine.Engine) Model {
 		detail:      viewport.New(80, 20),
 		askInput:    newAskInput(),
 		askView:     viewport.New(80, 20),
+		askRun:      newAskRun(),
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),

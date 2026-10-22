@@ -19,6 +19,8 @@ func askModel(t *testing.T) Model {
 	m.askInput = newAskInput()
 	m.askView = viewport.New(80, 20)
 	m.eng = &engine.Engine{Root: t.TempDir()}
+	m.askRun = newAskRun()
+	t.Cleanup(m.askRun.stop)
 	return m
 }
 
@@ -191,5 +193,29 @@ func TestAnswerAndSaveWarningAppearTogether(t *testing.T) {
 	log := next.(Model).renderAskLog()
 	if !strings.Contains(log, "moved #2") || !strings.Contains(log, "could not save the conversation") {
 		t.Errorf("log:\n%s", log)
+	}
+}
+
+func TestStopAskKillsAQuestionThatIsStillRunning(t *testing.T) {
+	started, stopped := make(chan struct{}), make(chan struct{})
+	orig := askAssistant
+	t.Cleanup(func() { askAssistant = orig })
+	askAssistant = func(ctx context.Context, _, _, _ string, _ bool) (string, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return "", ctx.Err()
+	}
+	m := askModel(t)
+	m.mode = modeAsk
+	_, cmd := typeAsk(m, "q").Update(tea.KeyMsg{Type: tea.KeyEnter})
+	go cmd()
+	<-started
+
+	m.StopAsk()
+	select {
+	case <-stopped:
+	default:
+		t.Error("StopAsk returned before the question was cancelled")
 	}
 }
