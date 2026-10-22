@@ -132,6 +132,7 @@ type Model struct {
 	paletteSel   int
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
+	moveSel   int
 
 	confirmText   string
 	confirmAction func() tea.Cmd
@@ -822,6 +823,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.mode = modeMove
 			m.modalTask = t.ID
+			_, idx, _ := m.snap.Board.Column(m.columnOf(t))
+			m.moveSel = clamp(idx, 0, maxMoveColumns-1)
 		}
 	case "n":
 		m.setFlash("Starting a new session…")
@@ -1113,18 +1116,33 @@ func (m Model) updateSend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+const maxMoveColumns = 9
+
 func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cols := m.columns()
+	n := min(len(cols), maxMoveColumns)
+	i := -1
+	switch key := msg.String(); {
+	case key == "up" || key == "k":
+		m.moveSel = clamp(m.moveSel-1, 0, n-1)
+		return m, nil
+	case key == "down" || key == "j":
+		m.moveSel = clamp(m.moveSel+1, 0, n-1)
+		return m, nil
+	case key == "enter":
+		i = m.moveSel
+	case len(key) == 1 && key[0] >= '1' && key[0] <= '9':
+		i = int(key[0] - '1')
+	}
 	m.mode = modeBoard
-	key := msg.String()
-	if len(key) != 1 || key[0] < '1' || key[0] > '9' {
-		return m, nil
-	}
-	i := int(key[0] - '1')
 	t := m.task(m.modalTask)
-	if t == nil || i >= len(m.columns()) {
+	if t == nil || i < 0 || i >= n {
 		return m, nil
 	}
-	target := m.columns()[i]
+	target := cols[i]
+	if target.ID == m.columnOf(t) {
+		return m, nil
+	}
 	m.col = i
 	m.selected[target.ID] = t.ID
 	cmd := m.moveCmd(t, target)
