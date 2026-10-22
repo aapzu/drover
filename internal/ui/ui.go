@@ -36,6 +36,7 @@ const (
 	modeImport
 	modeLive
 	modeFilter
+	modePalette
 )
 
 type tickMsg time.Time
@@ -125,6 +126,9 @@ type Model struct {
 	sendInput   textinput.Model
 	filter      string
 	filterInput textinput.Model
+
+	paletteInput textinput.Model
+	paletteSel   int
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
 
@@ -164,6 +168,8 @@ func New(eng *engine.Engine) Model {
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
 		imp:         newImportState(),
+
+		paletteInput: newPaletteInput(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
@@ -294,8 +300,13 @@ func matches(t *store.Task, filter string) bool {
 	if t.PR != nil {
 		text += fmt.Sprintf(" #%d %s %s", t.PR.Number, t.PR.Title, t.PR.Branch)
 	}
+	return containsAllWords(text, filter)
+}
+
+// containsAllWords reports whether text contains every word of words, ignoring case.
+func containsAllWords(text, words string) bool {
 	text = strings.ToLower(text)
-	for _, word := range strings.Fields(strings.ToLower(filter)) {
+	for _, word := range strings.Fields(strings.ToLower(words)) {
 		if !strings.Contains(text, word) {
 			return false
 		}
@@ -356,6 +367,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
+		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		return m, nil
 	case tickMsg:
@@ -520,6 +532,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateLive(msg)
 		case modeFilter:
 			return m.updateFilter(msg)
+		case modePalette:
+			return m.updatePalette(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -729,6 +743,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmAction = func() tea.Cmd { return func() tea.Msg { return suspendAllMsg{} } }
 	case "?":
 		m.mode = modeHelp
+	case paletteKey:
+		return m, m.openPalette()
 	case "left", "h":
 		m.col = max(0, m.col-1)
 	case "right", "l":

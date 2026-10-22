@@ -64,6 +64,8 @@ func (m Model) View() string {
 		switch m.mode {
 		case modeMove:
 			body = m.place(bodyHeight, m.renderMovePicker())
+		case modePalette:
+			body = m.place(bodyHeight, m.renderPalette(bodyHeight))
 		case modeConfirm:
 			body = m.place(bodyHeight, modalStyle.Width(min(70, m.width-4)).Render(m.confirmText))
 		}
@@ -137,7 +139,8 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
+		modeBoard:   "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
+		modePalette: "↑↓ select  enter run  esc cancel",
 		modeLive:    "LIVE: ctrl+q back to board",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
@@ -606,6 +609,7 @@ func (m Model) renderMovePicker() string {
 
 func (m Model) renderHelp() string {
 	rows := [][2]string{
+		{"ctrl+k", "search and run a command"},
 		{"←→ / h l", "select column"},
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},

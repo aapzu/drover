@@ -50,6 +50,22 @@ func TestLoadSampleBoard(t *testing.T) {
 	}
 }
 
+func TestAutomationConditional(t *testing.T) {
+	for _, c := range []struct {
+		row  Automation
+		want bool
+	}{
+		{Automation{}, false},
+		{Automation{Condition: "done"}, true},
+		{Automation{ConditionScript: "true"}, true},
+		{Automation{Condition: "done", ConditionScript: "true"}, true},
+	} {
+		if got := c.row.Conditional(); got != c.want {
+			t.Errorf("%+v: Conditional() = %v", c.row, got)
+		}
+	}
+}
+
 func TestLoadMissingUsesDefault(t *testing.T) {
 	board, found, err := Load(t.TempDir())
 	if err != nil || found || len(board.Columns) == 0 {
@@ -193,6 +209,32 @@ func TestArchiveDoneAfter(t *testing.T) {
 	}
 	if Default().ArchiveAfter() == 0 {
 		t.Error("the default board never archives")
+	}
+}
+
+func TestTodoColumnModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, todo, want string
+	}{
+		{"unset", ``, DefaultTodoModel},
+		{"overridden", `,"modelOverride":"sonnet"`, "sonnet"},
+	} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"`+tc.todo+`}]}`), 0o644)
+		board, _, err := Load(root)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := board.TodoColumn().ModelOverride; got != tc.want {
+			t.Errorf("%s: todo model = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	board, _, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := board.TodoColumn().ModelOverride; got != DefaultTodoModel {
+		t.Errorf("default board: todo model = %q, want %q", got, DefaultTodoModel)
 	}
 }
 

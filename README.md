@@ -41,6 +41,7 @@ drover
 
 | Key | Action |
 | --- | --- |
+| `ctrl+k` | search and run a command |
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m` then `1`–`9` | move card to a column |
@@ -92,15 +93,17 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   of them are archived or in To Do. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
-  checkout, on a card in the first (To Do role) column. Your first message
+  checkout, on a card in the first (To Do role) column. The session runs Haiku
+  unless that column sets a `modelOverride`. Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words
   unless `autoName` is `false`. The card then moves to the first agent column
   (Planning by default), which creates its worktree and branch and resumes the
-  same conversation there; if you're attached, you follow it. On boards with a
-  plan column, a small Claude Haiku check of that message sends tasks that
-  need no plan, such as a small fix, a question or "just do it", to the first
-  agent column that isn't a plan column instead. When it's unsure or fails,
-  the card plans. Move the card yourself to go elsewhere sooner.
+  same conversation there on that column's model, restarting the agent; if
+  you're attached, you follow it. On boards with a plan column, a small Claude
+  Haiku check of that message sends tasks that need no plan, such as a small
+  fix, a question or "just do it", to the first agent column that isn't a plan
+  column instead. When it's unsure or fails, the card plans. Move the card
+  yourself to go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
   `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
@@ -184,17 +187,29 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 - **Columns without an agent** run `run_script` and `notify` rows and skip
   `send_message`.
 - **A fresh agent** starts with an `onEnter` group's first `send_message`,
-  if it has no `condition`, instead of the task prompt, so a review column can open with
-  `/code-review`.
+  if it has no `condition` or `conditionScript`, instead of the task prompt, so a
+  review column can open with `/code-review`.
 - **`condition`** on any row asks `claude -p --model haiku` whether it holds
-  for the agent's last reply. The row is skipped unless the answer is yes.
-- **Placeholders** in `message`, `script`, `title` and `body`: `{{title}}`,
-  `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
+  for the agent's last reply. The row is skipped unless the answer is yes, and
+  if the check itself fails a skipped `move_to_column` raises a notice.
+- **`conditionScript`** on any row runs with `sh -c` in the worktree, with the
+  same placeholders, `$DROVER_*` variables and `timeoutMinutes` (default 10) as
+  `run_script`. The row is skipped unless it exits 0. Exits 1 to 125 are logged
+  as not met. Anything else, such as 127 for a missing command, a script that
+  can't start or a timeout, is logged as an error, and a skipped
+  `move_to_column` then also raises a notice. A row with both a
+  `condition` and a `conditionScript` needs both, and the script runs first. It
+  runs before a `move_to_column` moves the card, so there `{{toColumn}}` is the
+  current column, and only the row's `message` sees the target. To move on only
+  when tests pass:
+  `{ "type": "move_to_column", "conditionScript": "go test ./... >/dev/null 2>&1" }`.
+- **Placeholders** in `message`, `script`, `conditionScript`, `title` and
+  `body`: `{{title}}`, `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
   `{{baseBranch}}`, `{{worktreePath}}`, `{{projectPath}}`, `{{projectName}}`,
   `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`, `{{issueKey}}`,
   `{{issueUrl}}`, `{{fromColumn}}`, `{{toColumn}}`, `{{trigger}}` and
-  `{{agentReply}}`. In a `script` they are shell-quoted, and each is also set
-  as an environment variable such as `$DROVER_TASKNUMBER`.
+  `{{agentReply}}`. In a `script` or `conditionScript` they are shell-quoted,
+  and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
 
 This repo's own board reviews and builds on entering Self-review, asks for
 fixes if the review reported issues, and notifies you once a PR is in
@@ -209,7 +224,7 @@ review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The review reported issues that are not fixed yet" }
+      "condition": "The message lists specific review findings that are still unfixed" }
   ]
 }
 ```
