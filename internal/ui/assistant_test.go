@@ -980,3 +980,21 @@ func TestWheelUpStopsAtTheTopOfTheHistory(t *testing.T) {
 		t.Errorf("scroll = %d with 4 lines of history", m.assist.scroll)
 	}
 }
+
+func TestDroppingACardOnAColumnStillMovesItBesideThePanel(t *testing.T) {
+	fakePanel(t)
+	for _, panel := range []bool{false, true} {
+		m := assistantModel(t)
+		if panel {
+			m = open(t, m)
+			m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+		}
+		l := m.layout()
+		x, y := l.cols[1].x+2, l.bodyY+columnHeaderHeight+1
+		m.drag = dragState{kind: dragCard, task: m.snap.Tasks[0].ID, fromCol: 0, x: x, y: y}
+		m, cmd := update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease})
+		if cmd == nil || m.col != 1 || m.drag.kind != dragNone {
+			t.Errorf("panel %v: drop on a column: cmd nil %v, col %d, drag %v", panel, cmd == nil, m.col, m.drag.kind)
+		}
+	}
+}
