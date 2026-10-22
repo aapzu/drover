@@ -409,3 +409,19 @@ func TestMovePickerDoesNotMoveCardBeyondTheListedColumns(t *testing.T) {
 		t.Errorf("mode = %v, cmd = %v, busy = %d; want enter to close the picker without moving", m.mode, cmd != nil, len(m.busy))
 	}
 }
+
+func TestMovePickerCancelKeysAndOutOfRangeDigitsDoNotMove(t *testing.T) {
+	keys := []tea.KeyMsg{{Type: tea.KeyEsc}, key("x"), key("0"), key("5")}
+	for _, k := range keys {
+		m := testModel(120, 40, 3, 1)
+		m.mode = modeMove
+		m.modalTask = m.snap.Tasks[0].ID
+		m.moveSel = 2
+
+		next, cmd := m.updateMove(k)
+		m = next.(Model)
+		if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 || m.col != 0 {
+			t.Errorf("%q: mode = %v, cmd = %v, busy = %d, col = %d; want the picker closed with no move", k.String(), m.mode, cmd != nil, len(m.busy), m.col)
+		}
+	}
+}
