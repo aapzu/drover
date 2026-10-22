@@ -29,7 +29,7 @@ var (
 		tmux.Resize(name, width, height)
 		out, history, mouse, err = tmux.Capture(name, scrollback)
 		if err != nil && !tmux.Has(name) {
-			err = fmt.Errorf("%w (%v)", errSessionEnded, err)
+			err = fmt.Errorf("%w (%w)", errSessionEnded, err)
 		}
 		return out, history, mouse, err
 	}

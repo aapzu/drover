@@ -84,6 +84,8 @@ func Stop(root string) error {
 	return errors.Join(lockErr, stopAndVerify(root))
 }
 
+var errNoBoard = errors.New("there is no board to describe to the assistant")
+
 var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting, restarting or stopping it); try again shortly")
 
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
@@ -198,6 +200,9 @@ func Start(root, exe string, board *config.Board) (created bool, err error) {
 }
 
 func start(root, exe string, board *config.Board) error {
+	if board == nil {
+		return errNoBoard
+	}
 	id, resume, err := conversation(root)
 	if err != nil {
 		return err
@@ -213,6 +218,9 @@ func start(root, exe string, board *config.Board) error {
 }
 
 func Restart(root, exe string, board *config.Board) error {
+	if board == nil {
+		return errNoBoard
+	}
 	unlock, err := lockFor(root, noWait)
 	if err != nil {
 		return err

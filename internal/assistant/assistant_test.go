@@ -906,3 +906,15 @@ func TestStartFailsWithoutLaunchingWhenTheConversationCannotBeSaved(t *testing.T
 		t.Errorf("launched %d sessions with an unsaved conversation id", len(p.calls))
 	}
 }
+
+func TestStartAndRestartRefuseANilBoardWithoutStoppingAnything(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	if _, err := Start(root, "/bin/drover", nil); err == nil {
+		t.Error("Start accepted a nil board")
+	}
+	if len(p.calls) != 0 {
+		t.Errorf("launched %d sessions without a board", len(p.calls))
+	}
+}
