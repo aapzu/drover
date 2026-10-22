@@ -39,6 +39,7 @@ emit() { printf '%s\n' "$1" >> "$events"; }
 turn() {
   case "$1" in
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
+    *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
@@ -609,6 +610,42 @@ func TestPRRequestMovesCard(t *testing.T) {
 	if strings.Contains(readFile(log), "/code-review") {
 		t.Error("Self-review's enter group ran on a PR request")
 	}
+}
+
+func TestPromptInReviewMovesCardBack(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review"},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("card left review before it was prompted: %s", got)
+	}
+	if err := e.Send(task.ID, "TWEAK the footer"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the prompt to move the card to Executing", func(t *store.Task) bool {
+		return t.ColumnID == "exec"
+	})
 }
 
 // A manual start in a column without autoSpawn can still be queued, and must
