@@ -1430,6 +1430,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		"DROVER_TASK_TITLE":  t.Title,
 	}
 	e.mu.Unlock()
+	launch.SystemPrompt = claude.BoardPrompt(e.exe)
 	tmux.Kill(name)
 	if err := tmux.NewSession(name, worktree, launch.Argv(), env); err != nil {
 		e.with(func() {
