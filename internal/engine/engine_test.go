@@ -20,7 +20,7 @@ import (
 
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *"exactly PLAN or DIRECT"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
+  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""

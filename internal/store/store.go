@@ -106,7 +106,13 @@ type Session struct {
 	Imported  bool `json:"imported,omitempty"`
 	HandedOff bool `json:"handedOff,omitempty"`
 	Scratch   bool `json:"scratch,omitempty"`
-	Routing   bool `json:"-"`
+	// Stay keeps a scratch session in the main checkout because its latest
+	// prompt needs no worktree. It is saved so a restart doesn't move the card.
+	Stay    bool `json:"stay,omitempty"`
+	Routing bool `json:"-"`
+	// NextRoute is the latest prompt typed while Routing, judged once the
+	// current check returns.
+	NextRoute string `json:"-"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool         `json:"forked,omitempty"`

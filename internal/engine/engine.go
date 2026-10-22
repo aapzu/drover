@@ -341,7 +341,7 @@ func (e *Engine) startScratch(t *store.Task, fresh bool) error {
 	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", true)
 	e.with(func() {
 		if s := t.Sessions[store.MainSession]; s != nil {
-			s.Scratch = true
+			s.Scratch, s.Stay = true, false
 		}
 	})
 	return err
@@ -842,7 +842,7 @@ func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) 
 	case !moved && started:
 		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
 	}
-	e.with(func() { s.Started, s.TranscriptPath, s.Scratch = moved, "", false })
+	e.with(func() { s.Started, s.TranscriptPath, s.Scratch, s.Stay = moved, "", false, false })
 }
 
 // moveConversation moves the transcript at path into worktree's project and
@@ -873,7 +873,7 @@ func (e *Engine) relocateLive(t *store.Task, s *store.Session, worktree string) 
 	if !ok || !tmux.Has(name) {
 		return store.Pending{}, false
 	}
-	e.with(func() { s.Scratch = false })
+	e.with(func() { s.Scratch, s.Stay = false, false })
 	e.logf(t, "Asking the agent to move into the worktree")
 	return store.Pending{Relocate: worktree, Text: fmt.Sprintf("This task now has its own git worktree at %s on branch %s. "+
 		"Call the EnterWorktree tool with path %q to switch into it, and do all further work there.", worktree, branch, worktree)}, true

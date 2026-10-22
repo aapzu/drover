@@ -153,9 +153,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			if s.Scratch && t.Title != "" {
 				switch {
-				case !typed || !e.hasPlanColumn():
+				case !typed:
 					out = append(out, func() { e.leaveScratchWorking(taskID, false) })
-				case !s.Routing:
+				case s.Routing:
+					s.NextRoute = prompt
+				default:
 					s.Routing = true
 					out = append(out, func() { e.routeScratch(taskID, prompt) })
 				}
@@ -168,6 +170,10 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
+			if s.Scratch && s.Stay && editsFiles(ev.ToolName) {
+				s.Stay = false
+				out = append(out, func() { e.leaveScratchWorking(taskID, true) })
+			}
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
 			if ev.ToolName == "ExitPlanMode" {
@@ -551,6 +557,16 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)
+}
+
+// editsFiles reports whether tool changes files itself, which a session routed
+// to stay in the main checkout must not do.
+func editsFiles(tool string) bool {
+	switch tool {
+	case "Edit", "MultiEdit", "Write", "NotebookEdit":
+		return true
+	}
+	return false
 }
 
 // sameDir reports whether a and b are the same directory, through symlinks
