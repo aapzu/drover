@@ -581,6 +581,7 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	if m.col >= len(m.columns()) {
 		m.col = len(m.columns()) - 1
 	}
+	m.moveSel = min(m.moveSel, len(m.moveColumns())-1)
 	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
 		m.selectTask(t)
 	}
