@@ -18,6 +18,7 @@ const (
 	LocalFileName        = "drover.local.json"
 	DefaultWorktreesDir  = ".drover/worktrees"
 	DefaultMaxConcurrent = 8
+	DefaultTodoModel     = "haiku"
 )
 
 // maxArchiveDays keeps a day count inside what a Duration can hold.
@@ -139,7 +140,14 @@ func Load(root string) (board *Board, found bool, err error) {
 	if rel, err := filepath.Rel(board.WorktreesPath(root), root); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 		return nil, found, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
 	}
+	board.defaultTodoModel()
 	return board, found, nil
+}
+
+func (b *Board) defaultTodoModel() {
+	if col := &b.Columns[b.todoIndex()]; col.ModelOverride == "" {
+		col.ModelOverride = DefaultTodoModel
+	}
 }
 
 // applyLocal overlays your personal settings from drover.local.json.
@@ -330,13 +338,15 @@ func (b *Board) PermissionMode(c Column) string {
 	}
 }
 
-func (b *Board) TodoColumn() Column {
-	for _, c := range b.Columns {
+func (b *Board) TodoColumn() Column { return b.Columns[b.todoIndex()] }
+
+func (b *Board) todoIndex() int {
+	for i, c := range b.Columns {
 		if c.IsTodo() {
-			return c
+			return i
 		}
 	}
-	return b.Columns[0]
+	return 0
 }
 
 func Default() *Board {
