@@ -912,6 +912,19 @@ func TestTypingSnapsAScrolledPanelBackToTheBottom(t *testing.T) {
 	}
 }
 
+func TestReopeningAHiddenPanelCapturesAtOnce(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	before := f.captures
+	_, cmd := update(m, key(askKey))
+	runCmds(cmd)
+	if f.captures != before+1 {
+		t.Errorf("captured %d times on reopening; the stale frame should be refreshed at once", f.captures-before)
+	}
+}
+
 func TestHiddenPanelIsNotCaptured(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))

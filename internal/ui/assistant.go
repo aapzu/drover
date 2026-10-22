@@ -129,6 +129,8 @@ func (m *Model) openAssistant(fresh bool) tea.Cmd {
 		cmds = append(cmds, m.startAssistantSession(true))
 	case !m.assist.running():
 		cmds = append(cmds, m.startAssistantSession(false))
+	default:
+		cmds = append(cmds, m.captureAssistantCmd())
 	}
 	return tea.Batch(cmds...)
 }
@@ -144,7 +146,7 @@ func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	if board == nil {
 		return m.finishAssistantStart(assistantStartedMsg{epoch: m.assist.epoch, err: errors.New("the board isn't loaded yet")})
 	}
-	m.assist.session = sessionStarting
+	m.assist.session, m.assist.lastErr = sessionStarting, nil
 	m.assist.clearFrame()
 	m.assist.epoch++
 	epoch := m.assist.epoch
