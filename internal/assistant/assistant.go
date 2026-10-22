@@ -51,7 +51,6 @@ var (
 
 var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
-// SessionName is the tmux session of the project's side panel.
 func SessionName(root string) string {
 	return nonName.ReplaceAllString(filepath.Base(store.Dir(root)), "-") + "-assistant"
 }
@@ -64,10 +63,9 @@ func SessionID(root string) string {
 }
 
 // running reports whether the project's side panel has a Claude session, which
-// lasts until the board quits, hidden or not.
+// lasts until Claude exits or the board that created it quits, hidden or not.
 func running(root string) bool { return hasSession(SessionName(root)) }
 
-// stopAndVerify ends the panel's session and reports one that is still there.
 func stopAndVerify(root string) error {
 	name := SessionName(root)
 	stopSession(name)
@@ -77,26 +75,24 @@ func stopAndVerify(root string) error {
 	return nil
 }
 
-// Stop ends the side panel's session. It waits up to stopWait for a Start or
-// Restart in progress, then stops the session whether or not that finished, and
-// reports a session that is still there. The conversation can be resumed.
+// Stop ends the side panel's session. It waits up to stopWait for another process
+// holding the conversation (Start, Restart, drover ask), then stops the session
+// whether or not it got the lock, and reports a session that is still there. The
+// conversation can be resumed.
 func Stop(root string) error {
-	unlock, err := lockFor(root, stopWait)
-	switch {
-	case err == nil:
+	unlock, lockErr := lockFor(root, stopWait)
+	if lockErr == nil {
 		defer unlock()
-	case !errors.Is(err, errBusy):
-		return err
+	} else if errors.Is(lockErr, errBusy) {
+		lockErr = nil
 	}
-	return stopAndVerify(root)
+	return errors.Join(lockErr, stopAndVerify(root))
 }
 
 var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting it); try again shortly")
 
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
 
-// panelOpenErr is errPanelOpen with how to end a session left by a board that
-// didn't quit cleanly.
 func panelOpenErr(root string) error {
 	return fmt.Errorf("%w (to end it: tmux -L %s kill-session -t %s)", errPanelOpen, tmux.Socket, SessionName(root))
 }
@@ -210,7 +206,10 @@ func Start(root, exe string, board *config.Board) (created bool, err error) {
 	if running(root) {
 		return false, nil
 	}
-	return true, start(root, exe, board)
+	if err := start(root, exe, board); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func start(root, exe string, board *config.Board) error {
@@ -266,7 +265,6 @@ func forget(root string) error {
 	return nil
 }
 
-// argv is what follows `claude` for both the panel and drover ask.
 func argv(exe, root, id string, resume bool, prompt string) []string {
 	allow, deny := rules(exe)
 	args := []string{"--model", model, "--append-system-prompt", prompt, "--setting-sources", "", "--settings", settings(root), "--tools", strings.Join(append([]string{"Bash"}, repoTools...), ","), "--allowedTools"}
@@ -404,14 +402,14 @@ func conversation(root string) (id string, resume bool, err error) {
 func save(root, id string) error {
 	path := filepath.Join(store.Dir(root), sessionFile)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o644); err != nil {
-		return err
+	err := os.WriteFile(tmp, []byte(id+"\n"), 0o644)
+	if err == nil {
+		err = os.Rename(tmp, path)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err != nil {
 		os.Remove(tmp)
-		return err
 	}
-	return nil
+	return err
 }
 
 const stopWait = 3 * time.Second

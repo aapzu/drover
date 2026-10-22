@@ -56,7 +56,7 @@ drover
 | `r` / `S` | start or resume / suspend the agent |
 | `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
 | `u` | update the worktree from its base branch |
-| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns, then hides it) / start a new assistant conversation |
+| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns to the board, `Ctrl-q` again hides it) / start a new assistant conversation |
 | `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
@@ -507,8 +507,8 @@ like any other. It takes no agent slot and isn't a card.
   the board hides it. You can also click the panel to focus it, and use the
   mouse wheel to scroll it.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
-  (`tmux -L drover ls`), started in the repo. It stops when the board quits,
-  and the conversation resumes the next time you open the panel.
+  (`tmux -L drover ls`), started in the repo. It stops when the board that opened it
+  quits, and the conversation resumes the next time you open the panel.
 - One conversation per project. `N` (or the palette's "Start a new assistant
   conversation") opens the panel on a new conversation. Claude keeps the
   conversation itself; drover keeps only its id, in `assistant-session` in the
@@ -535,6 +535,9 @@ What the assistant may do is the same in the panel and in `drover ask`:
   apply. If they auto-allow sandboxed Bash commands, the permission rules no
   longer limit what it runs; the sandbox does, and drover denies it writes to
   the repo there.
+- These limits are on the assistant's tools. In the panel you are typing into a
+  real Claude Code session, so what you run yourself (`!` commands, slash
+  commands) isn't limited by them.
 
 `drover ask <question>` asks the same assistant from your shell, as a headless
 `claude -p` session on the same conversation:
@@ -547,8 +550,8 @@ drover ask --new "start over: what's in Planning?"
 ```
 
 - It refuses while the board's assistant session is running, which is from the
-  first time you open the panel until the board quits (hiding the panel doesn't
-  stop it), since two Claudes must not share a conversation. If a board died
+  first time you open the panel until the board that opened it quits or Claude
+  exits (hiding the panel doesn't stop it), since two Claudes must not share a conversation. If a board died
   without quitting, the error names the `tmux -L drover kill-session` command
   that ends the session. `--new` forgets the conversation.
 - A question of `-` is read from stdin. A question that gets no answer within
@@ -563,7 +566,7 @@ drover ask --new "start over: what's in Planning?"
   (default `~/.local/state`), outside the repo so they can't be committed.
   Every worktree of a repo opens the same board.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
-  running after you quit; the assistant panel's session does not. Automations
+  running after you quit; the session the panel opened does not, once that board quits. Automations
   only run while the board is open. Events that arrive while it's closed are
   processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only.

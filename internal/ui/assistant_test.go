@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 )
@@ -18,9 +19,14 @@ import (
 type fakeAssistantPanel struct {
 	starts, restarts int
 	err              error
-	attaches         bool // Start finds another board's session already running
+	attaches         bool
 	screen           string
 	running          bool
+	captures         int
+	capturedName     string
+	capturedW        int
+	capturedH        int
+	capturedBack     int
 }
 
 func fakePanel(t *testing.T) *fakeAssistantPanel {
@@ -33,9 +39,11 @@ func fakePanel(t *testing.T) *fakeAssistantPanel {
 		return !f.attaches && f.err == nil, f.err
 	}
 	restartAssistant = func(string, string, *config.Board) error { f.restarts++; return f.err }
-	captureAssistant = func(string, int, int, int) (string, int, bool, error) {
+	captureAssistant = func(name string, w, h, scrollback int) (string, int, bool, error) {
+		f.captures++
+		f.capturedName, f.capturedW, f.capturedH, f.capturedBack = name, w, h, scrollback
 		if !f.running {
-			return "", 0, false, errors.New("no session")
+			return "", 0, false, errSessionEnded
 		}
 		return f.screen, 0, false, nil
 	}
@@ -52,7 +60,6 @@ func assistantModel(t *testing.T) Model {
 	return m
 }
 
-// stamped marks f as captured from the session the panel is on.
 func (m Model) stamped(f assistantFrameMsg) assistantFrameMsg {
 	f.epoch = m.assist.epoch
 	return f
@@ -63,7 +70,6 @@ func update(m Model, msg tea.Msg) (Model, tea.Cmd) {
 	return next.(Model), cmd
 }
 
-// runCmds runs cmd and every command a batch returns, and returns the messages.
 func runCmds(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
@@ -80,7 +86,6 @@ func runCmds(cmd tea.Cmd) []tea.Msg {
 	}
 }
 
-// open presses the assistant key and runs the start the key asked for.
 func open(t *testing.T, m Model) Model {
 	t.Helper()
 	m, cmd := update(m, key(askKey))
@@ -190,7 +195,7 @@ func TestWheelOverThePanelScrollsItsHistory(t *testing.T) {
 	}
 	m.assist.scroll, m.assist.history, m.assist.mouse = 0, 0, true
 	m, _ = update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
-	if job, ok := sentJob(m); !ok || job.literal[:4] != "\x1b[<6" {
+	if job, ok := sentJob(m); !ok || !strings.HasPrefix(job.literal, "\x1b[<6") {
 		t.Errorf("a mouse-tracking claude should get the wheel: %+v, %v", job, ok)
 	}
 }
@@ -206,7 +211,7 @@ func TestPanelShowsClaudesScreenAndAStoppedSession(t *testing.T) {
 	}
 
 	f.running = false
-	m, _ = update(m, m.stamped(assistantFrameMsg{err: errors.New("no session"), at: time.Now().Add(time.Second)}))
+	m, _ = update(m, m.stamped(assistantFrameMsg{err: errSessionEnded, at: time.Now().Add(time.Second)}))
 	if !strings.Contains(m.View(), "Press enter to start it again") {
 		t.Error("a stopped session should offer a restart")
 	}
@@ -389,6 +394,125 @@ func TestStoppedPanelIsNotCaptured(t *testing.T) {
 	}
 	if m.assistantCapturing() {
 		t.Error("a stopped assistant is still polled")
+	}
+}
+
+func TestBoardTickCapturesAnUnfocusedPanelOnly(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	frames := func(m Model) int {
+		m.frame, m.snapBusy, m.prefs.HidePreview = 1, true, true
+		_, cmd := update(m, tickMsg(time.Now()))
+		n := 0
+		for _, msg := range runCmds(cmd) {
+			if _, ok := msg.(assistantFrameMsg); ok {
+				n++
+			}
+		}
+		return n
+	}
+	if n := frames(m); n != 1 {
+		t.Errorf("an unfocused running panel captured %d times per board tick, want 1", n)
+	}
+	focused := m
+	focused.mode = modeAssistant
+	if n := frames(focused); n != 0 {
+		t.Errorf("the focused panel is captured by its own loop, not the board's: %d", n)
+	}
+	stopped := m
+	stopped.assist.session = sessionStopped
+	if n := frames(stopped); n != 0 {
+		t.Errorf("a stopped panel was captured %d times", n)
+	}
+	if f.captures == 0 {
+		t.Error("the fake was never called")
+	}
+}
+
+func TestCaptureSizesTheWindowToThePanel(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	l := m.layout()
+	runCmds(m.captureAssistantCmd())
+	if f.capturedName != assistant.SessionName(m.eng.Root) || f.capturedW != l.assistantW-2 || f.capturedH != l.bodyH-2 || f.capturedBack != 0 {
+		t.Errorf("captured %q at %dx%d with %d scrollback", f.capturedName, f.capturedW, f.capturedH, f.capturedBack)
+	}
+	m.assist.scroll = 5
+	runCmds(m.captureAssistantCmd())
+	if want := 5 + 2*(l.bodyH-2); f.capturedBack != want {
+		t.Errorf("scrollback = %d, want %d", f.capturedBack, want)
+	}
+}
+
+func TestFrameStateFollowsTheSession(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, m.stamped(assistantFrameMsg{txt: "x", history: 30, mouse: true, at: time.Now()}))
+	if !m.assist.mouse || m.assist.txt != "x" {
+		t.Fatalf("frame not stored: %+v", m.assist)
+	}
+	m.assist.scroll = 7
+	m, _ = update(m, key("a"))
+	if m.assist.scroll != 0 {
+		t.Errorf("typing left the panel %d lines up", m.assist.scroll)
+	}
+	m.assist.scroll = 4
+	if !strings.Contains(m.View(), "4 lines up") {
+		t.Error("a scrolled panel doesn't say so")
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.assist.scroll = 4
+	if !strings.Contains(m.View(), "4 lines up") {
+		t.Error("a scrolled, unfocused panel doesn't say so")
+	}
+	m, _ = update(m, key(newAskKey))
+	if m.assist.txt != "" || m.assist.history != 0 || m.assist.scroll != 0 || m.assist.mouse {
+		t.Errorf("a new conversation kept the old screen: %+v", m.assist)
+	}
+}
+
+func TestATransientReadErrorKeepsThePanelRunning(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, m.stamped(assistantFrameMsg{txt: "kept", err: errors.New("tmux hiccup"), at: time.Now()}))
+	if !m.assist.running() || !strings.Contains(m.flash, "tmux hiccup") {
+		t.Errorf("session %v, flash %q", m.assist.session, m.flash)
+	}
+}
+
+func TestOpeningBeforeTheBoardLoadsFailsWithoutStarting(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m.snap.Board = nil
+	cmd := m.openAssistant(false)
+	for _, msg := range runCmds(cmd) {
+		m, _ = update(m, msg)
+	}
+	if f.starts != 0 || m.assist.running() || !strings.Contains(m.flash, "isn't loaded yet") {
+		t.Errorf("starts %d, session %v, flash %q", f.starts, m.assist.session, m.flash)
+	}
+}
+
+func TestQuittingAfterANewConversationStopsIt(t *testing.T) {
+	fakePanel(t)
+	var stops int
+	orig := stopAssistant
+	stopAssistant = func(string) error { stops++; return nil }
+	t.Cleanup(func() { stopAssistant = orig })
+	m := assistantModel(t)
+	m, cmd := update(m, key(newAskKey))
+	for _, msg := range runCmds(cmd) {
+		m, _ = update(m, msg)
+	}
+	m.StopAssistant()
+	if stops != 1 {
+		t.Errorf("stops = %d after N", stops)
+	}
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: false})
+	m.StopAssistant()
+	if stops != 2 {
+		t.Errorf("a later attach made the board forget it owns the session: stops = %d", stops)
 	}
 }
 

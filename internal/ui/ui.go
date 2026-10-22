@@ -449,13 +449,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyAssistantFrame(msg)
 		return m, nil
 	case assistantTickMsg:
-		if m.mode != modeAssistant || !m.assist.open || msg.gen != m.assist.tickGen {
+		if m.mode != modeAssistant || msg.gen != m.assist.tickGen {
 			return m, nil
 		}
+		next := assistantTick(m.assist.tickGen)
 		if !m.assistantCapturing() {
-			return m, assistantTick(m.assist.tickGen)
+			return m, next
 		}
-		return m, tea.Batch(assistantTick(m.assist.tickGen), m.captureAssistantCmd())
+		return m, tea.Batch(next, m.captureAssistantCmd())
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()

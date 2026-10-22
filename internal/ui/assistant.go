@@ -35,11 +35,9 @@ var (
 
 var errSessionEnded = errors.New("its tmux session ended, so claude exited or failed to start")
 
-// assistantPane is the side panel that mirrors the assistant's Claude session.
 type assistantPane struct {
-	open    bool
-	session sessionState
-	// owns is whether this board created the session, so it stops it on quit.
+	open            bool
+	session         sessionState
 	owns            bool
 	epoch           int
 	lastErr         error
@@ -60,6 +58,13 @@ const (
 
 func (p assistantPane) starting() bool { return p.session == sessionStarting }
 func (p assistantPane) running() bool  { return p.session == sessionRunning }
+
+func (p *assistantPane) clearFrame() { p.txt, p.history, p.scroll, p.mouse = "", 0, 0, false }
+
+func (p *assistantPane) fail(err error) {
+	p.session, p.lastErr = sessionStopped, err
+	p.clearFrame()
+}
 
 type assistantStartedMsg struct {
 	epoch   int
@@ -107,7 +112,6 @@ func (m Model) assistantWidth() int {
 	return m.assistantFits()
 }
 
-// boardWidth is the width left for the columns and the preview.
 func (m Model) boardWidth() int { return m.width - m.assistantWidth() }
 
 // openAssistant shows the panel, focuses it and starts its session unless it is
@@ -133,8 +137,6 @@ func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// focusAssistant sends the keys to the panel and starts the loop that captures
-// it while it has focus; a loop from an earlier focus stops.
 func (m *Model) focusAssistant() tea.Cmd {
 	m.mode = modeAssistant
 	m.assist.tickGen++
@@ -152,7 +154,7 @@ func (m *Model) hideAssistant() {
 // session off the UI thread.
 func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	m.assist.session = sessionStarting
-	m.assist.txt, m.assist.history, m.assist.scroll, m.assist.mouse = "", 0, 0, false
+	m.assist.clearFrame()
 	m.assist.epoch++
 	epoch := m.assist.epoch
 	root, exe, board := m.eng.Root, m.eng.Exe(), m.snap.Board
@@ -176,7 +178,7 @@ func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
-		m.assist.session, m.assist.lastErr = sessionStopped, msg.err
+		m.assist.fail(msg.err)
 		m.setFlash("Starting the assistant failed: " + msg.err.Error())
 		return nil
 	}
@@ -185,8 +187,6 @@ func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 	return m.captureAssistantCmd()
 }
 
-// assistantCapturing is whether the panel is shown and its session is running,
-// so there is something to poll.
 func (m Model) assistantCapturing() bool {
 	return m.assistantWidth() > 0 && m.assist.running()
 }
@@ -213,7 +213,11 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 	}
 	m.assist.at = msg.at
 	if msg.err != nil {
-		m.assist.session, m.assist.lastErr = sessionStopped, msg.err
+		if errors.Is(msg.err, errSessionEnded) {
+			m.assist.fail(msg.err)
+		} else {
+			m.setFlash("Reading the assistant failed: " + msg.err.Error())
+		}
 		return
 	}
 	if m.assist.scroll > 0 {
@@ -228,14 +232,14 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		return m, nil
 	}
-	if !m.assist.running() {
-		switch {
-		case m.assist.starting():
-		case msg.Type == tea.KeyEnter:
-			return m, m.startAssistantSession(false)
-		default:
-			m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to return.")
-		}
+	switch {
+	case m.assist.running():
+	case m.assist.starting():
+		return m, nil
+	case msg.Type == tea.KeyEnter:
+		return m, m.startAssistantSession(false)
+	default:
+		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to return.")
 		return m, nil
 	}
 	job, ok := keyJobFor(assistant.SessionName(m.eng.Root), msg)
@@ -247,13 +251,11 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, afterKey(m.captureAssistantCmd())
 }
 
-// wheelAssistant scrolls the panel, or hands the wheel to Claude when it tracks
-// the mouse and the panel has no history to scroll.
 func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
-	up := msg.Button == tea.MouseButtonWheelUp
 	if !m.assist.running() {
 		return m, nil
 	}
+	up := msg.Button == tea.MouseButtonWheelUp
 	if m.assist.mouse && m.assist.history == 0 {
 		x, y := clamp(msg.X-l.boardW, 1, l.assistantW-2), clamp(msg.Y-l.bodyY, 1, l.bodyH-2)
 		m.keys.send(wheelJob(assistant.SessionName(m.eng.Root), up, x, y))
@@ -268,7 +270,7 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderAssistant(width, height int) string {
-	body := ""
+	var body string
 	switch {
 	case m.assist.starting():
 		body = dim.Render("Starting the assistant…")
@@ -286,16 +288,16 @@ func (m Model) renderAssistant(width, height int) string {
 		body = previewWindow(m.assist.txt, height-2, m.assist.scroll)
 	}
 
-	title := " assistant "
+	title, hint := " assistant ", "· "+askKey+" to type here "
 	style := panelStyle
-	switch {
-	case m.mode == modeAssistant:
+	if m.mode == modeAssistant {
 		style = style.BorderForeground(accent)
-		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT ") + dim.Render("· ctrl+q back to board ")
-	case m.assist.scroll > 0:
+		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q back to board "
+	}
+	if m.assist.scroll > 0 {
 		title += thinking.Render(fmt.Sprintf("· ↑ %d lines up ", m.assist.scroll))
-	default:
-		title += dim.Render("· " + askKey + " to type here ")
+	} else {
+		title += dim.Render(hint)
 	}
 
 	return titledBox(style, title, body, width, height)

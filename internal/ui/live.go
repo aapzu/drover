@@ -76,7 +76,6 @@ func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
 	return job, job.literal != "" || job.key != ""
 }
 
-// afterKey runs capture once the app has had time to react to a key.
 func afterKey(capture tea.Cmd) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(40 * time.Millisecond)
@@ -84,7 +83,6 @@ func afterKey(capture tea.Cmd) tea.Cmd {
 	}
 }
 
-// wheelJob is the SGR mouse report that scrolls the app in session at x, y.
 func wheelJob(session string, up bool, x, y int) keyJob {
 	code := 65
 	if up {

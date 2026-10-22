@@ -18,14 +18,15 @@ import (
 
 var realHasTranscript = hasTranscript
 
-func load(root string) (string, bool) {
-	id := SessionID(root)
-	return id, id != ""
-}
-
 func init() {
 	hasTranscript = func(string, string) (bool, error) { return true, nil }
 	hasSession = func(string) bool { return false }
+}
+
+func stubTranscript(t *testing.T, has bool, err error) {
+	t.Helper()
+	hasTranscript = func(string, string) (bool, error) { return has, err }
+	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
 }
 
 type panel struct {
@@ -251,13 +252,13 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := load(root); !ok {
-		t.Fatalf("load = %q, %v", id, ok)
+	if id := SessionID(root); id == "" {
+		t.Fatal("no saved id")
 	}
 	if err := os.WriteFile(filepath.Join(store.Dir(root), sessionFile), []byte("not-a-uuid"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := load(root); ok {
+	if SessionID(root) != "" {
 		t.Error("a corrupt session file should start a new conversation")
 	}
 }
@@ -334,11 +335,11 @@ func TestFreshForgetsTheConversationOnlyOnceTheQuestionCanRun(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(root, config.FileName), []byte("{"), 0o644)
-	before, _ := load(root)
+	before := SessionID(root)
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); err == nil {
 		t.Fatal("expected the broken board to fail the question")
 	}
-	if after, ok := load(root); !ok || after != before {
+	if after := SessionID(root); after == "" || after != before {
 		t.Error("a question that couldn't run still forgot the conversation")
 	}
 }
@@ -351,7 +352,7 @@ func TestAskReportsWhatWentWrong(t *testing.T) {
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err == nil || !strings.Contains(err.Error(), "no answer") {
 		t.Errorf("blank output: %v", err)
 	}
-	if _, ok := load(root); ok {
+	if SessionID(root) != "" {
 		t.Error("a blank answer started a conversation")
 	}
 
@@ -450,8 +451,7 @@ func TestRunClaudeExplainsFailures(t *testing.T) {
 func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
-	hasTranscript = func(string, string) (bool, error) { return false, nil }
-	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	stubTranscript(t, false, nil)
 	p := fakePanel(t)
 	exe := "/bin/drover"
 
@@ -478,8 +478,8 @@ func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 		t.Errorf("the panel lacks the read-only repo rules: %q", args)
 	}
 	id := flagValue(args, "--session-id")
-	if saved, ok := load(root); !ok || saved != id {
-		t.Errorf("saved id = %q, %v; want %q", saved, ok, id)
+	if saved := SessionID(root); saved != id {
+		t.Errorf("saved id = %q; want %q", saved, id)
 	}
 }
 
@@ -512,8 +512,7 @@ func TestAskDoesNotResumeAConversationThatNeverGotAMessage(t *testing.T) {
 	if err := save(root, id); err != nil {
 		t.Fatal(err)
 	}
-	hasTranscript = func(string, string) (bool, error) { return false, nil }
-	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	stubTranscript(t, false, nil)
 	calls := fakeClaude(t, "ok", nil)
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
@@ -577,8 +576,8 @@ func TestSessionNameIsSafeAndPerProject(t *testing.T) {
 func TestRealTranscriptLookupFollowsClaudesProjectDir(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	stubTranscript(t, true, nil)
 	hasTranscript = realHasTranscript
-	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
 	root := filepath.Join(t.TempDir(), "repo")
 	id := "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
 	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
@@ -607,8 +606,7 @@ func TestPanelKeepsTheSavedIdUntilItHasATranscript(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	p := fakePanel(t)
-	hasTranscript = func(string, string) (bool, error) { return false, nil }
-	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	stubTranscript(t, false, nil)
 	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +620,7 @@ func TestPanelKeepsTheSavedIdUntilItHasATranscript(t *testing.T) {
 	if flagValue(p.calls[0], "--session-id") != id || slices.Contains(p.calls[0], "--resume") {
 		t.Errorf("should start under the saved id %s: %q", id, p.calls[0])
 	}
-	if saved, _ := load(root); saved != id {
+	if saved := SessionID(root); saved != id {
 		t.Errorf("saved id changed to %q", saved)
 	}
 }
@@ -733,8 +731,7 @@ func TestUnreadableConversationStateIsAnErrorNotANewConversation(t *testing.T) {
 		t.Errorf("Ask = %v with %d runs", err, len(*calls))
 	}
 
-	hasTranscript = func(string, string) (bool, error) { return false, errors.New("permission denied") }
-	t.Cleanup(func() { hasTranscript = func(string, string) (bool, error) { return true, nil } })
+	stubTranscript(t, false, errors.New("permission denied"))
 	root = filepath.Join(t.TempDir(), "other")
 	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
 		t.Fatal(err)
@@ -763,7 +760,7 @@ func TestSaveLeavesNoPartialFile(t *testing.T) {
 			t.Errorf("left %s behind", e.Name())
 		}
 	}
-	if got, _ := load(root); got != id {
+	if got := SessionID(root); got != id {
 		t.Errorf("load = %q", got)
 	}
 }
@@ -775,12 +772,12 @@ func TestRestartKeepsTheConversationWhenTheOldSessionWontDie(t *testing.T) {
 	if _, err := Start(root, "/bin/drover", &config.Board{}); err != nil {
 		t.Fatal(err)
 	}
-	saved, _ := load(root)
+	saved := SessionID(root)
 	stopSession = func(string) {}
 	if err := Restart(root, "/bin/drover", &config.Board{}); err == nil {
 		t.Fatal("Restart succeeded beside a session that is still running")
 	}
-	if got, _ := load(root); got != saved || len(p.calls) != 1 {
+	if got := SessionID(root); got != saved || len(p.calls) != 1 {
 		t.Errorf("saved id %q (was %q), %d sessions; the conversation was forgotten for a restart that didn't happen", got, saved, len(p.calls))
 	}
 }
@@ -850,10 +847,17 @@ func TestStartSurfacesASessionErrorAndKeepsTheSavedId(t *testing.T) {
 	fakePanel(t)
 	newSession = func(string, string, []string, map[string]string) error { return errors.New("tmux broke") }
 	created, err := Start(root, "/bin/drover", &config.Board{})
-	if err == nil || !strings.Contains(err.Error(), "tmux broke") {
+	if err == nil || created || !strings.Contains(err.Error(), "tmux broke") {
 		t.Fatalf("Start = %v, %v", created, err)
 	}
-	if id, ok := load(root); !ok || id == "" {
+	if SessionID(root) == "" {
 		t.Error("the conversation id was lost with the failed start")
+	}
+}
+
+func TestGitOptionsThatWriteOrRunProgramsAreDenied(t *testing.T) {
+	want := []string{"git *--output*", "git *--ext-diff*", "git *--textconv*", "git *--no-index*", "git blame *--cont*"}
+	if !slices.Equal(gitDenied, want) {
+		t.Errorf("gitDenied = %q, want %q", gitDenied, want)
 	}
 }
