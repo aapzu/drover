@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -118,7 +119,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 }
 
 // leaveScratchWorking moves a named card out of To Do as soon as its agent
-// starts a turn.
+// starts a turn, unless it was routed to stay.
 func (e *Engine) leaveScratchWorking(taskID string, skipPlan bool) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -135,30 +136,45 @@ func (e *Engine) leaveScratchWorking(taskID string, skipPlan bool) {
 	e.leaveScratch(t, owner, col, board, true, skipPlan)
 }
 
-// routeScratch judges a new session's prompt and moves the card, past the plan
-// columns if it needs no plan. If the judgement fails, the error is logged and
-// the card plans.
+// routeScratch judges a prompt typed in a session still in the main checkout.
+// A task that needs no worktree keeps the session there until a later prompt
+// does; otherwise the card moves, past the plan columns if it needs no plan.
+// If the judgement fails, the error is logged and the card moves as if it
+// needed a plan.
 func (e *Engine) routeScratch(taskID, prompt string) {
-	needsPlan, err := claude.NeedsPlan(e.stopping, e.Root, truncatePrompt(prompt))
+	route, err := claude.RouteTask(e.stopping, e.Root, truncatePrompt(prompt))
 	if e.stopping.Err() != nil {
 		return
 	}
+	var next string
 	e.with(func() {
 		t := e.find(taskID)
 		if t == nil {
 			return
 		}
+		stay := false
 		if s := t.Sessions[store.MainSession]; s != nil {
-			s.Routing = false
+			next, s.NextRoute = s.NextRoute, ""
+			s.Routing = next != ""
+			stay = route == claude.RouteStay && s.Scratch
+			s.Stay = stay && next == ""
 		}
 		switch {
+		case next != "":
+			return
 		case err != nil:
-			t.AddLog(err.Error() + ", planning")
-		case !needsPlan:
-			t.AddLog("Plan check: no plan needed, skipping planning")
+			t.AddLog(err.Error() + ", using a worktree")
+		case stay:
+			t.AddLog("Route check: no worktree needed, staying in the main checkout")
+		case route == claude.RouteDirect && e.hasPlanColumn():
+			t.AddLog("Route check: no plan needed, skipping planning")
 		}
 	})
-	e.leaveScratchWorking(taskID, !needsPlan)
+	if next != "" {
+		e.routeScratch(taskID, next)
+		return
+	}
+	e.leaveScratchWorking(taskID, route == claude.RouteDirect)
 }
 
 // truncatePrompt caps prompt at 4000 runes so the Haiku calls stay small.
@@ -171,7 +187,8 @@ func truncatePrompt(prompt string) string {
 
 // leaveScratch moves a card whose session still runs in the main checkout into
 // the first agent column, or the work column when it was routed past planning.
-// It waits while the first prompt is still being judged.
+// It waits while a prompt is still being judged and leaves sessions
+// that need no worktree where they are.
 func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board, working, skipPlan bool) bool {
 	if !col.IsTodo() {
 		return false
@@ -181,7 +198,7 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	idle := s != nil && s.Activity == store.ActivityIdle && len(s.Pending) == 0
 	// A review waiting for gh to confirm its PR moves the card itself.
 	held := t.PR.IsReview() && t.PRMovePending
-	due := s != nil && t.Title != "" && !held && !s.Routing && s.Status == store.StatusRunning && (working || idle)
+	due := s != nil && t.Title != "" && !held && !s.Routing && !s.Stay && s.Status == store.StatusRunning && (working || idle)
 	e.mu.Unlock()
 	target, ok := firstAgentColumn(board)
 	if skipPlan {
