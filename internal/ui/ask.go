@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +22,32 @@ var askAssistant = assistant.Ask
 type askEntry struct {
 	question, answer string
 	err              error
+}
+
+// askRun lets quitting the board stop a question that is still running.
+type askRun struct {
+	ctx  context.Context
+	stop context.CancelFunc
+	wg   sync.WaitGroup
+}
+
+func newAskRun() *askRun {
+	ctx, stop := context.WithCancel(context.Background())
+	return &askRun{ctx: ctx, stop: stop}
+}
+
+// StopAsk ends a running question and waits for its claude process to be killed.
+func (m Model) StopAsk() {
+	if m.askRun == nil {
+		return
+	}
+	m.askRun.stop()
+	done := make(chan struct{})
+	go func() { m.askRun.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(6 * time.Second):
+	}
 }
 
 type askDoneMsg struct {
@@ -67,9 +95,11 @@ func (m Model) updateAsk(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.askLog = append(m.askLog, askEntry{question: question})
 		m.askBusy = true
 		m.syncAsk()
-		root, exe := m.eng.Root, m.eng.Exe()
+		root, exe, run := m.eng.Root, m.eng.Exe(), m.askRun
+		run.wg.Add(1)
 		return m, func() tea.Msg {
-			answer, err := askAssistant(context.Background(), root, exe, question, false)
+			defer run.wg.Done()
+			answer, err := askAssistant(run.ctx, root, exe, question, false)
 			return askDoneMsg{answer, err}
 		}
 	}

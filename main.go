@@ -86,7 +86,11 @@ func run(dir string) error {
 	final, err := tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
 	cancel()
 	<-stopped
-	if m, ok := final.(ui.Model); ok && m.SuspendAllRequested() {
+	m, ok := final.(ui.Model)
+	if ok {
+		m.StopAsk()
+	}
+	if ok && m.SuspendAllRequested() {
 		fmt.Println("Suspending all agents…")
 		for _, h := range eng.SuspendAll() {
 			if h.SessionID == "" {
