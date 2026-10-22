@@ -496,3 +496,20 @@ func TestMovePickerDigitIgnoresCursorPosition(t *testing.T) {
 		t.Errorf("busy column = %q after moving the cursor and pressing 3, want the move to c2", got)
 	}
 }
+
+func TestMovePickerCursorStaysInRangeWhenBoardShrinks(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 2
+
+	m.applySnap(testModel(120, 40, 2, 1).snap)
+	if m.moveSel != 1 {
+		t.Fatalf("moveSel = %d after the board shrank to two columns, want the last one", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after enter, want the move to c1", got)
+	}
+}
