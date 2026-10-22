@@ -156,7 +156,7 @@ open, and to Verify in develop once it merges:
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
   you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
-  Self-review, In review, Verify in develop, Done); press `W` to write it out.
+  Waiting for me, In review, Verify in develop, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
   `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
@@ -287,15 +287,18 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
   `{{agentReply}}`. In a `script` or `conditionScript` they are shell-quoted,
   and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
 
-This repo's own board reviews and builds on entering Self-review, asks for
-fixes if the review reported issues, and notifies you once a PR is in
-review:
+This repo's own board cleans up, simplifies, reviews and builds on entering
+In review, asks for fixes if the review reported issues, and notifies you once
+a PR is in review:
 
 ```json
 "automations": {
   "onEnter": [
+    { "name": "Remove extra comments", "type": "send_message", "message": "Run comment-destroyer subagent" },
+    { "name": "Simplify", "type": "send_message", "message": "/simplify" },
     { "name": "Review", "type": "send_message", "message": "/pr-review-toolkit:review-pr" },
-    { "name": "Build", "type": "run_script", "script": "go build ./... && go vet ./..." }
+    { "name": "Build", "type": "run_script", "script": "go build ./... && go vet ./..." },
+    { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
