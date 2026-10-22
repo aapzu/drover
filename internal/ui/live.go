@@ -10,8 +10,6 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// liveExitKey is the only key live mode and the assistant panel keep, and hides
-// the panel on the board.
 const liveExitKey = "ctrl+q"
 
 var tmuxKeyNames = map[string]string{
@@ -63,7 +61,6 @@ func tmuxKey(msg tea.KeyMsg) (literal, key string) {
 	return "", mods.String() + s
 }
 
-// keyJobFor is the job that types msg into session.
 func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
 	job = keyJob{session: session}
 	if msg.Paste {

@@ -111,9 +111,6 @@ func (m Model) assistantWidth() int {
 
 func (m Model) boardWidth() int { return m.width - m.assistantWidth() }
 
-// openAssistant shows the panel, focuses it and starts its session unless it is
-// running or starting. fresh restarts it on a new conversation, except while it
-// is starting.
 func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	if m.assistantFits() == 0 {
 		m.setFlash("The terminal is too small for the assistant panel")
@@ -140,8 +137,6 @@ func (m *Model) focusAssistant() tea.Cmd {
 	return assistantTick(m.assist.tickGen)
 }
 
-// startAssistantSession starts, or with fresh restarts, the assistant's tmux
-// session.
 func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	board := m.snap.Board
 	if board == nil {

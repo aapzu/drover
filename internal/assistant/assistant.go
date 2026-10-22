@@ -1,7 +1,6 @@
 // Package assistant answers questions about a board and its repository, and
 // changes the board on request, through a Claude session that drives the drover
-// CLI and may only read the repository: interactive in a tmux session for the
-// board's side panel, headless for drover ask.
+// CLI and may only read the repository.
 package assistant
 
 import (
@@ -55,8 +54,6 @@ func SessionName(root string) string {
 	return nonName.ReplaceAllString(filepath.Base(store.Dir(root)), "-") + "-assistant"
 }
 
-// SessionID is the saved conversation's id, or "" before there is one or when
-// the file can't be read.
 func SessionID(root string) string {
 	id, _ := loadID(root)
 	return id
@@ -75,8 +72,8 @@ func stopAndVerify(root string) error {
 	return nil
 }
 
-// Stop ends the side panel's session. It waits up to stopWait for another process
-// holding the conversation, then stops the session whether or not it got the lock.
+// Stop waits up to stopWait for another process holding the conversation, then
+// stops the session whether or not it got the lock.
 func Stop(root string) error {
 	unlock, lockErr := lockFor(root, stopWait)
 	if lockErr == nil {
@@ -137,9 +134,7 @@ var runClaude = func(ctx context.Context, dir string, argv []string, stdin strin
 	return string(out), nil
 }
 
-// Ask puts question to the project's assistant, which runs the drover binary at
-// exe to read and change the board, and returns its answer. fresh forgets the
-// conversation first. It fails while the board's side-panel session is running.
+// Ask fails while the board's side-panel session is running.
 func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, error) {
 	unlock, err := lock(root)
 	if err != nil {
@@ -187,9 +182,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	return answer, nil
 }
 
-// Start opens the side panel's Claude session in tmux unless one is already
-// running, and reports whether it opened one. It fails at once while another
-// process holds the conversation.
+// Start fails at once while another process holds the conversation.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
 	unlock, err := lockFor(root, noWait)
 	if err != nil {
@@ -220,8 +213,6 @@ func start(root, exe string, board *config.Board) error {
 	return newSession(SessionName(root), root, append([]string{"claude"}, args...), nil)
 }
 
-// Restart ends the panel's session, forgets the conversation and starts a new
-// one.
 func Restart(root, exe string, board *config.Board) error {
 	unlock, err := lockFor(root, noWait)
 	if err != nil {
@@ -237,8 +228,7 @@ func Restart(root, exe string, board *config.Board) error {
 	return start(root, exe, board)
 }
 
-// Reset makes the next question start a new conversation. It waits for a
-// question in progress and fails while the panel's session runs.
+// Reset waits for a question in progress and fails while the panel's session runs.
 func Reset(root string) error {
 	unlock, err := lock(root)
 	if err != nil {
@@ -357,8 +347,6 @@ func describeColumns(b *config.Board) string {
 	return strings.Join(lines, "\n")
 }
 
-// loadID returns the saved conversation id, or "" when there is none or the
-// file holds something else. A file that can't be read is an error.
 func loadID(root string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(store.Dir(root), sessionFile))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -378,8 +366,6 @@ func validID(id string) bool {
 	return err == nil
 }
 
-// conversation returns the saved conversation id and whether claude can resume
-// it, which needs a transcript.
 func conversation(root string) (id string, resume bool, err error) {
 	if id, err = loadID(root); err != nil || id == "" {
 		return "", false, err
@@ -413,8 +399,6 @@ const (
 // lock blocks until no other process is using the project's conversation.
 func lock(root string) (unlock func(), err error) { return lockFor(root, waitForever) }
 
-// lockFor takes the project's conversation lock, waiting up to wait for it:
-// noWait fails at once with errBusy, waitForever has no limit.
 func lockFor(root string, wait time.Duration) (unlock func(), err error) {
 	dir := store.Dir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

@@ -210,7 +210,6 @@ func Paste(name, text string) error {
 	return err
 }
 
-// Resize pins the window to the size of the board's preview or assistant panel.
 func Resize(name string, width, height int) error {
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
 	if err == nil && strings.TrimSpace(size) == fmt.Sprintf("%dx%d", width, height) {
