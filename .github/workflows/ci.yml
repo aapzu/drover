@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Configure git identity
+        run: |
+          git config --global user.name ci
+          git config --global user.email ci@example.com
+          git config --global init.defaultBranch main
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
