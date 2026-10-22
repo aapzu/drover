@@ -513,3 +513,54 @@ func TestMovePickerCursorStaysInRangeWhenBoardShrinks(t *testing.T) {
 		t.Errorf("busy column = %q after enter, want the move to c1", got)
 	}
 }
+
+func TestMovePickerCursorStopsAtFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	for range 2 {
+		next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyUp})
+		m = next.(Model)
+	}
+	if m.moveSel != 0 {
+		t.Fatalf("moveSel = %d after up on the first column, want 0", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after down and enter, want the move to c1", got)
+	}
+}
+
+func TestMovePickerDigitMovesCardBeyondTheListedColumns(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.col = 9
+	m.selected["c9"] = "c9-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	next, _ = m.updateMove(key("1"))
+	m = next.(Model)
+	if got := m.busy["c9-t0"].column; got != "c0" {
+		t.Errorf("busy column = %q after m and 1, want the card moved to c0", got)
+	}
+}
+
+func TestMovePickerEnterAdoptsOrphanCardIntoFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.snap.Tasks[0].ColumnID = "deleted"
+	m.col = 0
+	m.selected["c0"] = m.snap.Tasks[0].ID
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	next, _ = m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c0" {
+		t.Errorf("busy column = %q after enter on an orphan card, want the move to c0", got)
+	}
+}
