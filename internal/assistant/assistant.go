@@ -1,6 +1,6 @@
 // Package assistant answers questions about a board and its repository, and
 // changes the board on request, through a Claude session that drives the drover
-// CLI and may only read the repository.
+// CLI and whose tools may only read the repository.
 package assistant
 
 import (
