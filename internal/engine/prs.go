@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -34,6 +35,9 @@ func (e *Engine) pollPRs() []func() {
 		switch t.PR.State {
 		case "CLOSED":
 		case "MERGED":
+			if t.PR.MergeMovePending {
+				open = append(open, t.ID)
+			}
 			if flow != nil && flow.Released != "" && !t.PR.Released && !t.PR.IsReview() && t.PR.MergeCommit != "" {
 				merged = append(merged, t.ID)
 			}
@@ -304,7 +308,7 @@ func (e *Engine) checkRelease(id, ref string) {
 		}
 		pr.Error = ""
 		flow := e.board.PRFlow
-		if !reached || flow == nil {
+		if !reached || flow == nil || pr.MergeMovePending {
 			return
 		}
 		released := func() {
@@ -325,6 +329,7 @@ type prMove struct {
 	to      config.Column
 	message string
 	onMoved func()
+	retry   bool
 }
 
 // prStep records what changed on the card's PR and returns the move it
@@ -336,9 +341,18 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		flow = &config.PRFlow{}
 	}
 	switch at := info.ChangesRequestedAt(); {
-	case info.State == "MERGED" && prevState != "MERGED":
-		card.AddLog(fmt.Sprintf("PR #%d merged", pr.Number))
-		return prMove{to: e.flowColumn(flow.Merged)}
+	case info.State == "MERGED" && (prevState != "MERGED" || pr.MergeMovePending):
+		retry := prevState == "MERGED"
+		if !retry {
+			card.AddLog(fmt.Sprintf("PR #%d merged", pr.Number))
+		}
+		to := e.flowColumn(flow.Merged)
+		if to.ID == "" {
+			pr.MergeMovePending = false
+			return prMove{}
+		}
+		pr.MergeMovePending = true
+		return prMove{to: to, retry: retry, onMoved: func() { pr.MergeMovePending = false }}
 	case info.State == "CLOSED" && prevState != "CLOSED":
 		card.AddLog(fmt.Sprintf("PR #%d closed without merging", pr.Number))
 		e.notify("#%d: PR #%d was closed", card.Number, pr.Number)
@@ -479,7 +493,15 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 		message = e.render(card, step.message, groupContext{to: step.to}, false)
 	}
 	err := e.moveLocked(card.ID, step.to.ID, MoveOptions{Message: message})
-	if err != nil {
+	var ext *ExternalError
+	external := errors.As(err, &ext)
+	switch {
+	case external && step.retry:
+		return
+	case err != nil:
+		if !external {
+			e.with(func() { card.PR.MergeMovePending = false })
+		}
 		e.logf(card, "Moving to %s failed: %v", step.to.Name, err)
 		e.notify("#%d: moving to %s failed: %v", card.Number, step.to.Name, err)
 		return

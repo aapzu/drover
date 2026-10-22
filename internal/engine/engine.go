@@ -549,6 +549,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		if opts.evict {
 			t.PRMovePending = false
 		}
+		if t.PR != nil {
+			t.PR.MergeMovePending = false
+		}
 		if drives {
 			// Turn-end automations of the previous visit no longer apply.
 			owner.Visit++

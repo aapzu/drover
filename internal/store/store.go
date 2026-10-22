@@ -139,16 +139,17 @@ type Issue struct {
 // PR is a GitHub pull request the task's agent opened, or one you asked it to
 // review (Review).
 type PR struct {
-	URL            string    `json:"url"`
-	Number         int       `json:"number"`
-	Title          string    `json:"title,omitempty"`
-	Branch         string    `json:"branch,omitempty"`
-	State          string    `json:"state,omitempty"`
-	ReviewDecision string    `json:"reviewDecision,omitempty"`
-	MergeCommit    string    `json:"mergeCommit,omitempty"`
-	ChangesSeenAt  time.Time `json:"changesSeenAt,omitzero"`
-	FixFrom        string    `json:"fixFrom,omitempty"`
-	Released       bool      `json:"released,omitempty"`
+	URL              string    `json:"url"`
+	Number           int       `json:"number"`
+	Title            string    `json:"title,omitempty"`
+	Branch           string    `json:"branch,omitempty"`
+	State            string    `json:"state,omitempty"`
+	ReviewDecision   string    `json:"reviewDecision,omitempty"`
+	MergeCommit      string    `json:"mergeCommit,omitempty"`
+	ChangesSeenAt    time.Time `json:"changesSeenAt,omitzero"`
+	FixFrom          string    `json:"fixFrom,omitempty"`
+	Released         bool      `json:"released,omitempty"`
+	MergeMovePending bool      `json:"mergeMovePending,omitempty"`
 	// Review is set when you ask the agent to review the PR, and dropped
 	// again if gh shows you wrote it. Until gh has answered, State is empty.
 	Review     bool      `json:"review,omitempty"`
