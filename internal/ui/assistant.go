@@ -86,8 +86,7 @@ func assistantTick(gen int) tea.Cmd {
 }
 
 // StopAssistant ends the assistant's session if this board created it, or is
-// still starting it, so that quitting a board that merely attached to another
-// board's session leaves it running.
+// still starting it.
 func (m Model) StopAssistant() error {
 	if !m.assist.owns && !m.assist.starting() {
 		return nil
@@ -95,8 +94,6 @@ func (m Model) StopAssistant() error {
 	return stopAssistant(m.eng.Root)
 }
 
-// assistantFits is the width the panel would take, or 0 when the terminal is too
-// narrow to leave the board minBoardWidth or too short to show it.
 func (m Model) assistantFits() int {
 	w := max(minAssistantWidth, m.width*2/5)
 	if m.width-w < minBoardWidth || m.bodyHeight() < minPreviewHeight {
@@ -115,8 +112,7 @@ func (m Model) assistantWidth() int {
 func (m Model) boardWidth() int { return m.width - m.assistantWidth() }
 
 // openAssistant shows the panel, focuses it and starts its session unless it is
-// running or starting. fresh starts a new conversation, but not while a start is
-// in progress.
+// running or starting.
 func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	if m.assistantFits() == 0 {
 		m.setFlash("The terminal is too small for the assistant panel")
@@ -151,7 +147,7 @@ func (m *Model) hideAssistant() {
 }
 
 // startAssistantSession starts, or with fresh restarts, the assistant's tmux
-// session off the UI thread.
+// session.
 func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	m.assist.session = sessionStarting
 	m.assist.clearFrame()

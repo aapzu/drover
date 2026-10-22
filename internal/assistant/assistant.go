@@ -76,9 +76,7 @@ func stopAndVerify(root string) error {
 }
 
 // Stop ends the side panel's session. It waits up to stopWait for another process
-// holding the conversation (Start, Restart, drover ask), then stops the session
-// whether or not it got the lock, and reports a session that is still there. The
-// conversation can be resumed.
+// holding the conversation, then stops the session whether or not it got the lock.
 func Stop(root string) error {
 	unlock, lockErr := lockFor(root, stopWait)
 	if lockErr == nil {
@@ -142,9 +140,6 @@ var runClaude = func(ctx context.Context, dir string, argv []string, stdin strin
 // Ask puts question to the project's assistant, which runs the drover binary at
 // exe to read and change the board, and returns its answer. fresh forgets the
 // conversation first. It fails while the board's side-panel session is running.
-//
-// When the answer is fine but the conversation could not be saved, the answer
-// comes back with an error saying the next question starts a new one.
 func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, error) {
 	unlock, err := lock(root)
 	if err != nil {
@@ -193,10 +188,8 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 }
 
 // Start opens the side panel's Claude session in tmux unless one is already
-// running, and reports whether it opened one. It resumes the saved conversation
-// once that has a transcript; until then it starts a new one under the saved id. It fails
-// at once while another process holds the conversation, such as drover ask
-// answering. exe is the drover binary it runs.
+// running, and reports whether it opened one. It fails at once while another
+// process holds the conversation.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
 	unlock, err := lockFor(root, 0)
 	if err != nil {
@@ -228,7 +221,7 @@ func start(root, exe string, board *config.Board) error {
 }
 
 // Restart ends the panel's session, forgets the conversation and starts a new
-// one. Like Start it fails at once while another process holds the conversation.
+// one.
 func Restart(root, exe string, board *config.Board) error {
 	unlock, err := lockFor(root, 0)
 	if err != nil {
@@ -386,8 +379,7 @@ func validID(id string) bool {
 }
 
 // conversation returns the saved conversation id and whether claude can resume
-// it, which needs a transcript. An id with no transcript yet is started under,
-// not resumed. No saved conversation gives "" and false.
+// it, which needs a transcript.
 func conversation(root string) (id string, resume bool, err error) {
 	if id, err = loadID(root); err != nil || id == "" {
 		return "", false, err

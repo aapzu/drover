@@ -541,8 +541,7 @@ func (m Model) renderPreview(height int) string {
 	return titledBox(style, title, body, m.boardWidth(), height)
 }
 
-// titledBox draws body in a bordered box of width x height, with title in the
-// top border and the bottom lines of body kept when it doesn't fit.
+// titledBox draws body in a bordered box of width x height.
 func titledBox(style lipgloss.Style, title, body string, width, height int) string {
 	inner, rows := width-2, max(0, height-2)
 	lines := strings.Split(body, "\n")

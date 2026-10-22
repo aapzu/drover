@@ -11,8 +11,7 @@ import (
 )
 
 // liveExitKey is the only key live mode and the assistant panel keep, and hides
-// the panel on the board; it matches tmux.DetachKey.
-// Option chords can't be reserved: macOS types them as characters such as å.
+// the panel on the board.
 const liveExitKey = "ctrl+q"
 
 var tmuxKeyNames = map[string]string{
@@ -64,8 +63,7 @@ func tmuxKey(msg tea.KeyMsg) (literal, key string) {
 	return "", mods.String() + s
 }
 
-// keyJobFor is the job that types msg into session; ok is false for a key tmux
-// has no name for.
+// keyJobFor is the job that types msg into session.
 func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
 	job = keyJob{session: session}
 	if msg.Paste {
