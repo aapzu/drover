@@ -495,14 +495,15 @@ drover ask "which cards are waiting on review?"
 
 `drover ask <question>` (or `:` on the board) asks an assistant that knows the
 repo, the board's columns, and every card's column, branch, worktree and agent
-state. It can move, add, edit and delete cards when you tell it to. It is a
-headless `claude -p --model sonnet` session that runs the commands above, so
-changes go through the open board like any other. It takes no agent slot and
-isn't a card.
+state. It can move, add, edit and delete cards when you tell it to, and answer
+questions about the code and its history. It is a headless
+`claude -p --model sonnet` session that runs the commands above, so changes go
+through the open board like any other. It takes no agent slot and isn't a card.
 
 ```sh
 drover ask "what needs me right now?"
 drover ask "move #4 and #7 to In review"
+drover ask "where does the card state get saved?"
 drover ask --new "start over: what's in Planning?"
 ```
 
@@ -512,10 +513,23 @@ drover ask --new "start over: what's in Planning?"
   project's state directory. The pane's history is not kept between runs of the
   board, but the conversation is. If a saved conversation can no longer be
   resumed, every question fails until you use `--new`.
-- It may only run `drover list`, `move`, `add`, `edit` and `rm`, and never
-  `--force`. It is told to ask you before deleting a card or moving one to To
-  Do, which removes its worktree. In a one-off `drover ask` you answer that
-  in the next question.
+- Besides read-only git (below), it may only run `drover list`, `move`, `add`,
+  `edit` and `rm`, and never `--force`. It is told to ask you before deleting a
+  card or moving one to To Do, which removes its worktree. In a one-off
+  `drover ask` you answer that in the next question.
+- The repo is read-only to it, enforced in the tool permissions: Read, Grep and
+  Glob, which Claude limits to the repo, and the git subcommands `status`,
+  `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,
+  `rev-parse`, `describe` and `cat-file`. Everything else is refused: no edit
+  or write tool, no other shell commands, and no git subcommand that changes
+  the repo, a branch or a worktree.
+- Asked for a change, it offers a card with a title and prompt and runs
+  `drover add` once you agree. That is an instruction to it, not a restriction.
+- It ignores your user, project and local Claude settings, so none of your allow
+  rules or `env` apply, but CLAUDE.md files still load. Managed settings still
+  apply. If they auto-allow sandboxed Bash commands, the permission rules no
+  longer limit what it runs; the sandbox does, and drover denies it writes to
+  the repo there.
 - A question of `-` is read from stdin. A question that gets no answer within
   ten minutes fails, and the board may have been partly changed.
 

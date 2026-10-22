@@ -1,10 +1,12 @@
-// Package assistant answers questions about a board and changes it on request,
-// through a headless Claude session that drives the drover CLI.
+// Package assistant answers questions about a board and its repository, and
+// changes the board on request, through a headless Claude session that drives
+// the drover CLI and may only read the repository.
 package assistant
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,6 +33,17 @@ const (
 )
 
 const maxErrorLen = 600
+
+// repoTools are the tools the assistant has besides running commands; none of them can change a file.
+var repoTools = []string{"Read", "Grep", "Glob"}
+
+// gitReadOnly are the git subcommands the assistant may run.
+var gitReadOnly = []string{"status", "log", "show", "diff", "blame", "ls-files", "ls-tree", "shortlog", "rev-parse", "describe", "cat-file"}
+
+// gitDenied are known examples, not a complete list, of options that make an
+// otherwise read-only subcommand write a file, run a program or read outside the
+// repo.
+var gitDenied = []string{"git *--output*", "git *--ext-diff*", "git *--textconv*", "git *--no-index*", "git blame *--cont*"}
 
 // runClaude is replaced in tests.
 var runClaude = func(ctx context.Context, dir string, argv []string, stdin string) (string, error) {
@@ -91,7 +104,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
-	out, err := runClaude(ctx, root, argv(exe, id, resume, systemPrompt(exe, root, board)), question)
+	out, err := runClaude(ctx, root, argv(exe, root, id, resume, systemPrompt(exe, root, board)), question)
 	if err != nil {
 		if resume {
 			err = fmt.Errorf("%w (to start a new conversation: drover ask --new, or ctrl+n on the board)", err)
@@ -128,9 +141,9 @@ func forget(root string) error {
 	return nil
 }
 
-func argv(exe, id string, resume bool, prompt string) []string {
+func argv(exe, root, id string, resume bool, prompt string) []string {
 	allow, deny := rules(exe)
-	args := []string{"claude", "-p", "--model", model, "--append-system-prompt", prompt, "--tools", "Bash", "--allowedTools"}
+	args := []string{"claude", "-p", "--model", model, "--append-system-prompt", prompt, "--setting-sources", "", "--settings", settings(root), "--tools", strings.Join(append([]string{"Bash"}, repoTools...), ","), "--allowedTools"}
 	args = append(args, allow...)
 	args = append(args, "--disallowedTools")
 	args = append(args, deny...)
@@ -140,10 +153,31 @@ func argv(exe, id string, resume bool, prompt string) []string {
 	return append(args, "--session-id", id)
 }
 
-// rules lists the Bash commands the assistant may run: the board's own CLI,
-// without the forced removal that discards uncommitted work. Each rule exists
-// quoted and bare, since the model may drop the quotes the prompt asks for.
+// settings returns the --settings JSON.
+func settings(root string) string {
+	data, _ := json.Marshal(map[string]any{
+		"env": map[string]string{"GIT_OPTIONAL_LOCKS": "0"},
+		"sandbox": map[string]any{
+			"filesystem": map[string][]string{
+				"denyWrite":  {root},
+				"allowWrite": {store.Dir(root)},
+			},
+		},
+	})
+	return string(data)
+}
+
+// rules lists what the assistant may do: read the repo, run read-only git
+// commands, and run the board's own CLI without the forced removal that discards
+// uncommitted work.
 func rules(exe string) (allow, deny []string) {
+	for _, sub := range gitReadOnly {
+		allow = append(allow, fmt.Sprintf("Bash(git %s *)", sub), fmt.Sprintf("Bash(git %s)", sub))
+	}
+	for _, pattern := range gitDenied {
+		deny = append(deny, fmt.Sprintf("Bash(%s)", pattern))
+	}
+	deny = append(deny, "Edit", "Write", "NotebookEdit")
 	for _, bin := range []string{claude.ShellQuote(exe), exe} {
 		for _, sub := range []string{"list", "move", "add", "edit", "rm"} {
 			allow = append(allow, fmt.Sprintf("Bash(%s %s *)", bin, sub), fmt.Sprintf("Bash(%s %s)", bin, sub))
@@ -160,7 +194,13 @@ func systemPrompt(exe, root string, board *config.Board) string {
 	return "You are the assistant of a drover kanban board: cards move through columns, and entering an agent column starts a Claude Code agent in the card's own git worktree. " +
 		"The board belongs to the git repository " + filepath.Base(root) + " at " + root + baseBranch(board) + ".\n" +
 		"Its columns, in order, are:\n" + describeColumns(board) + "\n" +
-		"You answer questions about the board and change it when asked. You work only through the drover CLI, run as `" + cmd + " <command>`.\n" +
+		"You answer questions about the board and about the repository (how something works, where a behavior lives, what a package does), and change the board when asked. " +
+		"You work on the board only through the drover CLI, run as `" + cmd + " <command>`.\n" +
+		"The repository is read-only to you: read and search it with Read, Grep and Glob, and its history with git, using only these subcommands: " + strings.Join(gitReadOnly, ", ") + ". " +
+		"What you read is the main checkout; each card's own work is in its worktree, whose path `list --json` gives and which you can read when it is inside the repository. " +
+		"You cannot edit files, run other shell commands, or change branches or worktrees, so never try.\n" +
+		"When the user wants a change to the code, say that you can't make it and offer a card for it, with a clear title and a prompt that says what to change and why. " +
+		"Run `add` only after the user agrees to the card.\n" +
 		"`" + cmd + " list --json` shows every card: number, title, column, branch, worktree, issue, pull request and what its agent is doing. " +
 		"Run it before every answer that depends on the cards. The board changes while you talk, so never rely on an earlier run.\n" +
 		"`" + cmd + " move <number> <column>` moves a card; columns are ids or names, and an unknown one is refused with the valid ones. " +
