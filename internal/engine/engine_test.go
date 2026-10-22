@@ -1527,6 +1527,7 @@ func TestTakeOverOnlyStopsRegisteredAgents(t *testing.T) {
 		e.with(func() {
 			task.Sessions = map[string]*store.Session{store.MainSession: {
 				Key: store.MainSession, AgentSessionID: id, Status: store.StatusExternal, Imported: true, PID: pid,
+				Tmux: "external-" + id,
 			}}
 		})
 		return task
