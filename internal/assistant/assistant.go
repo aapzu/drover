@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -50,37 +49,26 @@ var (
 	}
 )
 
-var (
-	nonName      = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-	sessionNames sync.Map
-)
+var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
 // SessionName is the tmux session of the project's side panel.
 func SessionName(root string) string {
-	if name, ok := sessionNames.Load(root); ok {
-		return name.(string)
-	}
-	name := nonName.ReplaceAllString(filepath.Base(store.Dir(root)), "-") + "-assistant"
-	sessionNames.Store(root, name)
-	return name
+	return nonName.ReplaceAllString(filepath.Base(store.Dir(root)), "-") + "-assistant"
 }
 
-// SessionID is the saved conversation's id, or "" before there is one.
+// SessionID is the saved conversation's id, or "" before there is one or when
+// the file can't be read.
 func SessionID(root string) string {
-	id, _ := load(root)
+	id, _ := loadID(root)
 	return id
 }
 
-// Running reports whether the project's side panel has a Claude session, which
+// running reports whether the project's side panel has a Claude session, which
 // lasts until the board quits, hidden or not.
-func Running(root string) bool { return hasSession(SessionName(root)) }
+func running(root string) bool { return hasSession(SessionName(root)) }
 
-// Stop ends the side panel's session, after a Start or Restart in progress, and
-// reports a session that is still there. The conversation can be resumed.
-func Stop(root string) error {
-	if unlock, err := lockFor(root, stopWait); err == nil {
-		defer unlock()
-	}
+// stopAndVerify ends the panel's session and reports one that is still there.
+func stopAndVerify(root string) error {
 	name := SessionName(root)
 	stopSession(name)
 	if hasSession(name) {
@@ -89,9 +77,29 @@ func Stop(root string) error {
 	return nil
 }
 
-var errBusy = errors.New("drover ask is answering a question; open the assistant when it has answered")
+// Stop ends the side panel's session. It waits up to stopWait for a Start or
+// Restart in progress, then stops the session whether or not that finished, and
+// reports a session that is still there. The conversation can be resumed.
+func Stop(root string) error {
+	unlock, err := lockFor(root, stopWait)
+	switch {
+	case err == nil:
+		defer unlock()
+	case !errors.Is(err, errBusy):
+		return err
+	}
+	return stopAndVerify(root)
+}
 
-var errPanelOpen = errors.New("the board's assistant session is running; ask it in the board's panel, or quit the board first")
+var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting it); try again shortly")
+
+var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
+
+// panelOpenErr is errPanelOpen with how to end a session left by a board that
+// didn't quit cleanly.
+func panelOpenErr(root string) error {
+	return fmt.Errorf("%w (to end it: tmux -L %s kill-session -t %s)", errPanelOpen, tmux.Socket, SessionName(root))
+}
 
 // repoTools are the tools the assistant has besides running commands; none of them can change a file.
 var repoTools = []string{"Read", "Grep", "Glob"}
@@ -147,8 +155,8 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 		return "", err
 	}
 	defer unlock()
-	if Running(root) {
-		return "", errPanelOpen
+	if running(root) {
+		return "", panelOpenErr(root)
 	}
 
 	board, _, err := config.Load(root)
@@ -172,7 +180,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	out, err := runClaude(ctx, root, append([]string{"claude", "-p"}, argv(exe, root, id, resume, systemPrompt(exe, root, board))...), question)
 	if err != nil {
 		if resume {
-			err = fmt.Errorf("%w (to start a new conversation: drover ask --new, or from the board's command palette)", err)
+			err = fmt.Errorf("%w (to start a new conversation: drover ask --new, or N on the board)", err)
 		}
 		return "", fmt.Errorf("the assistant failed: %w", err)
 	}
@@ -189,18 +197,20 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 }
 
 // Start opens the side panel's Claude session in tmux unless one is already
-// running. It resumes the project's conversation once that has a transcript, and
-// starts it under the saved id before. exe is the drover binary it runs.
-func Start(root, exe string, board *config.Board) error {
+// running, and reports whether it opened one. It resumes the saved conversation
+// once that has a transcript, and starts it under the saved id before. It fails
+// at once while another process holds the conversation, such as drover ask
+// answering. exe is the drover binary it runs.
+func Start(root, exe string, board *config.Board) (created bool, err error) {
 	unlock, err := lockFor(root, 0)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer unlock()
-	if Running(root) {
-		return nil
+	if running(root) {
+		return false, nil
 	}
-	return start(root, exe, board)
+	return true, start(root, exe, board)
 }
 
 func start(root, exe string, board *config.Board) error {
@@ -208,7 +218,7 @@ func start(root, exe string, board *config.Board) error {
 	if err != nil {
 		return err
 	}
-	if !resume && !validID(id) {
+	if !resume && id == "" {
 		id = uuid.NewString()
 		if err := save(root, id); err != nil {
 			return fmt.Errorf("could not save the conversation: %w", err)
@@ -218,14 +228,17 @@ func start(root, exe string, board *config.Board) error {
 	return newSession(SessionName(root), root, append([]string{"claude"}, args...), nil)
 }
 
-// Restart ends the panel's session, forgets the conversation and starts a new one.
+// Restart ends the panel's session, forgets the conversation and starts a new
+// one. Like Start it fails at once while another process holds the conversation.
 func Restart(root, exe string, board *config.Board) error {
 	unlock, err := lockFor(root, 0)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	stopSession(SessionName(root))
+	if err := stopAndVerify(root); err != nil {
+		return err
+	}
 	if err := forget(root); err != nil {
 		return err
 	}
@@ -240,8 +253,8 @@ func Reset(root string) error {
 		return err
 	}
 	defer unlock()
-	if Running(root) {
-		return errPanelOpen
+	if running(root) {
+		return fmt.Errorf("%w; press N on the board to start over", panelOpenErr(root))
 	}
 	return forget(root)
 }
@@ -369,18 +382,14 @@ func loadID(root string) (string, error) {
 	return "", nil
 }
 
-// load is loadID for callers that treat an unreadable file as no conversation.
-func load(root string) (id string, ok bool) {
-	id, _ = loadID(root)
-	return id, id != ""
-}
-
 func validID(id string) bool {
 	_, err := uuid.Parse(id)
 	return err == nil
 }
 
-// conversation is the saved conversation id.
+// conversation returns the saved conversation id and whether claude can resume
+// it, which needs a transcript. An id with no transcript yet is started under,
+// not resumed. No saved conversation gives "" and false.
 func conversation(root string) (id string, resume bool, err error) {
 	if id, err = loadID(root); err != nil || id == "" {
 		return "", false, err
@@ -398,7 +407,11 @@ func save(root, id string) error {
 	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 const stopWait = 3 * time.Second

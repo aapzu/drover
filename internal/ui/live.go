@@ -10,7 +10,8 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// liveExitKey is the only key live mode keeps; it matches tmux.DetachKey.
+// liveExitKey is the only key live mode and the assistant panel keep, and hides
+// the panel on the board; it matches tmux.DetachKey.
 // Option chords can't be reserved: macOS types them as characters such as å.
 const liveExitKey = "ctrl+q"
 

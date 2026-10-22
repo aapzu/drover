@@ -372,8 +372,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
-		if m.assist.open && m.assistantFits() == 0 {
-			m.hideAssistant()
+		if m.mode == modeAssistant && m.assistantFits() == 0 {
+			m.mode = modeBoard
 			m.setFlash("The terminal is too small for the assistant panel")
 		}
 		return m, nil
@@ -449,13 +449,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyAssistantFrame(msg)
 		return m, nil
 	case assistantTickMsg:
-		if m.mode != modeAssistant || !m.assist.open || msg.gen != m.assist.gen {
+		if m.mode != modeAssistant || !m.assist.open || msg.gen != m.assist.tickGen {
 			return m, nil
 		}
 		if !m.assistantCapturing() {
-			return m, assistantTick(m.assist.gen)
+			return m, assistantTick(m.assist.tickGen)
 		}
-		return m, tea.Batch(assistantTick(m.assist.gen), m.captureAssistantCmd())
+		return m, tea.Batch(assistantTick(m.assist.tickGen), m.captureAssistantCmd())
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()

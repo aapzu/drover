@@ -18,6 +18,11 @@ import (
 
 var realHasTranscript = hasTranscript
 
+func load(root string) (string, bool) {
+	id := SessionID(root)
+	return id, id != ""
+}
+
 func init() {
 	hasTranscript = func(string, string) (bool, error) { return true, nil }
 	hasSession = func(string) bool { return false }
@@ -450,11 +455,11 @@ func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 	p := fakePanel(t)
 	exe := "/bin/drover"
 
-	if err := Start(root, exe, &config.Board{}); err != nil {
-		t.Fatal(err)
+	if created, err := Start(root, exe, &config.Board{}); err != nil || !created {
+		t.Fatalf("first Start = %v, %v", created, err)
 	}
-	if err := Start(root, exe, &config.Board{}); err != nil {
-		t.Fatal(err)
+	if created, err := Start(root, exe, &config.Board{}); err != nil || created {
+		t.Fatalf("Start beside a running session = %v, %v; it should leave it alone", created, err)
 	}
 	if len(p.calls) != 1 || p.dirs[0] != root {
 		t.Fatalf("Start twice should open one session in the repo: %q in %q", p.calls, p.dirs)
@@ -489,7 +494,7 @@ func TestPanelResumesOnceTheConversationHasATranscript(t *testing.T) {
 	if err := save(root, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err != nil {
 		t.Fatal(err)
 	}
 	if flagValue(p.calls[0], "--resume") != id || slices.Contains(p.calls[0], "--session-id") {
@@ -544,7 +549,7 @@ func TestRestartStartsAFreshConversation(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	p := fakePanel(t)
-	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Restart(root, "/bin/drover", &config.Board{}); err != nil {
@@ -611,7 +616,7 @@ func TestPanelKeepsTheSavedIdUntilItHasATranscript(t *testing.T) {
 	if err := save(root, id); err != nil {
 		t.Fatal(err)
 	}
-	if err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err != nil {
 		t.Fatal(err)
 	}
 	if flagValue(p.calls[0], "--session-id") != id || slices.Contains(p.calls[0], "--resume") {
@@ -672,7 +677,7 @@ func TestStartAndRestartDoNotWaitForAQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if err := Start(root, "/bin/drover", &config.Board{}); !errors.Is(err, errBusy) {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); !errors.Is(err, errBusy) {
 		t.Errorf("Start = %v", err)
 	}
 	if err := Restart(root, "/bin/drover", &config.Board{}); !errors.Is(err, errBusy) {
@@ -721,7 +726,7 @@ func TestUnreadableConversationStateIsAnErrorNotANewConversation(t *testing.T) {
 	}
 	p := fakePanel(t)
 	calls := fakeClaude(t, "ok", nil)
-	if err := Start(root, "/bin/drover", &config.Board{}); err == nil || len(p.calls) != 0 {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err == nil || len(p.calls) != 0 {
 		t.Errorf("Start = %v with %d sessions", err, len(p.calls))
 	}
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err == nil || len(*calls) != 0 {
@@ -737,7 +742,7 @@ func TestUnreadableConversationStateIsAnErrorNotANewConversation(t *testing.T) {
 	if err := save(root, "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Start(root, "/bin/drover", &config.Board{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("Start = %v; a transcript that can't be checked shouldn't pass for a missing one", err)
 	}
 }
@@ -760,5 +765,95 @@ func TestSaveLeavesNoPartialFile(t *testing.T) {
 	}
 	if got, _ := load(root); got != id {
 		t.Errorf("load = %q", got)
+	}
+}
+
+func TestRestartKeepsTheConversationWhenTheOldSessionWontDie(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := load(root)
+	stopSession = func(string) {}
+	if err := Restart(root, "/bin/drover", &config.Board{}); err == nil {
+		t.Fatal("Restart succeeded beside a session that is still running")
+	}
+	if got, _ := load(root); got != saved || len(p.calls) != 1 {
+		t.Errorf("saved id %q (was %q), %d sessions; the conversation was forgotten for a restart that didn't happen", got, saved, len(p.calls))
+	}
+}
+
+func TestRefusalsSayHowToEndAnOrphanedSession(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	p.live = true
+	fakeClaude(t, "ok", nil)
+	for name, err := range map[string]error{
+		"Ask":   func() error { _, err := Ask(context.Background(), root, "/bin/drover", "q", false); return err }(),
+		"Reset": Reset(root),
+	} {
+		if !errors.Is(err, errPanelOpen) || !strings.Contains(err.Error(), "kill-session -t "+SessionName(root)) {
+			t.Errorf("%s = %v", name, err)
+		}
+	}
+	if err := Reset(root); !strings.Contains(err.Error(), "press N") {
+		t.Errorf("Reset should say how to start over: %v", err)
+	}
+}
+
+func TestPanelIsLockedDownLikeAsk(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	exe := "/bin/drover"
+	if _, err := Start(root, exe, &config.Board{}); err != nil {
+		t.Fatal(err)
+	}
+	args := p.calls[0]
+	if args[0] != "claude" || flagValue(args, "--model") != "sonnet" || flagValue(args, "--append-system-prompt") == "" {
+		t.Errorf("claude, model or prompt wrong: %q", args[:4])
+	}
+	if i := slices.Index(args, "--setting-sources"); i < 0 || args[i+1] != "" {
+		t.Errorf("settings files must be ignored: %q", args)
+	}
+	var settings struct {
+		Env     map[string]string
+		Sandbox struct {
+			Filesystem struct{ DenyWrite, AllowWrite []string }
+		}
+	}
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Sandbox.Filesystem.DenyWrite; !slices.Equal(got, []string{root}) {
+		t.Errorf("the sandbox must deny writes to the repo: %q", got)
+	}
+	if settings.Env["GIT_OPTIONAL_LOCKS"] != "0" {
+		t.Errorf("git must not lock the repo: %v", settings.Env)
+	}
+	for _, want := range []string{"Edit", "Write", "NotebookEdit", "Bash(git *--output*)", "Bash(" + exe + " rm *-force*)"} {
+		if !slices.Contains(args, want) {
+			t.Errorf("the panel doesn't deny %q", want)
+		}
+	}
+	if tail := args[len(args)-2:]; !slices.Equal(tail, []string{"--permission-mode", "dontAsk"}) {
+		t.Errorf("the panel must end in dontAsk mode: %q", tail)
+	}
+}
+
+func TestStartSurfacesASessionErrorAndKeepsTheSavedId(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	fakePanel(t)
+	newSession = func(string, string, []string, map[string]string) error { return errors.New("tmux broke") }
+	created, err := Start(root, "/bin/drover", &config.Board{})
+	if err == nil || !strings.Contains(err.Error(), "tmux broke") {
+		t.Fatalf("Start = %v, %v", created, err)
+	}
+	if id, ok := load(root); !ok || id == "" {
+		t.Error("the conversation id was lost with the failed start")
 	}
 }

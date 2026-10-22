@@ -510,10 +510,10 @@ like any other. It takes no agent slot and isn't a card.
   (`tmux -L drover ls`), started in the repo. It stops when the board quits,
   and the conversation resumes the next time you open the panel.
 - One conversation per project. `N` (or the palette's "Start a new assistant
-  conversation") starts over. Claude keeps the conversation itself; drover
-  keeps only its id, in `assistant-session` in the project's state directory,
-  so a conversation switched inside Claude with `/clear` or `/resume` isn't
-  tracked.
+  conversation") opens the panel on a new conversation. Claude keeps the
+  conversation itself; drover keeps only its id, in `assistant-session` in the
+  project's state directory, so a conversation switched inside Claude with
+  `/clear` or `/resume` isn't tracked.
 
 What the assistant may do is the same in the panel and in `drover ask`:
 
@@ -548,8 +548,9 @@ drover ask --new "start over: what's in Planning?"
 
 - It refuses while the board's assistant session is running, which is from the
   first time you open the panel until the board quits (hiding the panel doesn't
-  stop it), since two Claudes must not share a conversation. `--new` forgets
-  the conversation.
+  stop it), since two Claudes must not share a conversation. If a board died
+  without quitting, the error names the `tmux -L drover kill-session` command
+  that ends the session. `--new` forgets the conversation.
 - A question of `-` is read from stdin. A question that gets no answer within
   ten minutes fails, and the board may have been partly changed. A saved
   conversation whose transcript is gone starts over by itself. If `claude`

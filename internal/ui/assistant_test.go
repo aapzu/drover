@@ -8,6 +8,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
@@ -16,6 +18,7 @@ import (
 type fakeAssistantPanel struct {
 	starts, restarts int
 	err              error
+	attaches         bool // Start finds another board's session already running
 	screen           string
 	running          bool
 }
@@ -25,7 +28,10 @@ func fakePanel(t *testing.T) *fakeAssistantPanel {
 	f := &fakeAssistantPanel{running: true}
 	origStart, origRestart, origCapture := startAssistant, restartAssistant, captureAssistant
 	t.Cleanup(func() { startAssistant, restartAssistant, captureAssistant = origStart, origRestart, origCapture })
-	startAssistant = func(string, string, *config.Board) error { f.starts++; return f.err }
+	startAssistant = func(string, string, *config.Board) (bool, error) {
+		f.starts++
+		return !f.attaches && f.err == nil, f.err
+	}
 	restartAssistant = func(string, string, *config.Board) error { f.restarts++; return f.err }
 	captureAssistant = func(string, int, int, int) (string, int, bool, error) {
 		if !f.running {
@@ -81,7 +87,7 @@ func open(t *testing.T, m Model) Model {
 	if cmd == nil {
 		t.Fatal("opening the panel started nothing")
 	}
-	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch})
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
 	return m
 }
 
@@ -149,9 +155,10 @@ func TestReopeningAVisiblePanelDoesNotRestartClaude(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	m, _ = update(m, key(askKey))
-	if m.mode != modeAssistant || f.starts > 1 {
-		t.Errorf("mode %v, starts %d", m.mode, f.starts)
+	m, cmd := update(m, key(askKey))
+	runCmds(cmd)
+	if m.mode != modeAssistant || f.starts != 0 || f.restarts != 0 {
+		t.Errorf("mode %v, starts %d, restarts %d; reopening a running panel must not start claude", m.mode, f.starts, f.restarts)
 	}
 }
 
@@ -218,8 +225,8 @@ func TestStartFailureIsFlashedNotHidden(t *testing.T) {
 	f.err = errors.New("tmux broke")
 	m := assistantModel(t)
 	m, _ = update(m, key(askKey))
-	m, _ = update(m, assistantStartedMsg{m.assist.epoch, f.err})
-	if !strings.Contains(m.flash, "tmux broke") || m.assist.alive() || m.assist.starting() {
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, err: f.err})
+	if !strings.Contains(m.flash, "tmux broke") || m.assist.running() || m.assist.starting() {
 		t.Errorf("flash %q, assist %+v", m.flash, m.assist)
 	}
 }
@@ -249,8 +256,12 @@ func TestPanelNeedsRoomForTheBoard(t *testing.T) {
 	m.width = 120
 	m = open(t, m)
 	m, _ = update(m, tea.WindowSizeMsg{Width: 90, Height: 30})
-	if m.assist.open || m.mode != modeBoard {
-		t.Errorf("shrinking the terminal should hide the panel: open %v, mode %v", m.assist.open, m.mode)
+	if m.mode != modeBoard || m.layout().assistantW != 0 || m.layout().boardW != 90 {
+		t.Errorf("shrinking the terminal should take focus and room from the panel: mode %v, layout %+v", m.mode, m.layout())
+	}
+	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if !m.assist.open || m.layout().assistantW == 0 {
+		t.Error("the panel should come back when the terminal grows again")
 	}
 }
 
@@ -286,7 +297,7 @@ func TestNewConversationStartsTheSessionOnce(t *testing.T) {
 			if f.starts != 0 || f.restarts != 1 {
 				t.Errorf("starts %d, restarts %d; want one restart", f.starts, f.restarts)
 			}
-			if !m.assist.starting() || m.assist.alive() {
+			if !m.assist.starting() || m.assist.running() {
 				t.Errorf("assist = %+v", m.assist)
 			}
 		})
@@ -302,8 +313,8 @@ func TestShortTerminalNeverShowsOrCrashesOnThePanel(t *testing.T) {
 		m.View()
 	}
 	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 5})
-	if m.assist.open || m.mode != modeBoard {
-		t.Errorf("a terminal too short for the panel should hide it: open %v, mode %v", m.assist.open, m.mode)
+	if m.mode != modeBoard || m.layout().assistantW != 0 {
+		t.Errorf("a terminal too short for the panel should drop it: mode %v, layout %+v", m.mode, m.layout())
 	}
 	m.height = 5
 	if _, cmd := update(m, key(askKey)); cmd != nil {
@@ -324,7 +335,7 @@ func TestStaleAndStartingFramesAreIgnored(t *testing.T) {
 
 	m.assist.session = sessionStarting
 	m, _ = update(m, m.stamped(assistantFrameMsg{err: errors.New("gone"), at: now.Add(time.Second)}))
-	if m.assist.alive() || m.assist.lastErr != nil {
+	if m.assist.running() || m.assist.lastErr != nil {
 		t.Error("a frame from the old session changed a restarting panel")
 	}
 }
@@ -348,7 +359,7 @@ func TestScrollStaysAnchoredAsOutputArrives(t *testing.T) {
 func TestCaptureLoopRunsOnceAndOnlyWhileFocused(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
-	gen := m.assist.gen
+	gen := m.assist.tickGen
 
 	if _, cmd := update(m, assistantTickMsg{gen: gen - 1}); cmd != nil {
 		t.Error("a tick from an older loop kept running")
@@ -362,8 +373,8 @@ func TestCaptureLoopRunsOnceAndOnlyWhileFocused(t *testing.T) {
 	}
 	l := m.layout()
 	m, _ = update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	if m.assist.gen != gen+1 {
-		t.Errorf("focusing by click should start one new loop: gen %d, was %d", m.assist.gen, gen)
+	if m.assist.tickGen != gen+1 {
+		t.Errorf("focusing by click should start one new loop: gen %d, was %d", m.assist.tickGen, gen)
 	}
 }
 
@@ -483,6 +494,7 @@ func TestMessagesFromAnEarlierStartAreIgnored(t *testing.T) {
 	m := assistantModel(t)
 	m, _ = update(m, key(askKey))
 	first := m.assist.epoch
+	m, _ = update(m, assistantStartedMsg{epoch: first, created: true})
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	m, cmd := update(m, key(newAskKey))
 	if m.assist.epoch == first {
@@ -499,7 +511,215 @@ func TestMessagesFromAnEarlierStartAreIgnored(t *testing.T) {
 		t.Errorf("a frame from the old session was shown: %q", m.assist.txt)
 	}
 	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, err: f.err})
-	if !m.assist.alive() {
+	if !m.assist.running() {
 		t.Error("the current start should finish")
+	}
+}
+
+func TestAttachingToAnotherBoardsSessionLeavesItRunningOnQuit(t *testing.T) {
+	f := fakePanel(t)
+	f.attaches = true
+	var stopped int
+	orig := stopAssistant
+	t.Cleanup(func() { stopAssistant = orig })
+	stopAssistant = func(string) error { stopped++; return nil }
+
+	m := assistantModel(t)
+	m, cmd := update(m, key(askKey))
+	_ = m.StopAssistant()
+	if stopped != 1 {
+		t.Fatalf("stopped %d times; a start in progress must be stopped, or quitting leaves its session behind", stopped)
+	}
+	for _, msg := range runCmds(cmd) {
+		m, _ = update(m, msg)
+	}
+	_ = m.StopAssistant()
+	if stopped != 1 || !m.assist.running() {
+		t.Errorf("stopped %d times, running %v; the board only attached to another board's session", stopped, m.assist.running())
+	}
+}
+
+func TestNewConversationWaitsForAStartInProgress(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m, _ = update(m, key(askKey))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	epoch := m.assist.epoch
+	m, cmd := update(m, key(newAskKey))
+	runCmds(cmd)
+	if m.assist.epoch != epoch || f.restarts != 0 || !strings.Contains(m.flash, "still starting") {
+		t.Errorf("epoch %d (was %d), restarts %d, flash %q; N during a start must not start a second one", m.assist.epoch, epoch, f.restarts, m.flash)
+	}
+}
+
+func TestFailedStartIsShownInThePanelAndWheelDoesNotRevive(t *testing.T) {
+	f := fakePanel(t)
+	f.err = errors.New("tmux broke")
+	m := assistantModel(t)
+	m, _ = update(m, key(askKey))
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, err: f.err})
+	if !strings.Contains(m.View(), "tmux broke") {
+		t.Errorf("the failure only flashed:\n%s", m.View())
+	}
+	l := m.layout()
+	m, cmd := update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if cmd != nil || m.assist.running() {
+		t.Error("scrolling a stopped panel started captures")
+	}
+	m, _ = update(m, m.stamped(assistantFrameMsg{txt: "late", at: time.Now()}))
+	if m.assist.running() || m.assist.txt != "" {
+		t.Error("a frame revived a stopped panel")
+	}
+}
+
+func TestCtrlCAndQInThePanelGoToClaude(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	for _, c := range []struct {
+		key  tea.KeyMsg
+		want string
+	}{
+		{tea.KeyMsg{Type: tea.KeyCtrlC}, "C-c"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}, "q"},
+	} {
+		next, cmd := update(m, c.key)
+		job, ok := sentJob(next)
+		if !ok || (job.key != c.want && job.literal != c.want) || next.mode != modeAssistant {
+			t.Errorf("%v: job %+v, mode %v", c.key, job, next.mode)
+		}
+		for _, msg := range runCmds(cmd) {
+			if _, quit := msg.(tea.QuitMsg); quit {
+				t.Errorf("%v quit the board", c.key)
+			}
+		}
+	}
+}
+
+func TestViewFitsTheTerminalWithThePanelOpen(t *testing.T) {
+	fakePanel(t)
+	for _, width := range []int{100, 101, 133, 200} {
+		for _, height := range []int{8, 14, 30} {
+			for _, hidePreview := range []bool{false, true} {
+				m := assistantModel(t)
+				m.width, m.height = width, height
+				m.prefs.HidePreview = hidePreview
+				m = open(t, m)
+				view := m.View()
+				lines := strings.Split(view, "\n")
+				if len(lines) != height {
+					t.Errorf("%dx%d preview hidden %v: %d lines", width, height, hidePreview, len(lines))
+				}
+				for i, line := range lines {
+					if w := lipgloss.Width(line); w > width {
+						t.Errorf("%dx%d line %d is %d wide", width, height, i, w)
+					}
+				}
+				if body := ansi.Strip(lines[headerHeight]); !strings.HasPrefix(string([]rune(body)[m.layout().boardW:]), "╭") {
+					t.Errorf("%dx%d: the panel doesn't start at column %d: %q", width, height, m.layout().boardW, body)
+				}
+			}
+		}
+	}
+}
+
+func TestPanelSizeLimits(t *testing.T) {
+	fakePanel(t)
+	for _, c := range []struct {
+		width, height int
+		opens         bool
+	}{{100, 30, true}, {99, 30, false}, {120, 8, true}, {120, 7, false}, {300, 30, true}} {
+		m := assistantModel(t)
+		m.width, m.height = c.width, c.height
+		m, _ = update(m, key(askKey))
+		if m.assist.open != c.opens {
+			t.Errorf("%dx%d: open = %v", c.width, c.height, m.assist.open)
+		}
+		if c.opens {
+			l := m.layout()
+			if l.assistantW < minAssistantWidth || l.boardW < minBoardWidth || l.assistantW+l.boardW != c.width {
+				t.Errorf("%dx%d: board %d, panel %d", c.width, c.height, l.boardW, l.assistantW)
+			}
+		}
+	}
+}
+
+func TestHitTestAssistantBoundaries(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	l := m.layout()
+	for _, c := range []struct {
+		name string
+		x, y int
+		want hitKind
+	}{
+		{"right edge", m.width - 1, l.bodyY + 1, hitAssistant},
+		{"header row", l.boardW + 1, l.bodyY - 1, hitNone},
+		{"footer row", l.boardW + 1, l.bodyY + l.bodyH, hitNone},
+		{"beside the preview's top edge", l.boardW + 1, l.previewY, hitAssistant},
+		{"the preview's top edge", l.boardW - 1, l.previewY, hitPreviewEdge},
+	} {
+		if got := l.hitTest(m, c.x, c.y).kind; got != c.want {
+			t.Errorf("%s: hit %v, want %v", c.name, got, c.want)
+		}
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if got := m.layout().hitTest(m, m.width-1, l.bodyY+1).kind; got == hitAssistant {
+		t.Error("a hidden panel still takes clicks")
+	}
+}
+
+func TestPaletteAssistantCommandsEachDoTheirOwnThing(t *testing.T) {
+	run := func(t *testing.T, m Model, name string) (Model, tea.Cmd) {
+		t.Helper()
+		for _, c := range paletteCommands {
+			if c.name == name {
+				next, cmd := m.updateBoard(keyPress(c.key))
+				return next.(Model), cmd
+			}
+		}
+		t.Fatalf("no palette command %q", name)
+		return m, nil
+	}
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+
+	m, _ = run(t, m, "Hide the assistant panel")
+	if m.assist.open {
+		t.Error("hide left the panel open")
+	}
+	m, cmd := run(t, m, "Start a new assistant conversation")
+	runCmds(cmd)
+	if !m.assist.open || f.restarts != 1 {
+		t.Errorf("open %v, restarts %d", m.assist.open, f.restarts)
+	}
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m, cmd = run(t, m, "Open the assistant panel and type into it")
+	runCmds(cmd)
+	if m.mode != modeAssistant || f.restarts != 1 {
+		t.Errorf("mode %v, restarts %d; opening again must not start over", m.mode, f.restarts)
+	}
+}
+
+func TestStartingPanelSwallowsKeysAndSaysSo(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m, _ = update(m, key(askKey))
+	if !strings.Contains(m.View(), "Starting the assistant") {
+		t.Error("the panel doesn't say it is starting")
+	}
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyEnter}, key("x")} {
+		next, cmd := update(m, k)
+		if cmd != nil || next.assist.epoch != m.assist.epoch {
+			t.Errorf("%v started something while starting", k)
+		}
+		if _, ok := sentJob(next); ok {
+			t.Errorf("%v reached a session that isn't up yet", k)
+		}
+	}
+	if f.starts != 0 {
+		t.Errorf("starts = %d before the start command ran", f.starts)
 	}
 }
