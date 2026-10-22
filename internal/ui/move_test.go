@@ -468,3 +468,31 @@ func TestMovePickerRendersCursorAndCurrentColumn(t *testing.T) {
 		t.Errorf("current line = %q, want the (current) tag on Col 0", current)
 	}
 }
+
+func TestMovePickerOpensOnOrphanCardInFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.snap.Tasks[0].ColumnID = "deleted"
+	m.col = 0
+	m.selected["c0"] = m.snap.Tasks[0].ID
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.mode != modeMove || m.moveSel != 0 {
+		t.Errorf("mode = %v, moveSel = %d for an orphan card, want the picker open on column 0", m.mode, m.moveSel)
+	}
+}
+
+func TestMovePickerDigitIgnoresCursorPosition(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updateMove(key("3"))
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c2" {
+		t.Errorf("busy column = %q after moving the cursor and pressing 3, want the move to c2", got)
+	}
+}
