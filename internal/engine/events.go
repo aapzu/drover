@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +104,14 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Relocate = ""
 			t.AddLog("Agent moved into the worktree")
 		}
+		if n := len(s.Pending); ev.Cwd != "" && n > 0 {
+			s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool {
+				return p.Relocate != "" && sameDir(ev.Cwd, p.Relocate)
+			})
+			if len(s.Pending) < n {
+				t.AddLog("Agent is already in the worktree")
+			}
+		}
 		switch ev.Name {
 		case "SessionStart":
 			if ev.Source == "startup" && s.Started && ev.SessionID != s.AgentSessionID {
@@ -144,9 +153,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			if s.Scratch && t.Title != "" {
 				switch {
-				case !typed || !e.hasPlanColumn():
+				case !typed:
 					out = append(out, func() { e.leaveScratchWorking(taskID, false) })
-				case !s.Routing:
+				case s.Routing:
+					s.NextRoute = prompt
+				default:
 					s.Routing = true
 					out = append(out, func() { e.routeScratch(taskID, prompt) })
 				}
@@ -154,11 +165,18 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
+			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
+				out = append(out, func() { e.reopenReview(taskID, visit) })
+			}
 			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
 				e.addPRs(t, urls, true)
 			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
+			if s.Scratch && s.Stay && editsFiles(ev.ToolName) {
+				s.Stay = false
+				out = append(out, func() { e.leaveScratchWorking(taskID, true) })
+			}
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
 			if ev.ToolName == "ExitPlanMode" {
@@ -314,6 +332,53 @@ func (e *Engine) planExit(taskID string, visit int) {
 	})
 }
 
+// reopenReview moves the card the agent works for from the prFlow's opened
+// column to its changesRequested column when the agent gets a prompt while the
+// card is in opened, since it is working again. The move skips the target's
+// enter automations and does nothing unless that column has autoSpawn. It
+// records the PR's head in FixFrom, so prStep moves the card back to opened
+// once the agent pushes a new head and is idle.
+func (e *Engine) reopenReview(taskID string, visit int) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	flow := e.board.PRFlow
+	if t == nil || t.Visit != visit || flow == nil {
+		e.mu.Unlock()
+		return
+	}
+	card := store.Driver(e.state.Tasks, t)
+	target, ok := e.board.Find(flow.ChangesRequested)
+	moves := ok && e.inColumn(card, flow.Opened) && target.ID != card.ColumnID
+	e.mu.Unlock()
+	if !moves || !isAgentColumn(target) {
+		return
+	}
+	e.logf(card, "Prompted in review, moving to %s", target.Name)
+	if err := e.moveLocked(card.ID, target.ID, MoveOptions{skipEnter: true}); err != nil {
+		e.notify("#%d: moving to %s failed: %v", card.Number, target.Name, err)
+		e.logf(card, "Review reopen move failed: %v", err)
+		// The column changes before the agent starts, so the card may have
+		// moved even though the agent didn't.
+		e.mu.Lock()
+		stayed := card.ColumnID != target.ID
+		e.mu.Unlock()
+		if stayed {
+			return
+		}
+	}
+	e.with(func() {
+		switch pr := card.PR; {
+		case pr == nil || pr.HeadSHA == "":
+			card.AddLog("PR head unknown, the card won't return to " + flow.Opened + " by itself")
+		default:
+			pr.FixFrom = pr.HeadSHA
+		}
+	})
+	e.claimTurn(t, taskID)
+}
+
 // shipTask runs shipOpenedPR under the task lock, if a move is pending.
 func (e *Engine) shipTask(t *store.Task) bool {
 	e.mu.Lock()
@@ -407,8 +472,14 @@ func (e *Engine) prRequested(taskID string, visit int) {
 		e.logf(card, "PR-request move failed: %v", err)
 		return
 	}
-	// A turn that ended during the move had its turn end dropped as
-	// belonging to the previous visit; run it for this one.
+	e.claimTurn(t, taskID)
+}
+
+// claimTurn makes the agent's current turn count for the visit a move just
+// started. A turn that already ended had its turn end dropped as belonging to
+// the previous visit, so it is run for this one; a turn still in progress is
+// marked as part of the new visit. Does nothing unless the main session runs.
+func (e *Engine) claimTurn(t *store.Task, taskID string) {
 	e.with(func() {
 		s := t.Sessions[store.MainSession]
 		if s == nil || s.Status != store.StatusRunning {
@@ -542,6 +613,16 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)
+}
+
+// editsFiles reports whether tool changes files itself, which a session routed
+// to stay in the main checkout must not do.
+func editsFiles(tool string) bool {
+	switch tool {
+	case "Edit", "MultiEdit", "Write", "NotebookEdit":
+		return true
+	}
+	return false
 }
 
 // sameDir reports whether a and b are the same directory, through symlinks

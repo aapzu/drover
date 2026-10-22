@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,11 +139,11 @@ func TestResetStartsANewConversation(t *testing.T) {
 	}
 }
 
-func TestArgvOnlyAllowsTheBoardCLI(t *testing.T) {
+func TestArgvOnlyAllowsTheBoardCLIAndReadOnlyRepoAccess(t *testing.T) {
 	exe := "/Users/me/.local/bin/drover"
-	args := argv(exe, "abc", false, systemPrompt(exe, "/work/repo", &config.Board{}))
+	args := argv(exe, "/work/repo", "abc", false, systemPrompt(exe, "/work/repo", &config.Board{}))
 
-	if flagValue(args, "--tools") != "Bash" {
+	if flagValue(args, "--tools") != "Bash,Read,Grep,Glob" {
 		t.Errorf("tools = %q", flagValue(args, "--tools"))
 	}
 	allowed := args[slices.Index(args, "--allowedTools")+1 : slices.Index(args, "--disallowedTools")]
@@ -156,14 +157,45 @@ func TestArgvOnlyAllowsTheBoardCLI(t *testing.T) {
 		}
 	}
 	for _, rule := range allowed {
-		if !strings.Contains(rule, exe) {
-			t.Errorf("rule %q is not about the drover binary", rule)
+		switch {
+		case strings.Contains(rule, exe):
+		case strings.HasPrefix(rule, "Bash(git "):
+			sub := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(rule, "Bash("), ")"))[1]
+			if !slices.Contains(gitReadOnly, sub) {
+				t.Errorf("rule %q allows git %s", rule, sub)
+			}
+		default:
+			t.Errorf("rule %q is neither the drover binary nor read-only git", rule)
+		}
+	}
+	wantGit := []string{"status", "log", "show", "diff", "blame", "ls-files", "ls-tree", "shortlog", "rev-parse", "describe", "cat-file"}
+	if !slices.Equal(gitReadOnly, wantGit) {
+		t.Errorf("gitReadOnly = %q, want exactly %q", gitReadOnly, wantGit)
+	}
+	for _, sub := range wantGit {
+		for _, want := range []string{"Bash(git " + sub + ")", "Bash(git " + sub + " *)"} {
+			if !slices.Contains(allowed, want) {
+				t.Errorf("allowed tools lack %q", want)
+			}
+		}
+	}
+	for _, rule := range []string{"Read", "Grep", "Glob", "Bash(git *)", "Bash(git:*)"} {
+		if slices.Contains(allowed, rule) {
+			t.Errorf("%q is allowed; the file tools stay in the working directory without a rule", rule)
 		}
 	}
 	denied := args[slices.Index(args, "--disallowedTools")+1 : slices.Index(args, "--session-id")]
-	for _, want := range []string{"Bash(" + exe + " rm *-force*)", "Bash('" + exe + "' rm *-force*)"} {
+	for _, want := range []string{
+		"Bash(" + exe + " rm *-force*)", "Bash('" + exe + "' rm *-force*)",
+		"Edit", "Write", "NotebookEdit",
+	} {
 		if !slices.Contains(denied, want) {
-			t.Errorf("forced removal isn't denied by %q: %q", want, denied)
+			t.Errorf("%q isn't denied: %q", want, denied)
+		}
+	}
+	for _, pattern := range gitDenied {
+		if want := "Bash(" + pattern + ")"; !slices.Contains(denied, want) {
+			t.Errorf("%q isn't denied: %q", want, denied)
 		}
 	}
 	for _, rule := range allowed {
@@ -172,10 +204,38 @@ func TestArgvOnlyAllowsTheBoardCLI(t *testing.T) {
 		}
 	}
 	prompt := flagValue(args, "--append-system-prompt")
-	for _, want := range []string{"'" + exe + "' list --json", "never pass --force", "wait for the user to agree"} {
+	for _, want := range []string{
+		"'" + exe + "' list --json", "never pass --force", "wait for the user to agree",
+		"read-only to you", "offer a card", "Run `add` only after the user agrees",
+	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q", want)
 		}
+	}
+}
+
+func TestArgvIgnoresSettingsFilesAndLocksTheRepoInTheSandbox(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "/state")
+	args := argv("/bin/drover", "/work/repo", "abc", false, "prompt")
+
+	if i := slices.Index(args, "--setting-sources"); i < 0 || args[i+1] != "" {
+		t.Errorf("settings files may add allow rules, but argv = %q", args)
+	}
+	var got struct {
+		Env     map[string]string
+		Sandbox struct {
+			Filesystem struct{ DenyWrite, AllowWrite []string }
+		}
+	}
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &got); err != nil {
+		t.Fatal(err)
+	}
+	fs := got.Sandbox.Filesystem
+	if !slices.Equal(fs.DenyWrite, []string{"/work/repo"}) || !slices.Equal(fs.AllowWrite, []string{store.Dir("/work/repo")}) {
+		t.Errorf("sandbox filesystem = %+v", fs)
+	}
+	if got.Env["GIT_OPTIONAL_LOCKS"] != "0" {
+		t.Errorf("env = %v", got.Env)
 	}
 }
 
@@ -242,6 +302,9 @@ func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
 	}
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(flagValue(got, "--settings"), root) {
+		t.Errorf("the sandbox settings don't lock the repo %q: %q", root, got)
 	}
 	if flagValue(got, "--model") != model || !strings.Contains(flagValue(got, "--append-system-prompt"), "QA lane (id qa)") {
 		t.Errorf("argv = %q", got)
@@ -400,11 +463,14 @@ func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 	if args[0] != "claude" || slices.Contains(args, "-p") {
 		t.Errorf("the panel should run the interactive claude: %q", args)
 	}
-	if flagValue(args, "--permission-mode") != "dontAsk" || flagValue(args, "--tools") != "Bash" {
+	if flagValue(args, "--permission-mode") != "dontAsk" || flagValue(args, "--tools") != "Bash,Read,Grep,Glob" || !slices.Contains(args, "--setting-sources") {
 		t.Errorf("permission mode %q, tools %q", flagValue(args, "--permission-mode"), flagValue(args, "--tools"))
 	}
 	if !slices.Contains(args, "Bash("+exe+" list)") || !slices.Contains(args, "Bash("+exe+" rm *-force*)") {
 		t.Errorf("the panel lacks the drover-only rules: %q", args)
+	}
+	if !slices.Contains(args, "Bash(git log *)") || !slices.Contains(args, "Edit") {
+		t.Errorf("the panel lacks the read-only repo rules: %q", args)
 	}
 	id := flagValue(args, "--session-id")
 	if saved, ok := load(root); !ok || saved != id {

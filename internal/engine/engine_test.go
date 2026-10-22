@@ -20,7 +20,7 @@ import (
 
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *"exactly PLAN or DIRECT"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
+  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""
@@ -39,6 +39,7 @@ emit() { printf '%s\n' "$1" >> "$events"; }
 turn() {
   case "$1" in
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
+    *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
@@ -609,6 +610,42 @@ func TestPRRequestMovesCard(t *testing.T) {
 	if strings.Contains(readFile(log), "/code-review") {
 		t.Error("Self-review's enter group ran on a PR request")
 	}
+}
+
+func TestPromptInReviewMovesCardBack(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review"},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("card left review before it was prompted: %s", got)
+	}
+	if err := e.Send(task.ID, "TWEAK the footer"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the prompt to move the card to Executing", func(t *store.Task) bool {
+		return t.ColumnID == "exec"
+	})
 }
 
 // A manual start in a column without autoSpawn can still be queued, and must
@@ -1835,6 +1872,58 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 			if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume\n"+sid) {
 				t.Errorf("restart should resume the conversation:\n%s", l)
 			}
+		})
+	}
+}
+
+func TestQueuedRelocation(t *testing.T) {
+	for _, there := range []bool{true, false} {
+		t.Run(fmt.Sprintf("already there=%v", there), func(t *testing.T) {
+			root, log := setupProject(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+
+			if _, err := e.NewSession(); err != nil {
+				t.Fatal(err)
+			}
+			ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s != nil && s.Activity == store.ActivityIdle
+			})
+			worktree := t.TempDir()
+			e.with(func() {
+				s := e.find(ready.ID).Sessions[store.MainSession]
+				s.Activity = store.ActivityThinking
+				s.Pending = []store.Pending{{Relocate: worktree, Text: "Call the EnterWorktree tool with path " + worktree}}
+			})
+			cwd := root
+			if there {
+				cwd = worktree
+			}
+			events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer events.Close()
+			events.WriteString(`{"hook_event_name":"Stop","cwd":"` + cwd + `"}` + "\n")
+			waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s.Activity == store.ActivityIdle && len(s.Pending) == 0 || s.Relocate != ""
+			})
+			if there {
+				time.Sleep(time.Second)
+				if strings.Contains(readFile(log), "EnterWorktree") {
+					t.Errorf("the agent was asked to move into a worktree it was already in:\n%s", readFile(log))
+				}
+				return
+			}
+			waitForAll(t, e, "the agent to be asked to move", func([]*store.Task) bool {
+				return strings.Contains(readFile(log), "typed:Call the EnterWorktree")
+			})
 		})
 	}
 }
