@@ -218,7 +218,11 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 		count += fmt.Sprintf(" +%d", hidden)
 	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
-	summary := dim.Render(ansi.Truncate(columnSummary(col), inner-1, "…"))
+	note := ""
+	if m.prefs.ShowSettings {
+		note = columnSummary(col)
+	}
+	summary := dim.Render(ansi.Truncate(note, inner-1, "…"))
 	if dropping {
 		nameStyle = nameStyle.Reverse(true)
 		summary = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(ansi.Truncate("⤓ drop to move here", inner-1, "…"))
@@ -636,6 +640,7 @@ func (m Model) renderHelp() string {
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
+		{"t", "show or hide column settings under column names"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},
