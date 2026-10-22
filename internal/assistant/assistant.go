@@ -73,7 +73,7 @@ func stopAndVerify(root string) error {
 	name := SessionName(root)
 	stopSession(name)
 	if hasSession(name) {
-		return fmt.Errorf("could not stop the assistant's tmux session %s (to end it: %s)", name, killCommand(name))
+		return fmt.Errorf("could not stop the assistant's tmux session %s (to end the session: %s)", name, killCommand(name))
 	}
 	return nil
 }
@@ -97,7 +97,7 @@ var errBusy = errors.New("the assistant is busy (drover ask is answering, or ano
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
 
 func panelOpenErr(root string) error {
-	return fmt.Errorf("%w (to end it: %s)", errPanelOpen, killCommand(SessionName(root)))
+	return fmt.Errorf("%w (to end the session: %s)", errPanelOpen, killCommand(SessionName(root)))
 }
 
 // repoTools are the tools the assistant has besides running commands; none of them can change a file.

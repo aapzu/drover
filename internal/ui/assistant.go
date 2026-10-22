@@ -35,7 +35,7 @@ var (
 	}
 )
 
-var errSessionEnded = errors.New("its tmux session ended: claude exited or failed to start, or another board restarted or closed it")
+var errSessionEnded = errors.New("its tmux session ended: claude exited or failed to start, or the session was restarted or killed from outside this board")
 
 type assistantPane struct {
 	open            bool
