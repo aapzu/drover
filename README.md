@@ -197,7 +197,7 @@ review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The review reported issues that are not fixed yet" }
+      "condition": "The message lists specific review findings that are still unfixed" }
   ]
 }
 ```
