@@ -425,3 +425,46 @@ func TestMovePickerCancelKeysAndOutOfRangeDigitsDoNotMove(t *testing.T) {
 		}
 	}
 }
+
+func TestMovePickerCursorStopsAtTheNinthColumn(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	for range 15 {
+		next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(Model)
+	}
+	if m.moveSel != 8 {
+		t.Fatalf("moveSel = %d after many downs, want it to stop at the ninth column", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c8" {
+		t.Errorf("busy column = %q after enter, want the move to c8", got)
+	}
+}
+
+func TestMovePickerRendersCursorAndCurrentColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 2
+
+	var cursor, current string
+	for _, line := range strings.Split(m.renderMovePicker(), "\n") {
+		if strings.Contains(line, "▸") {
+			cursor = line
+		}
+		if strings.Contains(line, "(current)") {
+			current = line
+		}
+	}
+	if !strings.Contains(cursor, "Col 2") {
+		t.Errorf("cursor line = %q, want it on Col 2", cursor)
+	}
+	if !strings.Contains(current, "Col 0") {
+		t.Errorf("current line = %q, want the (current) tag on Col 0", current)
+	}
+}
