@@ -185,6 +185,9 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 
 // Start fails at once while another process holds the conversation.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
+	if board == nil {
+		return false, errNoBoard
+	}
 	unlock, err := lockFor(root, noWait)
 	if err != nil {
 		return false, err

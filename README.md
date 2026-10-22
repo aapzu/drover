@@ -569,6 +569,6 @@ drover ask --new "start over: what's in Planning?"
   Every worktree of a repo opens the same board.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
   running after you quit; the session the panel opened does not, once that
-  board quits or its terminal closes. Automations only run while the board is open. Events that arrive
-  while it's closed are processed when you reopen it.
+  board quits or its terminal closes. Automations only run while the board is
+  open. Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only.

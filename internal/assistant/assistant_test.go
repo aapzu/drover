@@ -911,9 +911,17 @@ func TestStartAndRestartRefuseANilBoardWithoutStoppingAnything(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	p := fakePanel(t)
-	if _, err := Start(root, "/bin/drover", nil); err == nil {
-		t.Error("Start accepted a nil board")
+	if _, err := Start(root, "/bin/drover", nil); !errors.Is(err, errNoBoard) {
+		t.Errorf("Start with a nil board = %v", err)
 	}
+	p.live = true
+	if _, err := Start(root, "/bin/drover", nil); !errors.Is(err, errNoBoard) {
+		t.Errorf("Start with a nil board beside a live session = %v", err)
+	}
+	if err := Restart(root, "/bin/drover", nil); !errors.Is(err, errNoBoard) {
+		t.Errorf("Restart with a nil board = %v", err)
+	}
+	p.live = false
 	if len(p.calls) != 0 {
 		t.Errorf("launched %d sessions without a board", len(p.calls))
 	}
