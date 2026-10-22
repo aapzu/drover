@@ -203,9 +203,6 @@ func Start(root, exe string, board *config.Board) (created bool, err error) {
 }
 
 func start(root, exe string, board *config.Board) error {
-	if board == nil {
-		return errNoBoard
-	}
 	id, resume, err := conversation(root)
 	if err != nil {
 		return err
