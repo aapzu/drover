@@ -65,11 +65,15 @@ func SessionID(root string) string {
 // lasts until Claude exits or the board that created it quits, hidden or not.
 func running(root string) bool { return hasSession(SessionName(root)) }
 
+func killCommand(name string) string {
+	return fmt.Sprintf("tmux -L %s kill-session -t %s", tmux.Socket, name)
+}
+
 func stopAndVerify(root string) error {
 	name := SessionName(root)
 	stopSession(name)
 	if hasSession(name) {
-		return fmt.Errorf("could not stop the assistant's tmux session %s (tmux -L %s kill-session -t %s)", name, tmux.Socket, name)
+		return fmt.Errorf("could not stop the assistant's tmux session %s (to end it: %s)", name, killCommand(name))
 	}
 	return nil
 }
@@ -93,7 +97,7 @@ var errBusy = errors.New("the assistant is busy (drover ask is answering, or ano
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
 
 func panelOpenErr(root string) error {
-	return fmt.Errorf("%w (to end it: tmux -L %s kill-session -t %s)", errPanelOpen, tmux.Socket, SessionName(root))
+	return fmt.Errorf("%w (to end it: %s)", errPanelOpen, killCommand(SessionName(root)))
 }
 
 // repoTools are the tools the assistant has besides running commands; none of them can change a file.
@@ -215,7 +219,7 @@ func start(root, exe string, board *config.Board) error {
 	if err != nil {
 		return err
 	}
-	if !resume && id == "" {
+	if id == "" {
 		id = uuid.NewString()
 		if err := save(root, id); err != nil {
 			return fmt.Errorf("could not save the conversation: %w", err)
