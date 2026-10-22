@@ -888,3 +888,21 @@ func TestGitOptionsThatWriteOrRunProgramsAreDenied(t *testing.T) {
 		t.Errorf("gitDenied = %q, want %q", gitDenied, want)
 	}
 }
+
+func TestStartFailsWithoutLaunchingWhenTheConversationCannotBeSaved(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	stubTranscript(t, false, nil)
+	tmp := filepath.Join(store.Dir(root), sessionFile+".tmp")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	created, err := Start(root, "/bin/drover", &config.Board{})
+	if err == nil || created || !strings.Contains(err.Error(), "could not save the conversation") {
+		t.Fatalf("Start = %v, %v", created, err)
+	}
+	if len(p.calls) != 0 {
+		t.Errorf("launched %d sessions with an unsaved conversation id", len(p.calls))
+	}
+}

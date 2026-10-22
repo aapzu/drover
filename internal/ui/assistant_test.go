@@ -928,3 +928,55 @@ func TestHiddenPanelIsNotCaptured(t *testing.T) {
 		t.Errorf("a hidden panel was captured %d times", f.captures-before)
 	}
 }
+
+func TestFocusedCaptureLoopSurvivesTheStartingPhase(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m, _ = update(m, key(askKey))
+	gen := m.assist.tickGen
+
+	_, cmd := update(m, assistantTickMsg{gen: gen})
+	if cmd == nil {
+		t.Fatal("the loop ended while the assistant was starting")
+	}
+	runCmds(cmd)
+	if f.captures != 0 {
+		t.Errorf("captured %d times before the session existed", f.captures)
+	}
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+	_, cmd = update(m, assistantTickMsg{gen: gen})
+	runCmds(cmd)
+	if f.captures != 1 {
+		t.Errorf("captures = %d after the start finished, want 1", f.captures)
+	}
+}
+
+func TestCtrlQLeavesAStoppedPanel(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.fail(errSessionEnded)
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.mode != modeBoard || !m.assist.open {
+		t.Errorf("mode %v, open %v after ctrl+q in a stopped panel", m.mode, m.assist.open)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("ctrl+q was sent to a session that isn't running")
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.open {
+		t.Error("a second ctrl+q should hide the panel")
+	}
+}
+
+func TestWheelUpStopsAtTheTopOfTheHistory(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.history = 4
+	l := m.layout()
+	for range 2 {
+		m, _ = update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	}
+	if m.assist.scroll != 4 {
+		t.Errorf("scroll = %d with 4 lines of history", m.assist.scroll)
+	}
+}

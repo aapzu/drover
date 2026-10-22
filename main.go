@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -83,7 +85,17 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	final, err := tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
+	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		if _, ok := <-hup; ok {
+			p.Quit()
+		}
+	}()
+	final, err := p.Run()
+	signal.Stop(hup)
+	close(hup)
 	cancel()
 	<-stopped
 	m, ok := final.(ui.Model)
