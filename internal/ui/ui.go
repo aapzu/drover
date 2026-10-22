@@ -1006,6 +1006,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "v":
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()
+	case "t":
+		m.prefs.ShowSettings = !m.prefs.ShowSettings
+		m.savePrefs()
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

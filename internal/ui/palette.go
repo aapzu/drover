@@ -33,6 +33,7 @@ var paletteCommands = []paletteCommand{
 	{"Archive or restore card", "A"},
 	{"Archive every card in Done", "C"},
 	{"Show or hide archived cards", "v"},
+	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
 	{"Ask the board's assistant about cards, or have it move them", askKey},
 	{"Task details and activity log", "i"},

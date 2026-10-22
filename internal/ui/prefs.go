@@ -35,6 +35,7 @@ type prefs struct {
 	HidePreview   bool           `json:"hidePreview,omitempty"`
 	NoMouse       bool           `json:"noMouse,omitempty"`
 	ShowArchived  bool           `json:"showArchived,omitempty"`
+	ShowSettings  bool           `json:"showSettings,omitempty"`
 }
 
 func prefsPath(root string) string { return filepath.Join(store.Dir(root), "ui.json") }
