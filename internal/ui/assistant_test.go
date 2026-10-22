@@ -897,3 +897,34 @@ func TestVanishedSessionIsReportedWithItsCauseAndNotOwned(t *testing.T) {
 		t.Errorf("a session that ended is still owned: %+v", m.assist)
 	}
 }
+
+func TestTypingSnapsAScrolledPanelBackToTheBottom(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.session, m.assist.history, m.assist.scroll = sessionRunning, 50, 7
+	m, cmd := update(m, key("x"))
+	if m.assist.scroll != 0 {
+		t.Errorf("scroll = %d after typing", m.assist.scroll)
+	}
+	runCmds(cmd)
+	if f.capturedBack != 0 {
+		t.Errorf("captured %d lines of scrollback after typing", f.capturedBack)
+	}
+}
+
+func TestHiddenPanelIsNotCaptured(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.open {
+		t.Fatal("the second ctrl+q should hide the panel")
+	}
+	m.frame, m.snapBusy, m.prefs.HidePreview = 1, true, true
+	_, cmd := update(m, tickMsg(time.Now()))
+	before := f.captures
+	runCmds(cmd)
+	if f.captures != before {
+		t.Errorf("a hidden panel was captured %d times", f.captures-before)
+	}
+}

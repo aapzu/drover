@@ -787,7 +787,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case newAskKey:
 		return m, m.openAssistant(true)
 	case liveExitKey:
-		m.hideAssistant()
+		m.assist.open = false
 	case "left", "h":
 		m.col = max(0, m.col-1)
 	case "right", "l":

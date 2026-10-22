@@ -191,7 +191,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 // running, and reports whether it opened one. It fails at once while another
 // process holds the conversation.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
-	unlock, err := lockFor(root, 0)
+	unlock, err := lockFor(root, noWait)
 	if err != nil {
 		return false, err
 	}
@@ -223,7 +223,7 @@ func start(root, exe string, board *config.Board) error {
 // Restart ends the panel's session, forgets the conversation and starts a new
 // one.
 func Restart(root, exe string, board *config.Board) error {
-	unlock, err := lockFor(root, 0)
+	unlock, err := lockFor(root, noWait)
 	if err != nil {
 		return err
 	}
@@ -404,13 +404,17 @@ func save(root, id string) error {
 	return err
 }
 
-const stopWait = 3 * time.Second
+const (
+	stopWait    = 3 * time.Second
+	noWait      = 0
+	waitForever = -1
+)
 
 // lock blocks until no other process is using the project's conversation.
-func lock(root string) (unlock func(), err error) { return lockFor(root, -1) }
+func lock(root string) (unlock func(), err error) { return lockFor(root, waitForever) }
 
-// lockFor takes the project's conversation lock, waiting up to wait for it: 0
-// fails at once with errBusy, a negative wait has no limit.
+// lockFor takes the project's conversation lock, waiting up to wait for it:
+// noWait fails at once with errBusy, waitForever has no limit.
 func lockFor(root string, wait time.Duration) (unlock func(), err error) {
 	dir := store.Dir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

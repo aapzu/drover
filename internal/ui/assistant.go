@@ -33,7 +33,7 @@ var (
 	}
 )
 
-var errSessionEnded = errors.New("its tmux session ended, so claude exited or failed to start")
+var errSessionEnded = errors.New("its tmux session ended: claude exited or failed to start, or another board restarted or closed it")
 
 type assistantPane struct {
 	open            bool
@@ -112,7 +112,8 @@ func (m Model) assistantWidth() int {
 func (m Model) boardWidth() int { return m.width - m.assistantWidth() }
 
 // openAssistant shows the panel, focuses it and starts its session unless it is
-// running or starting.
+// running or starting. fresh restarts it on a new conversation, except while it
+// is starting.
 func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	if m.assistantFits() == 0 {
 		m.setFlash("The terminal is too small for the assistant panel")
@@ -139,26 +140,18 @@ func (m *Model) focusAssistant() tea.Cmd {
 	return assistantTick(m.assist.tickGen)
 }
 
-func (m *Model) hideAssistant() {
-	m.assist.open = false
-	if m.mode == modeAssistant {
-		m.mode = modeBoard
-	}
-}
-
 // startAssistantSession starts, or with fresh restarts, the assistant's tmux
 // session.
 func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
+	board := m.snap.Board
+	if board == nil {
+		return m.finishAssistantStart(assistantStartedMsg{epoch: m.assist.epoch, err: errors.New("the board isn't loaded yet")})
+	}
 	m.assist.session = sessionStarting
 	m.assist.clearFrame()
 	m.assist.epoch++
 	epoch := m.assist.epoch
-	root, exe, board := m.eng.Root, m.eng.Exe(), m.snap.Board
-	if board == nil {
-		return func() tea.Msg {
-			return assistantStartedMsg{epoch: epoch, err: errors.New("the board isn't loaded yet")}
-		}
-	}
+	root, exe := m.eng.Root, m.eng.Exe()
 	return func() tea.Msg {
 		if fresh {
 			err := restartAssistant(root, exe, board)
@@ -198,8 +191,9 @@ func (m Model) captureAssistantCmd() tea.Cmd {
 		scrollback = m.assist.scroll + 2*h
 	}
 	return func() tea.Msg {
+		at := time.Now()
 		out, history, mouse, err := captureAssistant(name, w, h, scrollback)
-		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, err: err, at: time.Now()}
+		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, err: err, at: at}
 	}
 }
 
@@ -267,27 +261,31 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderAssistant(width, height int) string {
+	focused := m.mode == modeAssistant
 	var body string
 	switch {
 	case m.assist.starting():
 		body = dim.Render("Starting the assistant…")
 	case !m.assist.running():
 		hint := askKey + " to start it again."
-		if m.mode == modeAssistant {
+		if focused {
 			hint = "Press enter to start it again."
 		}
-		reason := ""
+		what, reason := "The assistant isn't running", ""
+		if errors.Is(m.assist.lastErr, errSessionEnded) {
+			what = "The assistant stopped"
+		}
 		if m.assist.lastErr != nil {
 			reason = ": " + m.assist.lastErr.Error()
 		}
-		body = dim.Render("The assistant stopped" + reason + ".\n" + hint)
+		body = dim.Render(what + reason + ".\n" + hint)
 	default:
 		body = previewWindow(m.assist.txt, height-2, m.assist.scroll)
 	}
 
 	title, hint := " assistant ", "· "+askKey+" to type here "
 	style := panelStyle
-	if m.mode == modeAssistant {
+	if focused {
 		style = style.BorderForeground(accent)
 		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q back to board "
 	}
