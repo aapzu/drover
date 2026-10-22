@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/aapzu/drover/internal/claude"
@@ -43,14 +44,13 @@ func (e *Engine) runEnterGroup(t *store.Task, rows []config.Automation, gc group
 	e.mu.Unlock()
 
 	for _, row := range rows {
-		if !e.shouldRun(t, row, gc.reply) {
-			continue
-		}
 		if row.Type == "move_to_column" {
 			e.logf(t, "Automation %q skipped: move_to_column only runs on turn end", rowName(row))
 			continue
 		}
-		e.execute(t, row, gc)
+		if e.shouldRun(t, row, gc) {
+			e.execute(t, row, gc)
+		}
 	}
 }
 
@@ -88,7 +88,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 	if sessKey == store.MainSession {
 		gc := groupContext{from: col, to: col, trigger: "turn_end", reply: reply}
 		for _, row := range col.Automations.OnTurnEnd {
-			if !e.shouldRun(t, row, reply) {
+			if !e.shouldRun(t, row, gc) {
 				continue
 			}
 			if row.Type != "move_to_column" {
@@ -191,19 +191,29 @@ func moveTarget(board *config.Board, ref string, currentIdx int) (config.Column,
 	return board.Find(ref)
 }
 
-// shouldRun checks the row's condition, if any, against the agent's reply.
-func (e *Engine) shouldRun(t *store.Task, row config.Automation, reply string) bool {
-	e.mu.Lock()
-	worktree := e.owner(t).WorktreePath
-	e.mu.Unlock()
+// shouldRun checks the row's conditions, if any.
+func (e *Engine) shouldRun(t *store.Task, row config.Automation, gc groupContext) bool {
+	if row.ConditionScript != "" {
+		if err := e.runShellRow(t, row, row.ConditionScript, gc); err != nil {
+			var exit *exec.ExitError
+			if errors.As(err, &exit) && exit.ExitCode() >= 1 && exit.ExitCode() < 126 {
+				e.logf(t, "Automation %q skipped: condition script not met (exit %d)", rowName(row), exit.ExitCode())
+				return false
+			}
+			e.skipErrored(t, row, "condition script", err)
+			return false
+		}
+	}
 	if row.Condition != "" {
-		dir := worktree
+		e.mu.Lock()
+		dir := e.owner(t).WorktreePath
+		e.mu.Unlock()
 		if dir == "" {
 			dir = e.Root
 		}
-		ok, err := claude.EvalCondition(e.stopping, dir, row.Condition, reply)
+		ok, err := claude.EvalCondition(e.stopping, dir, row.Condition, gc.reply)
 		if err != nil {
-			e.logf(t, "Automation %q skipped: %v", rowName(row), err)
+			e.skipErrored(t, row, "condition", err)
 			return false
 		}
 		if !ok {
@@ -212,6 +222,18 @@ func (e *Engine) shouldRun(t *store.Task, row config.Automation, reply string) b
 		}
 	}
 	return true
+}
+
+// skipErrored logs a condition that couldn't be evaluated, unless the engine
+// is stopping and the error is only that.
+func (e *Engine) skipErrored(t *store.Task, row config.Automation, what string, err error) {
+	if e.stopping.Err() != nil {
+		return
+	}
+	e.logf(t, "Automation %q skipped: %s errored: %v", rowName(row), what, err)
+	if row.Type == "move_to_column" {
+		e.notify("#%d needs you: the %s of %s errored, see the card log", t.Number, what, rowName(row))
+	}
 }
 
 func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) {
@@ -223,7 +245,7 @@ func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) 
 		e.mu.Unlock()
 		e.sendMessage(owner, store.MainSession, e.render(t, row.Message, gc, false))
 	case "run_script":
-		err = e.runScript(t, row, gc)
+		err = e.runShellRow(t, row, row.Script, gc)
 	case "notify":
 		title, body := row.Title, row.Body
 		if title == "" {
@@ -329,7 +351,9 @@ func (e *Engine) render(t *store.Task, tpl string, gc groupContext, shell bool) 
 	})
 }
 
-func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext) error {
+// runShellRow runs script with sh -c in the worktree of the card's session, or
+// the project root without one.
+func (e *Engine) runShellRow(t *store.Task, row config.Automation, script string, gc groupContext) error {
 	timeout := time.Duration(max(1, min(row.TimeoutMinutes, 120))) * time.Minute
 	if row.TimeoutMinutes == 0 {
 		timeout = 10 * time.Minute
@@ -339,7 +363,7 @@ func (e *Engine) runScript(t *store.Task, row config.Automation, gc groupContext
 	for k, v := range vars {
 		env = append(env, "DROVER_"+strings.ToUpper(k)+"="+v)
 	}
-	return runShell(e.stopping, vars["worktreePath"], e.render(t, row.Script, gc, true), env, timeout)
+	return runShell(e.stopping, vars["worktreePath"], e.render(t, script, gc, true), env, timeout)
 }
 
 // runShell runs script with sh -c in dir, killing it after timeout. Its error
@@ -350,15 +374,24 @@ func runShell(ctx context.Context, dir, script string, env []string, timeout tim
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), env...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		tail := strings.TrimSpace(string(out))
-		if len(tail) > 300 {
-			tail = "…" + tail[len(tail)-300:]
-		}
-		return fmt.Errorf("%w: %s", err, tail)
+	if err == nil || errors.Is(err, exec.ErrWaitDelay) {
+		return nil
 	}
-	return nil
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("timed out after %s: %w", timeout, err)
+	}
+	tail := strings.TrimSpace(string(out))
+	if len(tail) > 300 {
+		tail = "…" + tail[len(tail)-300:]
+	}
+	if tail != "" {
+		err = fmt.Errorf("%w: %s", err, tail)
+	}
+	return err
 }
 
 // autoName replaces the placeholder title of a new session's card with a
