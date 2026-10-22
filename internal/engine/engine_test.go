@@ -1607,6 +1607,13 @@ func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
 	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
 		return strings.Contains(readFile(log), "--resume\n"+sid)
 	})
+	launches := strings.Split(readFile(log), "---")
+	if !strings.Contains(launches[0], "--model\nhaiku") {
+		t.Errorf("a new session should start on haiku:\n%s", launches[0])
+	}
+	if strings.Contains(launches[1], "haiku") {
+		t.Errorf("leaving To Do should resume on the next column's model:\n%s", launches[1])
+	}
 }
 
 func TestNewSessionMovesWhileAgentWorks(t *testing.T) {
@@ -1765,7 +1772,7 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 			}
 			os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 			  {"id":"todo","name":"To Do","role":"todo"},
-			  {"id":"exec","name":"Executing","autoSpawn":true},
+			  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"haiku"},
 			  {"id":"opus","name":"Opus","autoSpawn":true,"modelOverride":"opus"},
 			  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 			e, err := New(root)

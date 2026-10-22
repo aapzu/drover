@@ -92,15 +92,17 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   of them are archived or in To Do. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
-  checkout, on a card in the first (To Do role) column. Your first message
+  checkout, on a card in the first (To Do role) column. The session runs Haiku
+  unless that column sets a `modelOverride`. Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words
   unless `autoName` is `false`. The card then moves to the first agent column
   (Planning by default), which creates its worktree and branch and resumes the
-  same conversation there; if you're attached, you follow it. On boards with a
-  plan column, a small Claude Haiku check of that message sends tasks that
-  need no plan, such as a small fix, a question or "just do it", to the first
-  agent column that isn't a plan column instead. When it's unsure or fails,
-  the card plans. Move the card yourself to go elsewhere sooner.
+  same conversation there on that column's model, restarting the agent; if
+  you're attached, you follow it. On boards with a plan column, a small Claude
+  Haiku check of that message sends tasks that need no plan, such as a small
+  fix, a question or "just do it", to the first agent column that isn't a plan
+  column instead. When it's unsure or fails, the card plans. Move the card
+  yourself to go elsewhere sooner.
 - **Worktree per task.** Entering an agent column creates
   `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
