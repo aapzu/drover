@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -107,12 +106,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			if err == nil {
 				return
 			}
-			if errors.Is(err, ErrDirty) {
-				e.logf(t, "Automation %q: not moved to %s, the worktree has uncommitted changes", rowName(row), target.Name)
-				e.notify("#%d needs you: uncommitted changes block the move to %s", t.Number, target.Name)
-			} else {
-				e.logf(t, "Automation %q: move to %s failed: %v", rowName(row), target.Name, err)
-			}
+			e.logf(t, "Automation %q: move to %s failed: %v", rowName(row), target.Name, err)
 			e.flushPending(owner, sessKey)
 			return
 		}

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -480,12 +479,7 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 		message = e.render(card, step.message, groupContext{to: step.to}, false)
 	}
 	err := e.moveLocked(card.ID, step.to.ID, MoveOptions{Message: message})
-	switch {
-	case errors.Is(err, ErrDirty):
-		e.logf(card, "Not moved to %s: the worktree has uncommitted changes", step.to.Name)
-		e.notify("#%d needs you: uncommitted changes block the move to %s", card.Number, step.to.Name)
-		return
-	case err != nil:
+	if err != nil {
 		e.logf(card, "Moving to %s failed: %v", step.to.Name, err)
 		e.notify("#%d: moving to %s failed: %v", card.Number, step.to.Name, err)
 		return

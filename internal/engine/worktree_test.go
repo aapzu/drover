@@ -67,7 +67,13 @@ func TestShellOpensInWorktreeAndGoesWithIt(t *testing.T) {
 	if again, _ := e.Shell(task.ID); again != name {
 		t.Errorf("second Shell = %q, want the same session %q", again, name)
 	}
-	if err := e.Move(task.ID, "done", MoveOptions{Force: true}); err != nil {
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !tmux.Has(name) {
+		t.Error("shell did not survive the move to Done")
+	}
+	if err := e.ArchiveTask(task.ID, true, true); err != nil {
 		t.Fatal(err)
 	}
 	if tmux.Has(name) {

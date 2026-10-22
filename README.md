@@ -87,7 +87,10 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   that have sat in Done that long. Archived cards stay in the state file and
   the column header shows how many are hidden (`Done 4 +37`). The built-in
   board uses `7d`; with the setting missing from your `drover.json` nothing is
-  archived automatically. `drover.local.json` doesn't read it.
+  archived automatically. `drover.local.json` doesn't read it. Archiving
+  removes the card's worktree; a worktree shared by several cards goes once all
+  of them are archived or in To Do. `A` asks before deleting uncommitted
+  changes, while `C` and the automatic archive keep such a worktree.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words
@@ -101,8 +104,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 - **Worktree per task.** Entering an agent column creates
   `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
   To Do removes the worktree and resets the conversation. Done suspends the
-  agent and removes the worktree, asking first if there are uncommitted
-  changes. Branches are never deleted.
+  agent and keeps the worktree; archiving the card removes it, asking first if
+  there are uncommitted changes. Branches are never deleted.
 - **Worktree setup.** `copyFiles` lists paths git doesn't track, such as
   `.env`, to copy from the main checkout into each new worktree. They never
   count as uncommitted changes. `initScript` then runs with `sh -c` in the new
@@ -219,7 +222,7 @@ the same color on every card of the group.
   that column's settings and runs its automations with the card's PR. Turn-end
   automations act only on the card the agent is working for.
 - The agent stops once no card in the group is in an agent column. The
-  worktree goes once every card is in Done or To Do, and the conversation
+  worktree goes once every card is archived or in To Do, and the conversation
   resets once every card is back in To Do.
 - Deleting a card removes only that card while others remain.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
@@ -365,8 +368,8 @@ drover rm 4
 
 - Cards are addressed by the number `list` shows (`4`; quote it as `'#4'` if you
   write the `#`). Columns are ids or names. A prompt of `-` is read from stdin.
-- Without `--force`, `move` to Done and `rm` fail when the card's worktree has
-  uncommitted changes. `--force` discards them. The branch is kept.
+- Without `--force`, `rm` fails when the card's worktree has uncommitted
+  changes. `--force` discards them. The branch is kept.
 - `add -c` into an agent column starts the agent, like a move. If that fails the
   card stays in To Do and the command says why.
 - `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The

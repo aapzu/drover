@@ -160,10 +160,7 @@ func (e *Engine) inboxMove(r inbox.Request) (inbox.Result, error) {
 	if err != nil {
 		return res, err
 	}
-	if err := e.Move(id, col.ID, MoveOptions{Force: r.Force}); err != nil {
-		if errors.Is(err, ErrDirty) {
-			return res, fmt.Errorf("#%d's worktree has uncommitted changes; use --force to remove it", r.Number)
-		}
+	if err := e.Move(id, col.ID, MoveOptions{}); err != nil {
 		return res, err
 	}
 	res.Column = col.Name

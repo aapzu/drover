@@ -52,7 +52,7 @@ func TestMoveShowsCardInTargetColumnAtOnce(t *testing.T) {
 func TestMoveResultCarriesWhatTheHandlerNeeds(t *testing.T) {
 	m := testModel(120, 40, 3, 1)
 	eng := fakeFor(m, nil)
-	cmd := moveTo(eng, m.busy, "c0-t0", 1, m.columns()[2], false)
+	cmd := moveTo(eng, m.busy, "c0-t0", 1, m.columns()[2])
 
 	msg := cmd().(actionDoneMsg)
 	if msg.id != "c0-t0" || !msg.at.Equal(m.busy["c0-t0"].at) {
@@ -61,8 +61,8 @@ func TestMoveResultCarriesWhatTheHandlerNeeds(t *testing.T) {
 	if !msg.snap.At.Equal(eng.snap.At) {
 		t.Error("msg should carry the snapshot taken after the move")
 	}
-	if msg.done != "Moved #1 to Col 2" || msg.retryDone != nil {
-		t.Errorf("done = %q retryDone set = %v", msg.done, msg.retryDone != nil)
+	if msg.done != "Moved #1 to Col 2" {
+		t.Errorf("done = %q", msg.done)
 	}
 
 	next, _ := m.Update(msg)
@@ -75,7 +75,7 @@ func TestMoveResultCarriesWhatTheHandlerNeeds(t *testing.T) {
 func TestFailedMoveReturnsCard(t *testing.T) {
 	m := testModel(120, 40, 3, 1)
 	card := m.snap.Tasks[0]
-	cmd := moveTo(fakeFor(m, errors.New("boom")), m.busy, card.ID, card.Number, m.columns()[2], false)
+	cmd := moveTo(fakeFor(m, errors.New("boom")), m.busy, card.ID, card.Number, m.columns()[2])
 
 	next, _ := m.Update(cmd())
 	m = next.(Model)
@@ -91,43 +91,14 @@ func TestFailedMoveReturnsCard(t *testing.T) {
 	}
 }
 
-func TestDirtyMoveAsksThenRetriesWithForce(t *testing.T) {
-	m := testModel(120, 40, 3, 1)
-	card := m.snap.Tasks[0]
-	eng := fakeFor(m, engine.ErrDirty)
-	msg := moveTo(eng, m.busy, card.ID, card.Number, m.columns()[2], false)().(actionDoneMsg)
-	if msg.retryDone == nil || msg.done != "" {
-		t.Fatalf("an ErrDirty move should offer a retry only, got done=%q retry=%v", msg.done, msg.retryDone != nil)
-	}
-
-	next, _ := m.Update(msg)
-	m = next.(Model)
-	if m.mode != modeConfirm {
-		t.Fatalf("mode = %v, want confirm", m.mode)
-	}
-	if len(m.busy) != 0 {
-		t.Errorf("card should wait in its column while confirming, busy=%v", m.busy)
-	}
-
-	eng.err = nil
-	retry := m.confirmAction()
-	if m.busy[card.ID].column != "c2" {
-		t.Errorf("retry should show the card moving again, busy=%v", m.busy)
-	}
-	retry()
-	if got := eng.moves; len(got) != 2 || got[0].Force || !got[1].Force {
-		t.Errorf("moves = %+v, want a plain move then a forced one", got)
-	}
-}
-
 func TestCardRunsOneOpAtATime(t *testing.T) {
 	m := testModel(120, 40, 3, 1)
 	card := m.snap.Tasks[0]
 	eng := fakeFor(m, nil)
-	moveTo(eng, m.busy, card.ID, card.Number, m.columns()[2], false)
+	moveTo(eng, m.busy, card.ID, card.Number, m.columns()[2])
 	first := m.busy[card.ID]
 
-	cmd := moveTo(eng, m.busy, card.ID, card.Number, m.columns()[1], false)
+	cmd := moveTo(eng, m.busy, card.ID, card.Number, m.columns()[1])
 	if m.busy[card.ID] != first {
 		t.Errorf("a second op replaced the first: %v", m.busy[card.ID])
 	}
@@ -228,7 +199,7 @@ func TestOrphanCardMovesOutOfFirstColumn(t *testing.T) {
 		t.Fatalf("orphan should show once in the first column, got %d", count(0))
 	}
 
-	moveTo(fakeFor(m, nil), m.busy, orphan.ID, orphan.Number, m.columns()[2], false)
+	moveTo(fakeFor(m, nil), m.busy, orphan.ID, orphan.Number, m.columns()[2])
 	if count(0) != 0 || count(2) != 1 {
 		t.Errorf("a moving orphan should leave column 0 and show once in column 2, got %d and %d", count(0), count(2))
 	}

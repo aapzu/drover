@@ -33,7 +33,7 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// ErrDirty is returned when a move to Done would delete uncommitted work.
+// ErrDirty is returned when archiving a card would delete uncommitted work.
 var ErrDirty = errors.New("worktree has uncommitted changes")
 
 type Engine struct {
@@ -372,22 +372,37 @@ func (e *Engine) DeleteTask(id string) error {
 			}
 		}
 	})
+	if len(members) > 1 {
+		heir := owner
+		if t == owner {
+			heir = members[1]
+		}
+		return e.releaseIdle(heir)
+	}
 	return nil
 }
 
 // ArchiveTask hides a card in Done from the board, or shows it again.
-func (e *Engine) ArchiveTask(id string, archived bool) error {
-	var err error
+// Archiving removes the worktree once every card sharing it is archived or in
+// To Do; a dirty one is kept and ErrDirty returned unless force is set.
+func (e *Engine) ArchiveTask(id string, archived, force bool) error {
+	t, owner, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	e.mu.Lock()
+	col, _, _ := e.board.Column(t.ColumnID)
+	e.mu.Unlock()
+	if !col.IsDone() {
+		return fmt.Errorf("#%d is not in Done", t.Number)
+	}
+	if archived {
+		if err := e.freeWorktree(owner, t, force); err != nil {
+			return err
+		}
+	}
 	e.with(func() {
-		t := e.find(id)
-		if t == nil {
-			err = errors.New("task not found")
-			return
-		}
-		if col, _, _ := e.board.Column(t.ColumnID); !col.IsDone() {
-			err = fmt.Errorf("#%d is not in Done", t.Number)
-			return
-		}
 		t.Archived = archived
 		if archived {
 			t.AddLog("Archived")
@@ -396,13 +411,14 @@ func (e *Engine) ArchiveTask(id string, archived bool) error {
 			t.AddLog("Restored from the archive")
 		}
 	})
-	return err
+	return nil
 }
 
 // ArchiveColumn archives every card in a Done column and returns how many
-// were.
+// were. Worktrees with uncommitted changes are kept.
 func (e *Engine) ArchiveColumn(colID string) int {
 	n := 0
+	var owners []string
 	e.with(func() {
 		if col, _, _ := e.board.Column(colID); !col.IsDone() {
 			return
@@ -411,21 +427,24 @@ func (e *Engine) ArchiveColumn(colID string) int {
 			if t.ColumnID == colID && !t.Archived {
 				t.Archived = true
 				t.AddLog("Archived")
+				owners = append(owners, e.owner(t).ID)
 				n++
 			}
 		}
 	})
+	e.releaseArchived(owners)
 	return n
 }
 
 // archiveStale archives cards that have sat in Done for archiveDoneAfter and
-// tells you, as they vanish from the board.
-func (e *Engine) archiveStale(now time.Time) {
+// tells you, as they vanish from the board. The returned follow-up removes
+// their worktrees; it is nil when nothing was archived.
+func (e *Engine) archiveStale(now time.Time) func() {
 	after := e.board.ArchiveAfter()
 	if after == 0 {
-		return
+		return nil
 	}
-	n := 0
+	var owners []string
 	for _, t := range e.state.Tasks {
 		if t.Archived {
 			continue
@@ -436,12 +455,14 @@ func (e *Engine) archiveStale(now time.Time) {
 		if now.Sub(t.UpdatedAt) > after {
 			t.Archived = true
 			t.AddLog("Archived after " + e.board.ArchiveDoneAfter + " in Done")
-			n++
+			owners = append(owners, e.owner(t).ID)
 		}
 	}
-	if n > 0 {
-		e.notify("Archived %d cards after %s in Done. v shows them.", n, e.board.ArchiveDoneAfter)
+	if len(owners) == 0 {
+		return nil
 	}
+	e.notify("Archived %d cards after %s in Done. v shows them.", len(owners), e.board.ArchiveDoneAfter)
+	return func() { e.releaseArchived(owners) }
 }
 
 func (e *Engine) WorktreeDirty(id string) bool {
@@ -459,8 +480,6 @@ func (e *Engine) WorktreeDirty(id string) bool {
 type MoveOptions struct {
 	// Message is sent to the agent after the move (move_to_column rows).
 	Message string
-	// Force removes a dirty worktree when moving to Done.
-	Force bool
 	// evict marks a move you made, which may suspend an idle agent to free a
 	// slot; automation moves queue instead.
 	evict bool
@@ -477,8 +496,9 @@ func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
 }
 
 // moveLocked moves one card. The caller holds its group's lock. A card that
-// shares its session with other cards only stops the agent, removes the
-// worktree or resets the conversation once no card in the group needs them.
+// shares its session with other cards only stops the agent or resets the
+// conversation once no card in the group needs them. Only a move to To Do
+// removes the worktree; archiving does the rest.
 func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	t := e.find(id)
@@ -520,13 +540,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		return external
 	}
 	e.mu.Lock()
-	worktree := owner.WorktreePath
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
-	copied := e.board.CopyFiles
 	e.mu.Unlock()
-	if target.IsDone() && ending && !opts.Force && gitx.Dirty(worktree, copied...) {
-		return ErrDirty
-	}
 
 	e.with(func() {
 		t.ColumnID = target.ID
@@ -558,11 +573,11 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.stopSessions(owner, "", store.StatusExited)
 		e.with(func() { owner.Sessions = nil })
 		return e.removeWorktree(owner)
-	case ending:
-		e.stopSessions(owner, "", store.StatusSuspended)
-		return e.removeWorktree(owner)
 	case !isAgentColumn(target):
 		e.stopSessions(owner, "", store.StatusSuspended)
+		if target.IsTodo() {
+			return e.releaseIdle(owner)
+		}
 		return nil
 	case external != nil:
 		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
@@ -985,6 +1000,71 @@ func (e *Engine) removeWorktree(t *store.Task) error {
 		t.AddLog("Worktree removed (branch kept)")
 	})
 	return nil
+}
+
+// freeWorktree removes owner's worktree once every card sharing it is
+// archived or in To Do; pending counts as archived. A dirty worktree is kept
+// unless force is set, and ErrDirty is returned.
+func (e *Engine) freeWorktree(owner, pending *store.Task, force bool) error {
+	e.mu.Lock()
+	idle := true
+	for _, m := range store.Members(e.state.Tasks, owner) {
+		col, _, _ := e.board.Column(m.ColumnID)
+		idle = idle && (m.Archived || m == pending || col.IsTodo())
+	}
+	path, copied := owner.WorktreePath, e.board.CopyFiles
+	e.mu.Unlock()
+	if !idle || path == "" || !e.isRepo || !e.ownsWorktree(path) {
+		return nil
+	}
+	if !force && gitx.Dirty(path, copied...) {
+		return ErrDirty
+	}
+	return e.removeWorktree(owner)
+}
+
+// releaseIdle removes owner's worktree if no card sharing it needs it any
+// more, as freeWorktree decides. One with uncommitted changes is left alone.
+func (e *Engine) releaseIdle(owner *store.Task) error {
+	err := e.freeWorktree(owner, nil, false)
+	if errors.Is(err, ErrDirty) {
+		e.logf(owner, "Worktree kept: it has uncommitted changes")
+		return nil
+	}
+	return err
+}
+
+// releaseArchived frees the worktrees of the owners, by id, whose cards were
+// just archived. Dirty ones are kept, and you are told how many were kept or
+// could not be removed.
+func (e *Engine) releaseArchived(ownerIDs []string) {
+	seen := map[string]bool{}
+	kept, failed := 0, 0
+	for _, id := range ownerIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		owner, _, unlock := e.lockGroup(id)
+		var err error
+		if owner != nil {
+			err = e.freeWorktree(owner, nil, false)
+		}
+		unlock()
+		switch {
+		case errors.Is(err, ErrDirty):
+			kept++
+			e.logf(owner, "Worktree kept: it has uncommitted changes")
+		case err != nil:
+			failed++
+		}
+	}
+	if kept > 0 {
+		e.notify("Kept %d worktrees with uncommitted changes. Restore the card and press A to delete one.", kept)
+	}
+	if failed > 0 {
+		e.notify("%d worktrees of archived cards could not be removed; see the card logs.", failed)
+	}
 }
 
 // stopSessions stops every session except keep and marks it status: the

@@ -231,12 +231,18 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 		t.Errorf("branch = %q", moved.Branch)
 	}
 
-	done := waitFor(t, e, "task to reach Done", func(t *store.Task) bool { return t.ColumnID == "done" && t.WorktreePath == "" })
-	if done.WorktreePath != "" {
+	done := waitFor(t, e, "task to reach Done", func(t *store.Task) bool { return t.ColumnID == "done" })
+	if done.WorktreePath != moved.WorktreePath || !exists(moved.WorktreePath) {
 		for _, l := range done.Log {
 			t.Log(l.Text)
 		}
-		t.Errorf("worktree not removed: %s", done.WorktreePath)
+		t.Errorf("worktree not kept in Done: %q", done.WorktreePath)
+	}
+	if err := e.ArchiveTask(task.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.Snapshot().Tasks[0]; got.WorktreePath != "" || !got.Archived {
+		t.Errorf("archiving should remove the worktree: path=%q archived=%v", got.WorktreePath, got.Archived)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".drover", "worktrees", "drover-1")); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still exists")
@@ -454,8 +460,14 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(root, ".drover", "worktrees", "drover-1", "wip.txt"), []byte("x"), 0o644)
-	if err := e.Move(task.ID, "done", MoveOptions{}); err != ErrDirty {
-		t.Fatalf("move to Done with dirty worktree: err = %v, want ErrDirty", err)
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ArchiveTask(task.ID, true, false); err != ErrDirty {
+		t.Fatalf("archiving with a dirty worktree: err = %v, want ErrDirty", err)
+	}
+	if got := e.Snapshot().Tasks[0]; got.Archived || got.WorktreePath == "" {
+		t.Fatalf("a refused archive changed the card: archived=%v worktree=%q", got.Archived, got.WorktreePath)
 	}
 	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
 		t.Fatal(err)
@@ -512,7 +524,7 @@ func TestWorktreesDirSetting(t *testing.T) {
 		}
 	}
 
-	if err := e.Move(task.ID, "todo", MoveOptions{Force: true}); err != nil {
+	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(want); !os.IsNotExist(err) {
@@ -546,7 +558,7 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := waitFor(t, e, "plan exit then turn end to reach Done", func(t *store.Task) bool {
-		return t.ColumnID == "done" && t.WorktreePath == ""
+		return t.ColumnID == "done"
 	})
 	var moves []string
 	for _, l := range done.Log {
@@ -587,7 +599,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, e, "PR request to move the card via Self-review to Done", func(t *store.Task) bool {
-		return t.ColumnID == "done" && t.WorktreePath == ""
+		return t.ColumnID == "done"
 	})
 	if strings.Contains(readFile(log), "/code-review") {
 		t.Error("Self-review's enter group ran on a PR request")
@@ -735,7 +747,6 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 		return tasks[0].Sessions[store.MainSession].Status == store.StatusSuspended
 	})
 
-	// The worktree stays until every card is done.
 	worktree := e.Snapshot().Tasks[0].WorktreePath
 	if err := e.Move(owner.ID, "done", MoveOptions{}); err != nil {
 		t.Fatal(err)
@@ -746,8 +757,17 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	if err := e.Move(two.ID, "done", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	if err := e.ArchiveTask(owner.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(worktree); err != nil {
+		t.Fatalf("worktree removed while a card is still unarchived: %v", err)
+	}
+	if err := e.ArchiveTask(two.ID, true, false); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
-		t.Fatalf("worktree kept after every card is done: %v", err)
+		t.Fatalf("worktree kept after every card is archived: %v", err)
 	}
 
 	if err := e.DeleteTask(owner.ID); err != nil {
@@ -2016,7 +2036,7 @@ func TestLeavingDoneClearsArchived(t *testing.T) {
 	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.ArchiveTask(task.ID, true); err != nil {
+	if err := e.ArchiveTask(task.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
@@ -2038,7 +2058,7 @@ func TestArchiveTaskOnlyInDone(t *testing.T) {
 	if err := e.Move(finished.ID, "done", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.ArchiveTask(open.ID, true); err == nil {
+	if err := e.ArchiveTask(open.ID, true, false); err == nil {
 		t.Error("archived a card outside Done")
 	}
 	if n := e.ArchiveColumn("exec"); n != 0 {
@@ -2055,13 +2075,116 @@ func TestArchiveTaskOnlyInDone(t *testing.T) {
 			t.Errorf("#%d archived = %v", task.Number, task.Archived)
 		}
 	}
-	if err := e.ArchiveTask(finished.ID, false); err != nil {
+	if err := e.ArchiveTask(finished.ID, false, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, task := range e.Snapshot().Tasks {
 		if task.ID == finished.ID && task.Archived {
 			t.Error("card still archived after restoring it")
 		}
+	}
+}
+
+// finishedCard runs a card to Done and returns its id and worktree path. With
+// dirty set the worktree holds an uncommitted file.
+func finishedCard(t *testing.T, e *Engine, title string, dirty bool) (id, path string) {
+	t.Helper()
+	task := e.CreateTask(title, "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitNotBusy(t, e)
+	path = cardWithID(e, task.ID).WorktreePath
+	if path == "" {
+		t.Fatalf("%q has no worktree", title)
+	}
+	if dirty {
+		if err := os.WriteFile(filepath.Join(path, "wip.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitNotBusy(t, e)
+	return task.ID, path
+}
+
+func cardWithID(e *Engine, id string) *store.Task {
+	for _, task := range e.Snapshot().Tasks {
+		if task.ID == id {
+			return task
+		}
+	}
+	return nil
+}
+
+func TestArchiveColumnKeepsDirtyWorktrees(t *testing.T) {
+	e, _ := running(t)
+	cleanID, cleanPath := finishedCard(t, e, "Clean", false)
+	dirtyID, dirtyPath := finishedCard(t, e, "Dirty", true)
+	if n := e.ArchiveColumn("done"); n != 2 {
+		t.Fatalf("ArchiveColumn = %d, want 2", n)
+	}
+	if exists(cleanPath) || cardWithID(e, cleanID).WorktreePath != "" {
+		t.Error("the clean card's worktree survived archiving")
+	}
+	if !exists(dirtyPath) {
+		t.Error("archiving removed a worktree with uncommitted changes")
+	}
+	if !hasLog(cardWithID(e, dirtyID), "Worktree kept") {
+		t.Error("keeping the dirty worktree was not logged")
+	}
+}
+
+func TestArchiveStaleRemovesWorktrees(t *testing.T) {
+	e, _ := running(t)
+	cleanID, cleanPath := finishedCard(t, e, "Clean", false)
+	dirtyID, dirtyPath := finishedCard(t, e, "Dirty", true)
+	var release func()
+	e.with(func() {
+		e.board.ArchiveDoneAfter = "7d"
+		for _, task := range e.state.Tasks {
+			task.UpdatedAt = time.Now().Add(-8 * 24 * time.Hour)
+		}
+		release = e.archiveStale(time.Now())
+	})
+	if release == nil {
+		t.Fatal("archiveStale found nothing to archive")
+	}
+	release()
+	if exists(cleanPath) {
+		t.Fatal("the automatic archive left the clean worktree")
+	}
+	if !cardWithID(e, cleanID).Archived || !cardWithID(e, dirtyID).Archived {
+		t.Error("stale cards were not archived")
+	}
+	if !exists(dirtyPath) {
+		t.Error("the automatic archive removed a worktree with uncommitted changes")
+	}
+}
+
+func TestRestoredCardGetsItsWorktreeBack(t *testing.T) {
+	e, _ := running(t)
+	id, path := finishedCard(t, e, "Redo", true)
+	if err := e.ArchiveTask(id, true, true); err != nil {
+		t.Fatal(err)
+	}
+	card := cardWithID(e, id)
+	if !card.Archived || card.WorktreePath != "" || exists(path) {
+		t.Fatalf("forced archive: archived=%v worktree=%q exists=%v", card.Archived, card.WorktreePath, exists(path))
+	}
+	branch := card.Branch
+	if err := e.ArchiveTask(id, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(id, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitNotBusy(t, e)
+	got := cardWithID(e, id)
+	if got.Archived || got.WorktreePath != path || !exists(path) || got.Branch != branch {
+		t.Errorf("restored card: archived=%v worktree=%q (want %q) branch=%q (want %q)", got.Archived, got.WorktreePath, path, got.Branch, branch)
 	}
 }
 
@@ -2088,7 +2211,7 @@ func TestArchiveStaleUsesTimeInDone(t *testing.T) {
 		}
 	}
 
-	if err := e.ArchiveTask("old", false); err != nil {
+	if err := e.ArchiveTask("old", false, false); err != nil {
 		t.Fatal(err)
 	}
 	e.with(func() { e.archiveStale(now) })

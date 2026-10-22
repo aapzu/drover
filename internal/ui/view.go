@@ -174,7 +174,7 @@ func columnSummary(c config.Column) string {
 	case c.IsTodo():
 		return "sessions · main checkout"
 	case c.IsDone():
-		return "finished · worktree removed"
+		return "finished · archive removes worktree"
 	case !c.AutoSpawn:
 		return "agent paused"
 	}
