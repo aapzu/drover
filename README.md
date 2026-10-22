@@ -41,6 +41,7 @@ drover
 
 | Key | Action |
 | --- | --- |
+| `ctrl+k` | search and run a command |
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m` then `1`–`9` | move card to a column |
