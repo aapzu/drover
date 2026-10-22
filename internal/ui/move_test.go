@@ -348,6 +348,9 @@ func TestMovePickerArrowsChooseAndEnterMoves(t *testing.T) {
 		t.Fatalf("moveSel = %d after up, want 1", m.moveSel)
 	}
 	press(tea.KeyEnter)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after enter, want the move started to c1", got)
+	}
 	if m.mode != modeBoard || m.col != 1 {
 		t.Errorf("mode = %v, col = %d after enter, want the board with the card moved to column 1", m.mode, m.col)
 	}
@@ -387,5 +390,22 @@ func TestMovePickerDigitOnCurrentColumnDoesNotMove(t *testing.T) {
 	m = next.(Model)
 	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
 		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
+	}
+}
+
+func TestMovePickerDoesNotMoveCardBeyondTheListedColumns(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.col = 9
+	m.selected["c9"] = "c9-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.moveSel != -1 {
+		t.Fatalf("moveSel = %d for a card in column 10, want no cursor on the listed columns", m.moveSel)
+	}
+	next, cmd := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want enter to close the picker without moving", m.mode, cmd != nil, len(m.busy))
 	}
 }
