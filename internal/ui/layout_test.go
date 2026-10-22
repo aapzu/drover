@@ -493,3 +493,31 @@ func TestFilterModeKeepsCardsNavigable(t *testing.T) {
 		t.Errorf("click: mode %v, selected %s, filter %q, want board on a keeping the filter", m.mode, m.current().ID, m.filter)
 	}
 }
+
+func TestCardLinksItsPR(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	url := "https://github.com/acme/app/pull/21"
+	card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0",
+		PR: &store.PR{Number: 21, URL: url, State: "OPEN", Branch: "a-long-branch-name"}}
+	for _, width := range []int{60, 18} {
+		got := m.renderCard(card, width, false, false)
+		if open := strings.Count(got, ansi.SetHyperlink(url)); open != 1 {
+			t.Errorf("width %d: %d hyperlinks opened:\n%q", width, open, got)
+		}
+		if closed := strings.Count(got, ansi.ResetHyperlink()); closed != 1 {
+			t.Errorf("width %d: %d hyperlinks closed:\n%q", width, closed, got)
+		}
+	}
+	linked := m.renderCard(card, 60, false, false)
+	if !strings.Contains(linked, ansi.SetHyperlink(url)+"PR #21"+ansi.ResetHyperlink()) {
+		t.Errorf("link doesn't wrap exactly the PR number:\n%q", linked)
+	}
+	card.PR.URL = ""
+	plain := m.renderCard(card, 60, false, false)
+	if strings.Contains(plain, "\x1b]8") {
+		t.Errorf("card links a PR without a URL:\n%q", plain)
+	}
+	if ansi.Strip(linked) != ansi.Strip(plain) {
+		t.Errorf("the link changes the visible card:\n%s\nvs\n%s", ansi.Strip(linked), ansi.Strip(plain))
+	}
+}
