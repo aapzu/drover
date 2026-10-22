@@ -441,6 +441,9 @@ func (m Model) isSibling(g *cardGroup, t *store.Task) bool {
 func (m Model) cardRef(t *store.Task) string {
 	if t.PR != nil {
 		ref := fmt.Sprintf("PR #%d", t.PR.Number)
+		if t.PR.URL != "" {
+			ref = ansi.SetHyperlink(t.PR.URL) + ref + ansi.ResetHyperlink()
+		}
 		if t.PR.IsReview() {
 			ref = "review " + ref
 			if t.PR.Author != "" {
