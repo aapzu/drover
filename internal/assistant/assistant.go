@@ -195,7 +195,8 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	return answer, nil
 }
 
-// Start fails at once while another process holds the conversation.
+// Start fails at once while another process holds the conversation. It reports
+// created only when it started the session; one already running is left alone.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
 	if board == nil {
 		return false, errNoBoard
