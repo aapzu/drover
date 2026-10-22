@@ -89,21 +89,18 @@ func run(dir string) error {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
-		if _, ok := <-hup; ok {
-			p.Quit()
-		}
+		<-hup
+		p.Quit()
 	}()
 	final, err := p.Run()
-	signal.Stop(hup)
-	close(hup)
-	cancel()
-	<-stopped
 	m, ok := final.(ui.Model)
 	if ok {
 		if err := m.StopAssistant(); err != nil {
 			fmt.Fprintln(os.Stderr, "drover:", err)
 		}
 	}
+	cancel()
+	<-stopped
 	if ok && m.SuspendAllRequested() {
 		fmt.Println("Suspending all agents…")
 		for _, h := range eng.SuspendAll() {

@@ -374,7 +374,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
-			m.setFlash("The terminal is too small for the assistant panel")
+			m.setFlash(tooSmallForAssistant)
 		}
 		return m, nil
 	case tickMsg:
@@ -599,8 +599,6 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	}
 }
 
-// scrollbackFor is how much history to capture for a view scrolled up by scroll
-// lines; the extra lets the anchored view grow before the next capture.
 func scrollbackFor(scroll, h int) int {
 	if scroll <= 0 {
 		return 0

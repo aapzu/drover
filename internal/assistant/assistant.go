@@ -134,7 +134,6 @@ var runClaude = func(ctx context.Context, dir string, argv []string, stdin strin
 	return string(out), nil
 }
 
-// Ask fails while the board's side-panel session is running.
 func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, error) {
 	unlock, err := lock(root)
 	if err != nil {

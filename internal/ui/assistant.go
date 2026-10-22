@@ -17,6 +17,8 @@ const (
 	newAskKey         = "N"
 	minBoardWidth     = 60
 	minAssistantWidth = 40
+
+	tooSmallForAssistant = "The terminal is too small for the assistant panel"
 )
 
 var (
@@ -113,7 +115,7 @@ func (m Model) boardWidth() int { return m.width - m.assistantWidth() }
 
 func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	if m.assistantFits() == 0 {
-		m.setFlash("The terminal is too small for the assistant panel")
+		m.setFlash(tooSmallForAssistant)
 		return nil
 	}
 	m.assist.open = true
@@ -200,10 +202,8 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 		if errors.Is(msg.err, errSessionEnded) {
 			m.assist.fail(msg.err)
 			m.assist.owns = false
-		} else {
-			if text := "Reading the assistant failed: " + msg.err.Error(); m.flash != text {
-				m.setFlash(text)
-			}
+		} else if text := "Reading the assistant failed: " + msg.err.Error(); m.flash != text {
+			m.setFlash(text)
 		}
 		return
 	}
@@ -253,7 +253,11 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 	if up {
 		lines = 3
 	}
-	m.assist.scroll = clamp(m.assist.scroll+lines, 0, m.assist.history)
+	scroll := clamp(m.assist.scroll+lines, 0, m.assist.history)
+	if scroll == m.assist.scroll {
+		return m, nil
+	}
+	m.assist.scroll = scroll
 	return m, m.captureAssistantCmd()
 }
 
