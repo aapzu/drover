@@ -507,8 +507,9 @@ like any other. It takes no agent slot and isn't a card.
   the board hides it. You can also click the panel to focus it, and use the
   mouse wheel to scroll it.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
-  (`tmux -L drover ls`), started in the repo. It stops when the board that opened it
-  quits, and the conversation resumes the next time you open the panel.
+  (`tmux -L drover ls`), started in the repo. It stops when the board that
+  opened it quits, and the conversation resumes the next time you open the
+  panel.
 - One conversation per project. `N` (or the palette's "Start a new assistant
   conversation") opens the panel on a new conversation. Claude keeps the
   conversation itself; drover keeps only its id, in `assistant-session` in the
@@ -551,9 +552,10 @@ drover ask --new "start over: what's in Planning?"
 
 - It refuses while the board's assistant session is running, which is from the
   first time you open the panel until the board that opened it quits or Claude
-  exits (hiding the panel doesn't stop it), since two Claudes must not share a conversation. If a board died
-  without quitting, the error names the `tmux -L drover kill-session` command
-  that ends the session. `--new` forgets the conversation.
+  exits (hiding the panel doesn't stop it), since two Claudes must not share a
+  conversation. If a board died without quitting, the error names the
+  `tmux -L drover kill-session` command that ends the session. `--new` forgets
+  the conversation.
 - A question of `-` is read from stdin. A question that gets no answer within
   ten minutes fails, and the board may have been partly changed. A saved
   conversation whose transcript is gone starts over by itself. If `claude`
@@ -566,7 +568,7 @@ drover ask --new "start over: what's in Planning?"
   (default `~/.local/state`), outside the repo so they can't be committed.
   Every worktree of a repo opens the same board.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
-  running after you quit; the session the panel opened does not, once that board quits. Automations
-  only run while the board is open. Events that arrive while it's closed are
-  processed when you reopen it.
+  running after you quit; the session the panel opened does not, once that
+  board quits. Automations only run while the board is open. Events that arrive
+  while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only.

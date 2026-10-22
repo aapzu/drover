@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -845,5 +846,54 @@ func TestStartingPanelSwallowsKeysAndSaysSo(t *testing.T) {
 	}
 	if f.starts != 0 {
 		t.Errorf("starts = %d before the start command ran", f.starts)
+	}
+}
+
+func TestWheelOverTheBoardLeavesItAloneWhileTypingToClaude(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	l := m.layout()
+	col, sel := m.col, maps.Clone(m.selected)
+	m, cmd := update(m, tea.MouseMsg{X: 2, Y: l.bodyY + columnHeaderHeight + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if m.mode != modeAssistant || m.col != col || !maps.Equal(m.selected, sel) || cmd != nil {
+		t.Errorf("mode %v, col %d, selected %v", m.mode, m.col, m.selected)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("the wheel over the board reached claude")
+	}
+}
+
+func TestColumnsStayLeftOfThePanelWhenResized(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	for range 80 {
+		m, _ = update(m, key(">"))
+	}
+	l := m.layout()
+	if sum(func() []int { _, w := m.columnWindow(); return w }()) != l.boardW {
+		t.Errorf("columns no longer fit the board's %d columns", l.boardW)
+	}
+	for _, w := range m.prefs.ColumnWidths {
+		if w > l.boardW {
+			t.Errorf("column width %d is wider than the board's %d", w, l.boardW)
+		}
+	}
+}
+
+func TestVanishedSessionIsReportedWithItsCauseAndNotOwned(t *testing.T) {
+	_, _, _, err := captureAssistant("drover-test-no-such-session", 10, 5, 0)
+	if !errors.Is(err, errSessionEnded) {
+		t.Fatalf("capturing a missing session = %v", err)
+	}
+
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	if !m.assist.owns {
+		t.Fatal("the board that created the session doesn't own it")
+	}
+	m, _ = update(m, m.stamped(assistantFrameMsg{err: err, at: time.Now()}))
+	if m.assist.owns || m.assist.running() {
+		t.Errorf("a session that ended is still owned: %+v", m.assist)
 	}
 }

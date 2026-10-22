@@ -385,7 +385,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		select {
 		case err := <-m.keys.errs:
-			m.setFlash("Sending input to the agent failed: " + err.Error())
+			target := "the agent"
+			if m.mode == modeAssistant {
+				target = "the assistant"
+			}
+			m.setFlash("Sending input to " + target + " failed: " + err.Error())
 		default:
 		}
 		cmds := []tea.Cmd{tick()}

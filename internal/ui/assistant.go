@@ -27,7 +27,7 @@ var (
 		tmux.Resize(name, width, height)
 		out, history, mouse, err = tmux.Capture(name, scrollback)
 		if err != nil && !tmux.Has(name) {
-			err = errSessionEnded
+			err = fmt.Errorf("%w (%v)", errSessionEnded, err)
 		}
 		return out, history, mouse, err
 	}
@@ -166,10 +166,10 @@ func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	return func() tea.Msg {
 		if fresh {
 			err := restartAssistant(root, exe, board)
-			return assistantStartedMsg{epoch, err == nil, err}
+			return assistantStartedMsg{epoch: epoch, created: err == nil, err: err}
 		}
 		created, err := startAssistant(root, exe, board)
-		return assistantStartedMsg{epoch, created, err}
+		return assistantStartedMsg{epoch: epoch, created: created, err: err}
 	}
 }
 
@@ -215,6 +215,7 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 	if msg.err != nil {
 		if errors.Is(msg.err, errSessionEnded) {
 			m.assist.fail(msg.err)
+			m.assist.owns = false
 		} else {
 			m.setFlash("Reading the assistant failed: " + msg.err.Error())
 		}

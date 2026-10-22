@@ -141,7 +141,7 @@ var runClaude = func(ctx context.Context, dir string, argv []string, stdin strin
 
 // Ask puts question to the project's assistant, which runs the drover binary at
 // exe to read and change the board, and returns its answer. fresh forgets the
-// conversation first.
+// conversation first. It fails while the board's side-panel session is running.
 //
 // When the answer is fine but the conversation could not be saved, the answer
 // comes back with an error saying the next question starts a new one.
@@ -194,7 +194,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 
 // Start opens the side panel's Claude session in tmux unless one is already
 // running, and reports whether it opened one. It resumes the saved conversation
-// once that has a transcript, and starts it under the saved id before. It fails
+// once that has a transcript; until then it starts a new one under the saved id. It fails
 // at once while another process holds the conversation, such as drover ask
 // answering. exe is the drover binary it runs.
 func Start(root, exe string, board *config.Board) (created bool, err error) {
