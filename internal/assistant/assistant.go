@@ -26,6 +26,8 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
+// The session file holds the id of the conversation every question of a project
+// continues.
 const (
 	model       = "sonnet"
 	askTimeout  = 10 * time.Minute
@@ -86,7 +88,7 @@ func Stop(root string) error {
 
 var errNoBoard = errors.New("there is no board to describe to the assistant")
 
-var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting, restarting or stopping it); try again shortly")
+var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting, restarting or stopping it); try again in a moment, or after drover ask finishes")
 
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
 
@@ -136,6 +138,12 @@ var runClaude = func(ctx context.Context, dir string, argv []string, stdin strin
 	return string(out), nil
 }
 
+// Ask puts question to the project's assistant, which runs the drover binary at
+// exe to read and change the board, and returns its answer. fresh forgets the
+// conversation first. It refuses while the board's assistant session runs.
+//
+// When the answer is fine but the conversation could not be saved, the answer
+// comes back with an error saying the next question starts a new one.
 func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, error) {
 	unlock, err := lock(root)
 	if err != nil {
