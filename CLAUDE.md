@@ -12,4 +12,5 @@ A Go (Bubble Tea) TUI; see `README.md` for what it does. Code is `main.go` plus 
 - Branch names: `<author_first_name>/<ticket>-short-description`, with the first name taken from `git config user.name`, lowercased, e.g. `aapeli/dx-1234-foo-bar`. If there's no ticket, use `no-ticket`.
 - Before saying something works, run `go build ./...` and `go test ./...`.
 - Never use `go run` for drover. Claude's hooks call the binary that started the session, so build and install it with `go build -o ~/.local/bin/drover .`. Replacing that binary affects the hooks of agents already running.
+- After opening a PR, monitor its CI checks (`gh pr checks <pr> --watch`) until they finish. If a check fails, read its logs, fix the cause, push, and monitor again. If it reports no checks, wait briefly and retry; if there are still none, there's nothing to monitor.
 - Match the surrounding code's naming, idioms and comment density. Don't add comments that restate the code.
