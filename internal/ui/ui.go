@@ -824,7 +824,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeMove
 			m.modalTask = t.ID
 			_, idx, _ := m.snap.Board.Column(m.columnOf(t))
-			m.moveSel = clamp(idx, 0, maxMoveColumns-1)
+			m.moveSel = -1
+			if idx < len(m.moveColumns()) {
+				m.moveSel = max(0, idx)
+			}
 		}
 	case "n":
 		m.setFlash("Starting a new session…")
@@ -1115,9 +1118,14 @@ func (m Model) updateSend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 const maxMoveColumns = 9
 
-func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) moveColumns() []config.Column {
 	cols := m.columns()
-	n := min(len(cols), maxMoveColumns)
+	return cols[:min(len(cols), maxMoveColumns)]
+}
+
+func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cols := m.moveColumns()
+	n := len(cols)
 	i := -1
 	switch key := msg.String(); {
 	case key == "up" || key == "k":

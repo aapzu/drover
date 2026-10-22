@@ -594,10 +594,7 @@ func (m Model) renderMovePicker() string {
 	}
 	lines := []string{bold.Render(fmt.Sprintf("Move #%d to…", t.Number)), ""}
 	cur := m.columnOf(t)
-	for i, c := range m.columns() {
-		if i >= maxMoveColumns {
-			break
-		}
+	for i, c := range m.moveColumns() {
 		marker := "  "
 		if i == m.moveSel {
 			marker = "▸ "
