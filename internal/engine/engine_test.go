@@ -901,12 +901,15 @@ const flowBoard = `{
   "columns": [
     {"id": "todo", "name": "To Do", "role": "todo"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "self", "name": "Self-review", "autoSpawn": true,
+      "automations": {"onEnter": [{"type": "send_message", "message": "REVIEW {{prNumber}}"}],
+        "onTurnEnd": [{"type": "move_to_column", "targetColumn": "In review"}]}},
     {"id": "review", "name": "In review"},
     {"id": "verify", "name": "Verify"},
     {"id": "done", "name": "Done", "role": "done"}
   ],
-  "prFlow": {"opened": "In review", "changesRequested": "exec", "changesRequestedMessage": "FIX {{prNumber}}",
-    "merged": "verify", "released": "done", "releaseBranch": "main"}
+  "prFlow": {"requested": "Self-review", "opened": "In review", "changesRequested": "exec",
+    "changesRequestedMessage": "FIX {{prNumber}}", "merged": "verify", "released": "done", "releaseBranch": "main"}
 }`
 
 func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
@@ -989,8 +992,11 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	if c := card(e.Snapshot().Tasks); c.ColumnID != "review" {
 		t.Fatalf("the same review sent the card to %s again", c.ColumnID)
 	}
-	if data, _ := os.ReadFile(log); strings.Count(string(data), "typed:FIX 1") != 1 {
-		t.Errorf("review message not delivered exactly once:\n%s", data)
+	data := readFile(log)
+	for _, want := range []string{"typed:FIX 1", "typed:REVIEW 1"} {
+		if strings.Count(data, want) != 1 {
+			t.Errorf("%q not delivered exactly once:\n%s", want, data)
+		}
 	}
 
 	pr(ghFile, "MERGED", "bbb", review, fmt.Sprintf(`{"oid":%q}`, merge))
@@ -1005,6 +1011,70 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 		c := card(tasks)
 		return c.ColumnID == "done" && c.PR.Released
 	})
+}
+
+func TestChangesRequestedFallsBackToOpenedWithoutRequested(t *testing.T) {
+	root, log := setupProject(t)
+	tmp := filepath.Dir(root)
+	board := strings.Replace(flowBoard, `"requested": "Self-review", `, "", 1)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
+	ghFile, pushFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "pushed.json")
+	t.Setenv("FAKE_GH", ghFile)
+	t.Setenv("FAKE_PUSH", pushFile)
+	pr := func(file, state, head, reviews string) {
+		os.WriteFile(file, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":%q,"headRefOid":%q,
+		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, state, head, reviews)), 0o644)
+	}
+	pr(ghFile, "OPEN", "aaa", "")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval, e.ReleaseFetchInterval = 200*time.Millisecond, 200*time.Millisecond
+	runEngine(t, e)
+
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	card := func(tasks []*store.Task) *store.Task {
+		if len(tasks) != 1 {
+			return &store.Task{PR: &store.PR{}}
+		}
+		return tasks[0]
+	}
+	waitForAll(t, e, "the session card waits in review", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "review" && c.PR.Title == "PR one"
+	})
+	idle := func(tasks []*store.Task) bool {
+		s := tasks[0].Sessions[store.MainSession]
+		return s.Activity == store.ActivityIdle && len(s.Pending) == 0
+	}
+
+	review := `{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`
+	pr(pushFile, "OPEN", "bbb", review)
+	pr(ghFile, "OPEN", "aaa", review)
+	waitForAll(t, e, "card sent back for fixes", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "exec" && c.PR.FixFrom == "aaa" && idle(tasks)
+	})
+	if err := e.Send(task.ID, "PUSH"); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "card back in review without a Self-review stop", func(tasks []*store.Task) bool {
+		c := card(tasks)
+		return c.ColumnID == "review" && c.PR.FixFrom == ""
+	})
+	data := readFile(log)
+	if strings.Count(data, "typed:FIX 1") != 1 {
+		t.Errorf("review message not delivered exactly once:\n%s", data)
+	}
+	if strings.Contains(data, "typed:REVIEW") {
+		t.Errorf("fixes went through a Self-review column without one configured:\n%s", data)
+	}
 }
 
 type mergedRig struct {

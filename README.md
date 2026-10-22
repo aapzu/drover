@@ -278,7 +278,12 @@ board uses:
   each further PR's card starts.
 - **changesRequested:** a new review requesting changes moves a card from
   `opened` here and sends the agent `changesRequestedMessage`. Once the agent
-  has pushed a new head and is idle, the card goes back to `opened`.
+  has pushed a new head and is idle, the card goes to `requested` so its
+  automations review the fixes. Turn-end automations must move it on to
+  `opened`, as the Self-review column in drover's `drover.json` does. Without
+  a `requested` column, the card goes straight to `opened`.
+  The row in drover's `drover.json` also needs `gh pr view` to succeed, so it
+  can't move a card before its PR exists.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
 - **released:** once the merge commit reaches `releaseBranch` on origin

@@ -56,6 +56,13 @@
             "type": "send_message",
             "message": "Apply the fixes the review found, then run go test ./...",
             "condition": "The message lists specific review findings that are still unfixed"
+          },
+          {
+            "name": "Back to In review",
+            "type": "move_to_column",
+            "targetColumn": "In review",
+            "conditionScript": "gh pr view >/dev/null 2>&1",
+            "condition": "The message says the review found no issues, or that all of its findings are fixed"
           }
         ]
       }
