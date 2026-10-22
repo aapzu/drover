@@ -349,6 +349,11 @@ func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	if !strings.Contains(launches[1], "--resume") || strings.Contains(launches[1], "--permission-mode") {
 		t.Errorf("restart should resume with Claude's own mode:\n%s", launches[1])
 	}
+	for i, launch := range launches[:2] {
+		if !strings.Contains(launch, "--append-system-prompt\nYou are running as an agent on a drover kanban board.") {
+			t.Errorf("launch %d should carry the board prompt:\n%s", i, launch)
+		}
+	}
 
 	waitFor(t, e, "the restarted agent to settle", func(t *store.Task) bool {
 		return t.Sessions[store.MainSession].Activity == store.ActivityIdle

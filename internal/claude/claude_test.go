@@ -78,6 +78,23 @@ func TestArgv(t *testing.T) {
 	if !slices.Equal(resume, []string{"claude", "--settings", "s.json", "--resume", "id"}) {
 		t.Errorf("resume argv = %v", resume)
 	}
+	system := Launch{SettingsPath: "s.json", SessionID: "id", Resume: true, SystemPrompt: "ctx"}.Argv()
+	if !slices.Equal(system, []string{"claude", "--settings", "s.json", "--resume", "id", "--append-system-prompt", "ctx"}) {
+		t.Errorf("system prompt argv = %v", system)
+	}
+	both := Launch{SettingsPath: "s.json", SessionID: "id", SystemPrompt: "ctx", Prompt: "do it"}.Argv()
+	if !slices.Equal(both, []string{"claude", "--settings", "s.json", "--session-id", "id", "--append-system-prompt", "ctx", "--", "do it"}) {
+		t.Errorf("system prompt should precede the task prompt: %v", both)
+	}
+}
+
+func TestBoardPrompt(t *testing.T) {
+	got := BoardPrompt("/opt/it's/drover")
+	for _, want := range []string{"'/opt/it'\\''s/drover' move $DROVER_TASK_NUMBER <column>", "'/opt/it'\\''s/drover' list"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("BoardPrompt is missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestCreatedPRs(t *testing.T) {

@@ -123,6 +123,12 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   transcript. Cards show how full the agent's context is and an estimate of
   what the conversation has cost at list prices, like `42% · $1.20`, and the
   header shows the board's total.
+- **Agents know the board.** Each agent gets `--append-system-prompt` telling
+  it that it runs on a drover board, that its card number is in its
+  `$DROVER_TASK_NUMBER` environment variable, and how to use `drover move` and
+  `drover list`, so "move this card to In review" works in a conversation.
+  Moves behave as when you make them: a column without an agent suspends it.
+  This is not the `$DROVER_TASKNUMBER` that automation scripts get.
 - **Activity.** A `--settings` file adds Claude Code hooks that append events
   to `sessions/…/events.jsonl` in the state directory. The board reads them
   to show working, idle and needs-you states and to run turn-end automations.
