@@ -186,17 +186,29 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 - **Columns without an agent** run `run_script` and `notify` rows and skip
   `send_message`.
 - **A fresh agent** starts with an `onEnter` group's first `send_message`,
-  if it has no `condition`, instead of the task prompt, so a review column can open with
-  `/code-review`.
+  if it has no `condition` or `conditionScript`, instead of the task prompt, so a
+  review column can open with `/code-review`.
 - **`condition`** on any row asks `claude -p --model haiku` whether it holds
-  for the agent's last reply. The row is skipped unless the answer is yes.
-- **Placeholders** in `message`, `script`, `title` and `body`: `{{title}}`,
-  `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
+  for the agent's last reply. The row is skipped unless the answer is yes, and
+  if the check itself fails a skipped `move_to_column` raises a notice.
+- **`conditionScript`** on any row runs with `sh -c` in the worktree, with the
+  same placeholders, `$DROVER_*` variables and `timeoutMinutes` (default 10) as
+  `run_script`. The row is skipped unless it exits 0. Exits 1 to 125 are logged
+  as not met. Anything else, such as 127 for a missing command, a script that
+  can't start or a timeout, is logged as an error, and a skipped
+  `move_to_column` then also raises a notice. A row with both a
+  `condition` and a `conditionScript` needs both, and the script runs first. It
+  runs before a `move_to_column` moves the card, so there `{{toColumn}}` is the
+  current column, and only the row's `message` sees the target. To move on only
+  when tests pass:
+  `{ "type": "move_to_column", "conditionScript": "go test ./... >/dev/null 2>&1" }`.
+- **Placeholders** in `message`, `script`, `conditionScript`, `title` and
+  `body`: `{{title}}`, `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
   `{{baseBranch}}`, `{{worktreePath}}`, `{{projectPath}}`, `{{projectName}}`,
   `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`, `{{issueKey}}`,
   `{{issueUrl}}`, `{{fromColumn}}`, `{{toColumn}}`, `{{trigger}}` and
-  `{{agentReply}}`. In a `script` they are shell-quoted, and each is also set
-  as an environment variable such as `$DROVER_TASKNUMBER`.
+  `{{agentReply}}`. In a `script` or `conditionScript` they are shell-quoted,
+  and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
 
 This repo's own board reviews and builds on entering Self-review, asks for
 fixes if the review reported issues, and notifies you once a PR is in

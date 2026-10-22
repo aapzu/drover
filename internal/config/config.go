@@ -97,16 +97,20 @@ type Automations struct {
 }
 
 type Automation struct {
-	Name           string `json:"name,omitempty"`
-	Type           string `json:"type"`
-	Message        string `json:"message,omitempty"`
-	TargetColumn   string `json:"targetColumn,omitempty"`
-	Condition      string `json:"condition,omitempty"`
-	Script         string `json:"script,omitempty"`
-	TimeoutMinutes int    `json:"timeoutMinutes,omitempty"`
-	Body           string `json:"body,omitempty"`
-	Title          string `json:"title,omitempty"`
+	Name            string `json:"name,omitempty"`
+	Type            string `json:"type"`
+	Message         string `json:"message,omitempty"`
+	TargetColumn    string `json:"targetColumn,omitempty"`
+	Condition       string `json:"condition,omitempty"`
+	ConditionScript string `json:"conditionScript,omitempty"`
+	Script          string `json:"script,omitempty"`
+	TimeoutMinutes  int    `json:"timeoutMinutes,omitempty"`
+	Body            string `json:"body,omitempty"`
+	Title           string `json:"title,omitempty"`
 }
+
+// Conditional reports whether the row is gated.
+func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
 func (c Column) IsTodo() bool { return c.Role == "todo" }
 func (c Column) IsDone() bool { return c.Role == "done" }

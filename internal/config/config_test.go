@@ -50,6 +50,22 @@ func TestLoadSampleBoard(t *testing.T) {
 	}
 }
 
+func TestAutomationConditional(t *testing.T) {
+	for _, c := range []struct {
+		row  Automation
+		want bool
+	}{
+		{Automation{}, false},
+		{Automation{Condition: "done"}, true},
+		{Automation{ConditionScript: "true"}, true},
+		{Automation{Condition: "done", ConditionScript: "true"}, true},
+	} {
+		if got := c.row.Conditional(); got != c.want {
+			t.Errorf("%+v: Conditional() = %v", c.row, got)
+		}
+	}
+}
+
 func TestLoadMissingUsesDefault(t *testing.T) {
 	board, found, err := Load(t.TempDir())
 	if err != nil || found || len(board.Columns) == 0 {

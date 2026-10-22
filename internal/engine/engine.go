@@ -1241,7 +1241,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
 func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (string, []config.Automation) {
-	if len(enter) > 0 && enter[0].Type == "send_message" && enter[0].Condition == "" {
+	if len(enter) > 0 && enter[0].Type == "send_message" && !enter[0].Conditional() {
 		row := enter[0]
 		e.logf(t, "Automation %q: started agent with message", rowName(row))
 		return e.render(t, row.Message, gc, false), enter[1:]
