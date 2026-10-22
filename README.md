@@ -76,6 +76,81 @@ In live mode (`tab` or a click on the preview) every key goes to the agent,
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. Typing in live mode jumps back to the bottom.
 
+## Columns
+
+A board is a row of columns defined in `drover.json`. Each card sits in one of
+them, and where it sits decides what happens to its agent and worktree. Columns
+live in `drover.json` only; `drover.local.json` can't change them.
+
+Every column is one of four kinds:
+
+| Kind | Set with | Agent | Enter automations | Worktree |
+| --- | --- | --- | --- | --- |
+| **To Do** | `"role": "todo"` | none; a running agent stops and the conversation resets once the whole group is back here | none | removed when the group returns here |
+| **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing |
+| **Plain** | neither | none; a running agent is suspended | `send_message` is skipped, `run_script` and `notify` run | kept |
+| **Done** | `"role": "done"` | suspended | none | kept until the card is archived |
+
+- **To Do** is where new sessions and imported past sessions land. Without a
+  `todo` role the first column is To Do. Its agent defaults to `haiku`
+  through `modelOverride`. `autoSpawn` does nothing on To Do or Done.
+- **Agent** columns do the work. Moving a card in starts its agent, and a
+  card going back to To Do or Done, or to a plain column, suspends it.
+  Turn-end automations run after each of its turns.
+- **Plain** columns are for waiting, such as "In review" or "Verify in
+  develop". Their automations can ping you with `notify` or run a check with
+  `run_script`, for example `go test ./...` as a `conditionScript` on a
+  `move_to_column` row.
+- **Done** cards can be archived; `archiveDoneAfter` does it automatically.
+  See [How it works](#how-it-works).
+
+Each column takes these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Unique. Used in `drover.json` targets such as `prFlow` and `planExitTarget`. |
+| `name` | Shown on the board. Targets and the CLI also accept it, case-insensitively. |
+| `role` | `todo` or `done`. Leave it out for other columns. |
+| `color` | Header color, such as `"#3b82f6"`. |
+| `autoSpawn` | Makes an agent column. |
+| `permissionMode` | Passed as `claude --permission-mode`. Without it, the board's `defaultPermissionMode`, or Claude Code's own default. |
+| `modelOverride` | Passed as `claude --model`. |
+| `effortOverride` | Passed as `claude --effort`. |
+| `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
+| `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |
+
+A model or effort change respawns the agent with `--resume`. A permission
+change switches it in place while it is idle, and respawns it when that fails
+or the new mode is left to Claude Code. A card keeps one conversation across
+every column.
+
+```json
+{
+  "columns": [
+    { "id": "todo", "name": "Sessions", "role": "todo" },
+    { "id": "planning", "name": "Planning", "autoSpawn": true, "permissionMode": "plan", "planExitTarget": "Executing" },
+    { "id": "executing", "name": "Executing", "autoSpawn": true },
+    { "id": "in-review", "name": "In review",
+      "automations": { "onEnter": [ { "name": "Ping", "type": "notify", "body": "PR #{{prNumber}} is in review" } ] } },
+    { "id": "done", "name": "Done", "role": "done" }
+  ]
+}
+```
+
+With no `drover.json`, the board uses this default, with `prFlow` moving a card
+to Self-review when an agent is asked to open a PR, to In review once it is
+open, and to Verify in develop once it merges:
+
+| Column | Kind |
+| --- | --- |
+| Sessions | To Do |
+| Planning | Agent, in `plan` mode; approved plans go to Executing |
+| Executing | Agent |
+| Self-review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
+| In review | Plain |
+| Verify in develop | Plain |
+| Done | Done |
+
 ## How it works
 
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
@@ -120,13 +195,8 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   fast-forwards the worktree to it. When the branch has commits of its own,
   a running agent is asked to merge it instead. `u` refuses while the agent
   is working or the worktree has uncommitted changes.
-- **Column settings.** `autoSpawn`, `permissionMode`, `modelOverride` and
-  `effortOverride` become `claude --permission-mode/--model/--effort`. Columns
-  without `permissionMode` use the board's `defaultPermissionMode`, or Claude
-  Code's own default when that is unset. A model or effort change respawns the
-  agent with `--resume`. A permission change switches it in place while it is
-  idle, and respawns it when that fails or the target leaves the mode to Claude
-  Code. A card keeps one conversation across every column.
+- **Column settings.** Each column's agent settings become Claude Code flags.
+  See [Columns](#columns) for what each one does.
 - **Automations.** Columns run rows when a card enters them or an agent's
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
   once its plan is approved.
