@@ -54,6 +54,28 @@ func TestFirstAgentColumn(t *testing.T) {
 	}
 }
 
+func TestHasPlanColumn(t *testing.T) {
+	plan := config.Column{ID: "plan", AutoSpawn: true, PermissionMode: "plan"}
+	exec := config.Column{ID: "exec", AutoSpawn: true}
+	todo := config.Column{ID: "todo", Role: "todo"}
+	cases := []struct {
+		name  string
+		board *config.Board
+		want  bool
+	}{
+		{"plan before work", &config.Board{Columns: []config.Column{todo, plan, exec}}, true},
+		{"work before plan", &config.Board{Columns: []config.Column{todo, exec, plan}}, false},
+		{"only plan", &config.Board{Columns: []config.Column{todo, plan}}, false},
+		{"no agent column", &config.Board{Columns: []config.Column{todo}}, false},
+	}
+	for _, c := range cases {
+		e := &Engine{board: c.board}
+		if got := e.hasPlanColumn(); got != c.want {
+			t.Errorf("%s: hasPlanColumn = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestRunScriptAutomation(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},

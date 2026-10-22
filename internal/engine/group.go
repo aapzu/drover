@@ -49,6 +49,14 @@ func firstAgentColumn(board *config.Board) (config.Column, bool) {
 	return config.Column{}, false
 }
 
+// hasPlanColumn reports whether a plan column comes before the work column, so
+// a new session has a choice between planning and working. Called with mu held.
+func (e *Engine) hasPlanColumn() bool {
+	first, _ := firstAgentColumn(e.board)
+	work, found := workColumn(e.board)
+	return found && first.ID != work.ID
+}
+
 // lockGroup takes the lock shared by every card of id's group and returns the
 // card, its owner and the unlock function. card is nil if id is unknown.
 func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {

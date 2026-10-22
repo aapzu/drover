@@ -117,7 +117,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			return
 		}
 	}
-	if e.shipOpenedPR(owner) || e.leaveScratch(t, owner, col, board, false) {
+	if e.shipOpenedPR(owner) || e.leaveScratch(t, owner, col, board, false, false) {
 		return
 	}
 	e.flushPending(owner, sessKey)
@@ -125,7 +125,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 
 // leaveScratchWorking moves a named card out of To Do as soon as its agent
 // starts a turn.
-func (e *Engine) leaveScratchWorking(taskID string) {
+func (e *Engine) leaveScratchWorking(taskID string, skipPlan bool) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
 	e.mu.Lock()
@@ -138,12 +138,47 @@ func (e *Engine) leaveScratchWorking(taskID string) {
 	col := e.sessionColumn(owner)
 	board := e.board
 	e.mu.Unlock()
-	e.leaveScratch(t, owner, col, board, true)
+	e.leaveScratch(t, owner, col, board, true, skipPlan)
+}
+
+// routeScratch judges a new session's prompt and moves the card, past the plan
+// columns if it needs no plan. If the judgement fails, the error is logged and
+// the card plans.
+func (e *Engine) routeScratch(taskID, prompt string) {
+	needsPlan, err := claude.NeedsPlan(e.stopping, e.Root, truncatePrompt(prompt))
+	if e.stopping.Err() != nil {
+		return
+	}
+	e.with(func() {
+		t := e.find(taskID)
+		if t == nil {
+			return
+		}
+		if s := t.Sessions[store.MainSession]; s != nil {
+			s.Routing = false
+		}
+		switch {
+		case err != nil:
+			t.AddLog(err.Error() + ", planning")
+		case !needsPlan:
+			t.AddLog("Plan check: no plan needed, skipping planning")
+		}
+	})
+	e.leaveScratchWorking(taskID, !needsPlan)
+}
+
+// truncatePrompt caps prompt at 4000 runes so the Haiku calls stay small.
+func truncatePrompt(prompt string) string {
+	if runes := []rune(prompt); len(runes) > 4000 {
+		return string(runes[:4000])
+	}
+	return prompt
 }
 
 // leaveScratch moves a card whose session still runs in the main checkout into
-// the first agent column.
-func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board, working bool) bool {
+// the first agent column, or the work column when it was routed past planning.
+// It waits while the first prompt is still being judged.
+func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *config.Board, working, skipPlan bool) bool {
 	if !col.IsTodo() {
 		return false
 	}
@@ -152,9 +187,14 @@ func (e *Engine) leaveScratch(t, owner *store.Task, col config.Column, board *co
 	idle := s != nil && s.Activity == store.ActivityIdle && len(s.Pending) == 0
 	// A review waiting for gh to confirm its PR moves the card itself.
 	held := t.PR.IsReview() && t.PRMovePending
-	due := s != nil && t.Title != "" && !held && s.Status == store.StatusRunning && (working || idle)
+	due := s != nil && t.Title != "" && !held && !s.Routing && s.Status == store.StatusRunning && (working || idle)
 	e.mu.Unlock()
 	target, ok := firstAgentColumn(board)
+	if skipPlan {
+		if work, found := workColumn(board); found {
+			target = work
+		}
+	}
 	if !due || !ok {
 		return false
 	}
@@ -364,11 +404,8 @@ func runShell(ctx context.Context, dir, script string, env []string, timeout tim
 // autoName replaces the placeholder title of a new session's card with a
 // short summary of your first message, unless the title changed meanwhile.
 func (e *Engine) autoName(taskID, prompt, placeholder string) {
-	if runes := []rune(prompt); len(runes) > 4000 {
-		prompt = string(runes[:4000])
-	}
 	answer, err := claude.AskHaiku(e.stopping, e.Root,
-		"Write a title of at most six words for this coding task. Reply with the title only.\n\n<task>\n"+prompt+"\n</task>")
+		"Write a title of at most six words for this coding task. Reply with the title only.\n\n<task>\n"+truncatePrompt(prompt)+"\n</task>")
 	title := strings.TrimRight(strings.Trim(claude.FirstLine(answer), "\"'` *"), ".")
 	if err != nil || title == "" {
 		return

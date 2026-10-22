@@ -131,7 +131,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityThinking
 			s.Started = true
 			s.TurnInVisit = true
-			if prompt := strings.TrimSpace(ev.Prompt); t.Title == "" && prompt != "" && !strings.HasPrefix(prompt, "/") {
+			prompt := strings.TrimSpace(ev.Prompt)
+			typed := prompt != "" && !strings.HasPrefix(prompt, "/")
+			if t.Title == "" && typed {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
 				if e.board.AutoName {
 					placeholder := t.Title
@@ -139,7 +141,13 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				}
 			}
 			if s.Scratch && t.Title != "" {
-				out = append(out, func() { e.leaveScratchWorking(taskID) })
+				switch {
+				case !typed || !e.hasPlanColumn():
+					out = append(out, func() { e.leaveScratchWorking(taskID, false) })
+				case !s.Routing:
+					s.Routing = true
+					out = append(out, func() { e.routeScratch(taskID, prompt) })
+				}
 			}
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })

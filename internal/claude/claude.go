@@ -383,6 +383,22 @@ func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, err
 	return strings.HasPrefix(strings.ToUpper(answer), "YES"), nil
 }
 
+// NeedsPlan asks AskHaiku whether task is worth planning before any work
+// starts. Any answer not starting with DIRECT, and any error, counts as yes.
+func NeedsPlan(ctx context.Context, dir, task string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	prompt := "Decide whether this coding task should be planned before work starts.\n" +
+		"Answer DIRECT for a small, specific change, a question, a command to run (commit, rebase, run tests), " +
+		"or when the task says not to plan. Answer PLAN for ambiguous, multi-file or design-heavy work. " +
+		"Reply with exactly PLAN or DIRECT.\n\n<task>\n" + task + "\n</task>"
+	answer, err := AskHaiku(ctx, dir, prompt)
+	if err != nil {
+		return true, fmt.Errorf("plan check failed: %w", err)
+	}
+	return !strings.HasPrefix(strings.ToUpper(answer), "DIRECT"), nil
+}
+
 // Interrupted reports whether the transcript's last conversation entry is the
 // record of you interrupting a turn after the given time, which Claude Code
 // leaves without firing a Stop hook. The time keeps an earlier turn's
