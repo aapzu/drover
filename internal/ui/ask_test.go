@@ -219,3 +219,37 @@ func TestStopAskKillsAQuestionThatIsStillRunning(t *testing.T) {
 		t.Error("StopAsk returned before the question was cancelled")
 	}
 }
+
+func TestPaletteOpensTheAskPane(t *testing.T) {
+	m := askModel(t)
+	m.paletteInput = newPaletteInput()
+	m.paletteInput.Focus()
+
+	next, _ := m.updateBoard(tea.KeyMsg{Type: tea.KeyCtrlK})
+	m = next.(Model)
+	for _, r := range "assistant" {
+		m = typeInPalette(m, string(r))
+	}
+	if matches := m.paletteMatches(); len(matches) != 1 || matches[0].key != askKey {
+		t.Fatalf("palette matches for %q = %+v, want only the ask command", m.paletteInput.Value(), matches)
+	}
+	m = pressInPalette(m, tea.KeyEnter)
+	if m.mode != modeAsk {
+		t.Fatalf("mode = %v after choosing the ask command, want the ask pane", m.mode)
+	}
+
+	// The palette's ctrl+n moves down; here it must start a new conversation, not reach the palette.
+	m.askLog = []askEntry{{question: "q", answer: "a"}}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	if cmd == nil || !next.(Model).askBusy {
+		t.Error("ctrl+n in the ask pane should reset the conversation")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if next.(Model).mode != modeBoard {
+		t.Error("esc should return to the board")
+	}
+	next, _ = next.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if next.(Model).mode != modePalette {
+		t.Error("the palette should open again from the board after using the ask pane")
+	}
+}
