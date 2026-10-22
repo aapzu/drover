@@ -462,3 +462,34 @@ func TestFilterNarrowsColumnsUntilCleared(t *testing.T) {
 		t.Errorf("esc left %s", got)
 	}
 }
+
+func TestFilterModeKeepsCardsNavigable(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	m.filterInput = textinput.New()
+	m.snap.Tasks = []*store.Task{
+		{ID: "a", Number: 1, Title: "Login one", ColumnID: "c0"},
+		{ID: "b", Number: 2, Title: "Login two", ColumnID: "c0"},
+		{ID: "c", Number: 3, Title: "Other", ColumnID: "c0"},
+	}
+	next, _ := m.updateBoard(key("/"))
+	m = next.(Model)
+	next, _ = m.updateFilter(key("login"))
+	m = next.(Model)
+
+	next, _ = m.updateFilter(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.mode != modeFilter || m.current().ID != "b" {
+		t.Fatalf("down: mode %v, selected %s, want filter mode on b", m.mode, m.current().ID)
+	}
+
+	l := m.layout()
+	x, y := l.cols[0].x+3, l.bodyY+columnHeaderHeight+1
+	if h := l.hitTest(m, x, y); h.kind != hitCard || h.task.ID != "a" {
+		t.Fatalf("hit at %d,%d = %+v, want card a", x, y, h)
+	}
+	next, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: x, Y: y})
+	m = next.(Model)
+	if m.mode != modeBoard || m.current().ID != "a" || m.filter != "login" {
+		t.Errorf("click: mode %v, selected %s, filter %q, want board on a keeping the filter", m.mode, m.current().ID, m.filter)
+	}
+}

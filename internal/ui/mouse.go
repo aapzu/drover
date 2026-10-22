@@ -36,7 +36,7 @@ type dragState struct {
 const doubleClick = 400 * time.Millisecond
 
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.mode != modeBoard && m.mode != modeLive {
+	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter {
 		m.drag = dragState{}
 		return m, nil
 	}

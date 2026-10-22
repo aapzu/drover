@@ -1017,10 +1017,12 @@ func (m Model) updateForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// updateFilter narrows the board as you type. Enter keeps the filter, esc
-// clears it.
+// updateFilter narrows the board as you type. Up and down move through the
+// matches, enter keeps the filter, esc clears it.
 func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "up", "down":
+		return m.updateBoard(msg)
 	case "esc":
 		m.filter = ""
 		m.mode = modeBoard
