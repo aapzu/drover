@@ -260,8 +260,12 @@ func Reset(root string) error {
 	return forget(root)
 }
 
+func sessionPath(root string) string {
+	return filepath.Join(store.Dir(root), sessionFile)
+}
+
 func forget(root string) error {
-	if err := os.Remove(filepath.Join(store.Dir(root), sessionFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(sessionPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
@@ -367,7 +371,7 @@ func describeColumns(b *config.Board) string {
 }
 
 func loadID(root string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(store.Dir(root), sessionFile))
+	data, err := os.ReadFile(sessionPath(root))
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
@@ -392,7 +396,7 @@ func conversation(root string) (id string, resume bool, err error) {
 }
 
 func save(root, id string) error {
-	path := filepath.Join(store.Dir(root), sessionFile)
+	path := sessionPath(root)
 	tmp := path + ".tmp"
 	err := os.WriteFile(tmp, []byte(id+"\n"), 0o644)
 	if err == nil {
