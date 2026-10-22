@@ -158,6 +158,9 @@ func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 }
 
 func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
+	if msg.created {
+		m.assist.owns = true
+	}
 	if msg.epoch != m.assist.epoch {
 		return nil
 	}
@@ -167,7 +170,6 @@ func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 		return nil
 	}
 	m.assist.session, m.assist.lastErr = sessionRunning, nil
-	m.assist.owns = m.assist.owns || msg.created
 	return m.captureAssistantCmd()
 }
 
@@ -223,7 +225,8 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case m.assist.starting():
 		return m, nil
 	case msg.Type == tea.KeyEnter:
-		return m, m.startAssistantSession(false)
+		cmd := m.startAssistantSession(false)
+		return m, cmd
 	default:
 		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to return.")
 		return m, nil

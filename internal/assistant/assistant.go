@@ -84,7 +84,7 @@ func Stop(root string) error {
 	return errors.Join(lockErr, stopAndVerify(root))
 }
 
-var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting it); try again shortly")
+var errBusy = errors.New("the assistant is busy (drover ask is answering, or another board is starting, restarting or stopping it); try again shortly")
 
 var errPanelOpen = errors.New("the board's assistant session is running; use the panel on the board, or quit the board first")
 
@@ -355,15 +355,10 @@ func loadID(root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read the saved conversation: %w", err)
 	}
-	if id := strings.TrimSpace(string(data)); validID(id) {
+	if id := strings.TrimSpace(string(data)); uuid.Validate(id) == nil {
 		return id, nil
 	}
 	return "", nil
-}
-
-func validID(id string) bool {
-	_, err := uuid.Parse(id)
-	return err == nil
 }
 
 func conversation(root string) (id string, resume bool, err error) {

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
@@ -541,6 +543,31 @@ func TestAskAndResetRefuseWhileThePanelRuns(t *testing.T) {
 	Stop(root)
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Errorf("Ask after the panel closed: %v", err)
+	}
+}
+
+func TestAskNewKeepsTheConversationWhileThePanelRuns(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	p := fakePanel(t)
+	calls := fakeClaude(t, "ok", nil)
+	id := uuid.NewString()
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := save(root, id); err != nil {
+		t.Fatal(err)
+	}
+	p.live = true
+
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); !errors.Is(err, errPanelOpen) {
+		t.Errorf("Ask --new = %v", err)
+	}
+	if SessionID(root) != id {
+		t.Error("drover ask --new forgot the conversation of a running panel")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("claude ran %d times beside the panel", len(*calls))
 	}
 }
 

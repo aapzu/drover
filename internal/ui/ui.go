@@ -448,7 +448,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
 	case assistantStartedMsg:
-		return m, m.finishAssistantStart(msg)
+		cmd := m.finishAssistantStart(msg)
+		return m, cmd
 	case assistantFrameMsg:
 		m.applyAssistantFrame(msg)
 		return m, nil
@@ -783,9 +784,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case paletteKey:
 		return m, m.openPalette()
 	case askKey:
-		return m, m.openAssistant(false)
+		cmd := m.openAssistant(false)
+		return m, cmd
 	case newAskKey:
-		return m, m.openAssistant(true)
+		cmd := m.openAssistant(true)
+		return m, cmd
 	case liveExitKey:
 		m.assist.open = false
 	case "left", "h":

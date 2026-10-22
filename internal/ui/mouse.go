@@ -94,7 +94,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		case hitAssistant:
 			if m.mode != modeAssistant {
-				return m, m.focusAssistant()
+				cmd := m.focusAssistant()
+				return m, cmd
 			}
 		}
 
