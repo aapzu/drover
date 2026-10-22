@@ -106,6 +106,7 @@ type Session struct {
 	Imported  bool `json:"imported,omitempty"`
 	HandedOff bool `json:"handedOff,omitempty"`
 	Scratch   bool `json:"scratch,omitempty"`
+	Routing   bool `json:"-"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool         `json:"forked,omitempty"`

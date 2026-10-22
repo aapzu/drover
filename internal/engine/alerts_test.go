@@ -131,6 +131,69 @@ func TestAutoNameTitlesNewSessions(t *testing.T) {
 	}
 }
 
+const routingBoard = `{"columns":[
+  {"id":"todo","name":"To Do","role":"todo"},
+  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+// promptScratch starts a session in the main checkout and has its agent emit
+// the hook events in lines once it is idle.
+func promptScratch(t *testing.T, e *Engine, lines ...string) {
+	t.Helper()
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	for _, line := range lines {
+		events.WriteString(line + "\n")
+	}
+}
+
+const typoPrompt = `{"hook_event_name":"UserPromptSubmit","prompt":"fix the typo in the readme"}`
+
+func TestFirstPromptRoutesPastPlanning(t *testing.T) {
+	for _, c := range []struct{ route, want string }{
+		{"DIRECT", "exec"},
+		{"PLAN", "plan"},
+		{"MAYBE", "plan"},
+		{"FAIL", "plan"},
+	} {
+		t.Run(c.route, func(t *testing.T) {
+			t.Setenv("FAKE_ROUTE", c.route)
+			e := startWithBoard(t, routingBoard)
+			promptScratch(t, e, typoPrompt)
+			waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
+			if got := e.Snapshot().Tasks[0].ColumnID; got != c.want {
+				t.Errorf("routed %q to %q, want %q", c.route, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTurnEndWaitsForTheRoutingVerdict(t *testing.T) {
+	t.Setenv("FAKE_ROUTE", "DIRECT")
+	t.Setenv("FAKE_ROUTE_DELAY", "1")
+	e := startWithBoard(t, routingBoard)
+	promptScratch(t, e, typoPrompt, `{"hook_event_name":"Stop"}`)
+	time.Sleep(500 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "todo" {
+		t.Fatalf("card moved to %q before the verdict", got)
+	}
+	waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "exec" {
+		t.Errorf("routed to %q, want exec", got)
+	}
+}
+
 func TestPermissionRequestsAlertOncePerCooldown(t *testing.T) {
 	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"notifications":{"turnDone":false,"needsYou":true,"planReady":true,"cooldownSeconds":60},`))
 	task := startIdleAgent(t, e, "Asks a lot")
