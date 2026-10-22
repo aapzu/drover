@@ -44,7 +44,7 @@ drover
 | `ctrl+k` | search and run a command |
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
-| `m` then `1`–`9` | move card to a column |
+| `m`, then ↑↓ and enter, or `1`–`9` | move card to a column |
 | `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |

@@ -326,3 +326,42 @@ func TestCursorStaysWhenAnotherCardFinishesMoving(t *testing.T) {
 		t.Errorf("col %d current %v, want the cursor to stay on %s", m.col, got, card.ID)
 	}
 }
+
+func TestMovePickerArrowsChooseAndEnterMoves(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	press := func(k tea.KeyType) {
+		next, _ := m.updateMove(tea.KeyMsg{Type: k})
+		m = next.(Model)
+	}
+	press(tea.KeyDown)
+	press(tea.KeyDown)
+	press(tea.KeyDown)
+	if m.mode != modeMove || m.moveSel != 2 {
+		t.Fatalf("mode = %v, moveSel = %d after three downs, want the picker open on the last column", m.mode, m.moveSel)
+	}
+	press(tea.KeyUp)
+	if m.moveSel != 1 {
+		t.Fatalf("moveSel = %d after up, want 1", m.moveSel)
+	}
+	press(tea.KeyEnter)
+	if m.mode != modeBoard || m.col != 1 {
+		t.Errorf("mode = %v, col = %d after enter, want the board with the card moved to column 1", m.mode, m.col)
+	}
+}
+
+func TestMovePickerEnterOnCurrentColumnDoesNotMove(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	next, cmd := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
+	}
+}
