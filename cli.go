@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -13,7 +14,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/inbox"
 	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
@@ -26,11 +29,16 @@ const cliUsage = `Change the board from outside it:
   drover move <number> <column>
   drover edit <number> [--title t] [--prompt p]
   drover rm <number> [--force]
+  drover ask [--new] <question>             ask the board's assistant, which can move cards
 
 Cards are addressed by the number list shows. Columns are ids or names. A
-prompt of - is read from stdin. --force lets rm discard a dirty worktree.
-Changes go through the open board, or are applied the next time it opens.
+prompt of - is read from stdin, as is a question of -. --force lets rm discard
+a dirty worktree. Changes go through the open board, or are applied the next
+time it opens.
 `
+
+// ask is replaced in tests.
+var ask = assistant.Ask
 
 // waitForBoard is how long a command waits for the open board to answer.
 const waitForBoard = 2 * time.Minute
@@ -41,6 +49,7 @@ var cliCommands = map[string]func(root string, args []string) error{
 	"move": cmdMove,
 	"edit": cmdEdit,
 	"rm":   cmdRemove,
+	"ask":  cmdAsk,
 }
 
 // parseArgs parses flags wherever they appear among args and returns the
@@ -143,6 +152,9 @@ type card struct {
 	ColumnID string `json:"columnId"`
 	Issue    string `json:"issue,omitempty"`
 	PR       string `json:"pr,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Worktree string `json:"worktree,omitempty"`
+	Agent    string `json:"agent,omitempty"`
 	order    int
 }
 
@@ -160,27 +172,7 @@ func cmdList(root string, args []string) error {
 	if err != nil {
 		return err
 	}
-	cards := make([]card, 0, len(state.Tasks))
-	for _, t := range state.Tasks {
-		col, idx, ok := board.Column(t.ColumnID)
-		if !ok {
-			col, idx = config.Column{ID: t.ColumnID, Name: t.ColumnID}, len(board.Columns)
-		}
-		c := card{Number: t.Number, Title: t.Title, Prompt: t.Prompt, Column: col.Name, ColumnID: col.ID, order: idx}
-		if t.Issue != nil {
-			c.Issue = t.Issue.Key
-		}
-		if t.PR != nil {
-			c.PR = t.PR.URL
-		}
-		cards = append(cards, c)
-	}
-	slices.SortFunc(cards, func(a, b card) int {
-		if a.order != b.order {
-			return a.order - b.order
-		}
-		return a.Number - b.Number
-	})
+	cards := buildCards(board, state.Tasks)
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -195,6 +187,54 @@ func cmdList(root string, args []string) error {
 		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, strings.TrimSpace(c.Issue+" "+c.PR))
 	}
 	return w.Flush()
+}
+
+// buildCards lists the cards in board order. A card split off a session that
+// opened several PRs reports the branch, worktree and agent of the card that
+// owns them.
+func buildCards(board *config.Board, tasks []*store.Task) []card {
+	cards := make([]card, 0, len(tasks))
+	for _, t := range tasks {
+		col, idx, ok := board.Column(t.ColumnID)
+		if !ok {
+			col, idx = config.Column{ID: t.ColumnID, Name: t.ColumnID}, len(board.Columns)
+		}
+		owner := store.Owner(tasks, t)
+		c := card{Number: t.Number, Title: t.Title, Prompt: t.Prompt, Column: col.Name, ColumnID: col.ID, Branch: owner.Branch, Worktree: owner.WorktreePath, Agent: agentState(owner), order: idx}
+		if t.Issue != nil {
+			c.Issue = t.Issue.Key
+		}
+		if t.PR != nil {
+			c.PR = t.PR.URL
+		}
+		cards = append(cards, c)
+	}
+	slices.SortFunc(cards, func(a, b card) int {
+		if a.order != b.order {
+			return a.order - b.order
+		}
+		return a.Number - b.Number
+	})
+	return cards
+}
+
+// agentState says what the agent of an owner card is doing, or "" when it has none.
+func agentState(owner *store.Task) string {
+	s := owner.AgentSession()
+	if s == nil {
+		return ""
+	}
+	if s.Status != store.StatusRunning && s.Status != store.StatusExternal {
+		return string(s.Status)
+	}
+	switch s.Activity {
+	case store.ActivityThinking:
+		return "working"
+	case store.ActivityPermission:
+		return "needs you"
+	default:
+		return string(s.Activity)
+	}
 }
 
 func cmdAdd(root string, args []string) error {
@@ -318,4 +358,36 @@ func cmdRemove(root string, args []string) error {
 	return send(root, inbox.Request{Op: inbox.OpRemove, Number: n, Force: *force}, func(r inbox.Result) string {
 		return fmt.Sprintf("Deleted #%d", r.Number)
 	})
+}
+
+func cmdAsk(root string, args []string) error {
+	fs := flag.NewFlagSet("ask", flag.ContinueOnError)
+	fresh := fs.Bool("new", false, "")
+	rest, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	question, err := promptArg(strings.Join(rest, " "))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(question) == "" {
+		if !*fresh {
+			return errors.New("usage: drover ask [--new] <question>")
+		}
+		if err := assistant.Reset(root); err != nil {
+			return err
+		}
+		fmt.Println("Started a new conversation")
+		return nil
+	}
+	exe, err := engine.Executable()
+	if err != nil {
+		return err
+	}
+	answer, err := ask(context.Background(), root, exe, question, *fresh)
+	if answer != "" {
+		fmt.Println(answer)
+	}
+	return err
 }
