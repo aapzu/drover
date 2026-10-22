@@ -183,10 +183,7 @@ func (m Model) captureAssistantCmd() tea.Cmd {
 	if w < 1 || h < 1 {
 		return nil
 	}
-	scrollback := 0
-	if m.assist.scroll > 0 {
-		scrollback = m.assist.scroll + 2*h
-	}
+	scrollback := scrollbackFor(m.assist.scroll, h)
 	return func() tea.Msg {
 		at := time.Now()
 		out, history, mouse, err := captureAssistant(name, w, h, scrollback)
@@ -204,7 +201,9 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 			m.assist.fail(msg.err)
 			m.assist.owns = false
 		} else {
-			m.setFlash("Reading the assistant failed: " + msg.err.Error())
+			if text := "Reading the assistant failed: " + msg.err.Error(); m.flash != text {
+				m.setFlash(text)
+			}
 		}
 		return
 	}
@@ -265,7 +264,7 @@ func (m Model) renderAssistant(width, height int) string {
 	case m.assist.starting():
 		body = dim.Render("Starting the assistant…")
 	case !m.assist.running():
-		hint := askKey + " to start it again."
+		hint := "Press " + askKey + " to start it again."
 		if focused {
 			hint = "Press enter to start it again."
 		}

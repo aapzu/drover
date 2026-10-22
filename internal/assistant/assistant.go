@@ -387,8 +387,8 @@ func save(root, id string) error {
 
 const (
 	stopWait    = 3 * time.Second
-	noWait      = 0
-	waitForever = -1
+	noWait      = time.Duration(0)
+	waitForever = time.Duration(-1)
 )
 
 // lock blocks until no other process is using the project's conversation.

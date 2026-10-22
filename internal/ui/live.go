@@ -72,6 +72,9 @@ func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
 }
 
 func afterKey(capture tea.Cmd) tea.Cmd {
+	if capture == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		time.Sleep(40 * time.Millisecond)
 		return capture()

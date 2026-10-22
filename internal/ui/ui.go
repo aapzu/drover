@@ -599,6 +599,15 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	}
 }
 
+// scrollbackFor is how much history to capture for a view scrolled up by scroll
+// lines; the extra lets the anchored view grow before the next capture.
+func scrollbackFor(scroll, h int) int {
+	if scroll <= 0 {
+		return 0
+	}
+	return scroll + 2*h
+}
+
 func (m Model) capturePreview() tea.Cmd {
 	t := m.current()
 	if t == nil {
@@ -608,11 +617,7 @@ func (m Model) capturePreview() tea.Cmd {
 	name, ok := m.liveSession(id)
 	l := m.layout()
 	w, h := l.boardW-2, l.previewH-2
-	// Extra history lets the anchored view grow before the next capture.
-	scrollback := 0
-	if m.previewScroll > 0 {
-		scrollback = m.previewScroll + 2*h
-	}
+	scrollback := scrollbackFor(m.previewScroll, h)
 	return func() tea.Msg {
 		msg := previewMsg{taskID: id}
 		if ok {
