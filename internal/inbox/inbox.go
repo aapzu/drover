@@ -61,9 +61,10 @@ type Pending struct {
 	Err     error
 }
 
-func dir(root string) string { return filepath.Join(store.Dir(root), "inbox") }
+// Dir holds the requests the CLI queues for the board, and the board's replies.
+func Dir(root string) string { return filepath.Join(store.Dir(root), "inbox") }
 
-func path(root, id, ext string) string { return filepath.Join(dir(root), id+ext) }
+func path(root, id, ext string) string { return filepath.Join(Dir(root), id+ext) }
 
 func writeAtomic(file string, v any) error {
 	data, err := json.Marshal(v)
@@ -83,7 +84,7 @@ func writeAtomic(file string, v any) error {
 
 // Send queues req and returns its id. Ids sort in the order they were sent.
 func Send(root string, req Request) (string, error) {
-	if err := os.MkdirAll(dir(root), 0o755); err != nil {
+	if err := os.MkdirAll(Dir(root), 0o755); err != nil {
 		return "", err
 	}
 	id := fmt.Sprintf("%020d-%s", time.Now().UnixNano(), uuid.NewString()[:8])
@@ -118,7 +119,7 @@ func Wait(root, id string, timeout time.Duration, stop func() bool) (res Result,
 // Next claims the oldest queued request, or reports ok=false when there is
 // none. It also drops results and temp files nobody collected.
 func Next(root string) (p Pending, ok bool, err error) {
-	d := dir(root)
+	d := Dir(root)
 	entries, err := os.ReadDir(d)
 	if errors.Is(err, os.ErrNotExist) {
 		return p, false, nil

@@ -66,7 +66,7 @@ func TestUnfinishedClaimIsKeptAndRecoveredAfterABoardStops(t *testing.T) {
 
 func TestNextReportsAnUnreadableRequest(t *testing.T) {
 	root := project(t)
-	os.MkdirAll(dir(root), 0o755)
+	os.MkdirAll(Dir(root), 0o755)
 	os.WriteFile(path(root, "1", requestExt), []byte("{nope"), 0o644)
 	p, ok, err := Next(root)
 	if err != nil || !ok || p.Err == nil || p.ID != "1" {
@@ -86,7 +86,7 @@ func TestNextWithNoInboxIsEmpty(t *testing.T) {
 
 func TestNextIgnoresHalfWrittenRequests(t *testing.T) {
 	root := project(t)
-	os.MkdirAll(dir(root), 0o755)
+	os.MkdirAll(Dir(root), 0o755)
 	os.WriteFile(path(root, "1", requestExt)+".tmp", []byte("{"), 0o644)
 	if _, ok, _ := Next(root); ok {
 		t.Error("claimed a temp file")
@@ -123,7 +123,7 @@ func TestWaitStopsWhenTheBoardIsGone(t *testing.T) {
 
 func TestNextDropsOnlyStaleResultsAndTempFiles(t *testing.T) {
 	root := project(t)
-	os.MkdirAll(dir(root), 0o755)
+	os.MkdirAll(Dir(root), 0o755)
 	Reply(root, "old", Result{})
 	Reply(root, "new", Result{})
 	os.WriteFile(path(root, "old", ".json.tmp"), nil, 0o644)

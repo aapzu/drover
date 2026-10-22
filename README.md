@@ -434,6 +434,8 @@ drover ask --new "start over: what's in Planning?"
   `--force`. It is told to ask you before deleting a card or moving one to To
   Do, which removes its worktree. In a one-off `drover ask` you answer that
   in the next question.
+- Its Bash tool may be sandboxed. drover adds write access to the `inbox`
+  directory in the project's state directory, so the CLI can queue changes there.
 - A question of `-` is read from stdin. A question that gets no answer within
   ten minutes fails, and the board may have been partly changed.
 

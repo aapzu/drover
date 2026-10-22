@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/inbox"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -59,6 +61,9 @@ func TestAskStartsThenResumesOneConversation(t *testing.T) {
 	}
 	if flagValue(second.argv, "--resume") != id || slices.Contains(second.argv, "--session-id") {
 		t.Errorf("second call should resume %s: %q", id, second.argv)
+	}
+	if flagValue(first.argv, "--settings") == "" || flagValue(second.argv, "--settings") != flagValue(first.argv, "--settings") {
+		t.Errorf("a resumed call should carry the same --settings: %q vs %q", flagValue(second.argv, "--settings"), flagValue(first.argv, "--settings"))
 	}
 	if first.stdin != "where is #2?" || first.dir != root {
 		t.Errorf("question and directory = %q in %q", first.stdin, first.dir)
@@ -109,9 +114,23 @@ func TestResetStartsANewConversation(t *testing.T) {
 	}
 }
 
+func TestAskLetsTheSandboxWriteOnlyTheInbox(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := filepath.Join(t.TempDir(), "repo")
+	calls := fakeClaude(t, "ok", nil)
+
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(map[string]any{"sandbox": map[string]any{"filesystem": map[string]any{"allowWrite": []string{inbox.Dir(root)}}}})
+	if got := flagValue((*calls)[0].argv, "--settings"); got != string(want) {
+		t.Errorf("--settings = %s, want only the inbox writable: %s", got, want)
+	}
+}
+
 func TestArgvOnlyAllowsTheBoardCLI(t *testing.T) {
 	exe := "/Users/me/.local/bin/drover"
-	args := argv(exe, "abc", false, systemPrompt(exe, "/work/repo", &config.Board{}))
+	args := argv(exe, "/work/repo", "abc", false, systemPrompt(exe, "/work/repo", &config.Board{}))
 
 	if flagValue(args, "--tools") != "Bash" {
 		t.Errorf("tools = %q", flagValue(args, "--tools"))

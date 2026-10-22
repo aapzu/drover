@@ -5,6 +5,7 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/inbox"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -91,7 +93,7 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	}
 	ctx, cancel := context.WithTimeout(ctx, askTimeout)
 	defer cancel()
-	out, err := runClaude(ctx, root, argv(exe, id, resume, systemPrompt(exe, root, board)), question)
+	out, err := runClaude(ctx, root, argv(exe, root, id, resume, systemPrompt(exe, root, board)), question)
 	if err != nil {
 		if resume {
 			err = fmt.Errorf("%w (to start a new conversation: drover ask --new, or ctrl+n on the board)", err)
@@ -128,9 +130,9 @@ func forget(root string) error {
 	return nil
 }
 
-func argv(exe, id string, resume bool, prompt string) []string {
+func argv(exe, root, id string, resume bool, prompt string) []string {
 	allow, deny := rules(exe)
-	args := []string{"claude", "-p", "--model", model, "--append-system-prompt", prompt, "--tools", "Bash", "--allowedTools"}
+	args := []string{"claude", "-p", "--model", model, "--append-system-prompt", prompt, "--tools", "Bash", "--settings", sandboxSettings(root), "--allowedTools"}
 	args = append(args, allow...)
 	args = append(args, "--disallowedTools")
 	args = append(args, deny...)
@@ -138,6 +140,14 @@ func argv(exe, id string, resume bool, prompt string) []string {
 		return append(args, "--resume", id)
 	}
 	return append(args, "--session-id", id)
+}
+
+// sandboxSettings lets a sandboxed Bash tool write the inbox, where the drover
+// CLI queues the changes it asks the board to make.
+func sandboxSettings(root string) string {
+	settings := map[string]any{"sandbox": map[string]any{"filesystem": map[string]any{"allowWrite": []string{inbox.Dir(root)}}}}
+	data, _ := json.Marshal(settings)
+	return string(data)
 }
 
 // rules lists the Bash commands the assistant may run: the board's own CLI,
