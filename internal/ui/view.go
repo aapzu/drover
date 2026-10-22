@@ -138,7 +138,7 @@ func (m Model) renderFooter() string {
 	}
 	hints := map[mode]string{
 		modeBoard:   "←→↑↓ navigate  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  ? help  q quit",
-		modeLive:    "LIVE: every key goes to the agent  ctrl+q back to board  mouse wheel scrolls",
+		modeLive:    "LIVE: ctrl+q back to board",
 		modeForm:    "tab switch field  ctrl+s save  esc cancel",
 		modeMove:    "1-9 pick column  any other key cancels",
 		modeConfirm: "y confirm  any other key cancels",
