@@ -454,7 +454,17 @@ func (e *Engine) summarize(taskID, key, reply string) {
 	answer, err := claude.AskHaiku(e.stopping, e.Root,
 		"Summarize this coding agent's reply in at most 15 words: what it did, or what it needs from you. Reply with the summary only.\n\n<reply>\n"+truncatePrompt(reply)+"\n</reply>")
 	summary := claude.FirstLine(answer)
-	if err != nil || summary == "" {
+	if err == nil && summary == "" {
+		err = errors.New("empty answer")
+	}
+	if err != nil {
+		if e.stopping.Err() == nil {
+			e.with(func() {
+				if t := e.find(taskID); t != nil {
+					t.AddLog(fmt.Sprintf("Summary failed: %v", err))
+				}
+			})
+		}
 		return
 	}
 	e.with(func() {
