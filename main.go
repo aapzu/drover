@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -83,13 +85,22 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	final, err := tea.NewProgram(ui.New(eng), tea.WithAltScreen()).Run()
-	cancel()
-	<-stopped
+	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		<-hup
+		p.Quit()
+	}()
+	final, err := p.Run()
 	m, ok := final.(ui.Model)
 	if ok {
-		m.StopAsk()
+		if err := m.StopAssistant(); err != nil {
+			fmt.Fprintln(os.Stderr, "drover:", err)
+		}
 	}
+	cancel()
+	<-stopped
 	if ok && m.SuspendAllRequested() {
 		fmt.Println("Suspending all agents…")
 		for _, h := range eng.SuspendAll() {

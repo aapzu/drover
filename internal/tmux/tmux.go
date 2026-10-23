@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,11 @@ var Socket = func() string {
 	}
 	return "drover"
 }()
+
+var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+// SafeName makes s usable inside a session name.
+func SafeName(s string) string { return nonName.ReplaceAllString(s, "-") }
 
 // DetachKey returns from an attached session to the board.
 const DetachKey = "C-q"
@@ -210,8 +216,8 @@ func Paste(name, text string) error {
 	return err
 }
 
-// Resize pins the window to the board's preview size so the preview shows the
-// agent's whole screen. It does nothing when the size already matches.
+// Resize pins the window to the size the board draws it at so the board shows
+// the session's whole screen. It does nothing when the size already matches.
 func Resize(name string, width, height int) error {
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
 	if err == nil && strings.TrimSpace(size) == fmt.Sprintf("%dx%d", width, height) {

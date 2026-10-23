@@ -37,7 +37,7 @@ const (
 	modeLive
 	modeFilter
 	modePalette
-	modeAsk
+	modeAssistant
 )
 
 type tickMsg time.Time
@@ -141,11 +141,7 @@ type Model struct {
 
 	detail viewport.Model
 
-	askInput textinput.Model
-	askView  viewport.Model
-	askLog   []askEntry
-	askBusy  bool
-	askRun   *askRun
+	assist assistantPane
 
 	imp importState
 }
@@ -175,9 +171,6 @@ func New(eng *engine.Engine) Model {
 		sendInput:   si,
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
-		askInput:    newAskInput(),
-		askView:     viewport.New(80, 20),
-		askRun:      newAskRun(),
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
@@ -380,8 +373,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
-		m.askInput.Width = max(20, m.width-14)
-		m.syncAsk()
+		if m.mode == modeAssistant && m.assistantFits() == 0 {
+			m.mode = modeBoard
+			m.setFlash(tooSmallForAssistant)
+		}
 		return m, nil
 	case tickMsg:
 		m.frame++
@@ -391,7 +386,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		select {
 		case err := <-m.keys.errs:
-			m.setFlash("Sending input to the agent failed: " + err.Error())
+			target := "the agent"
+			if m.mode == modeAssistant {
+				target = "the assistant"
+			}
+			m.setFlash("Sending input to " + target + " failed: " + err.Error())
 		default:
 		}
 		cmds := []tea.Cmd{tick()}
@@ -399,8 +398,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.snapBusy = true
 			cmds = append(cmds, m.snapshot())
 		}
-		if !m.prefs.HidePreview && m.mode != modeLive && m.mode != modeAsk && m.frame%2 == 0 {
+		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
 			cmds = append(cmds, m.capturePreview())
+		}
+		if m.assistantCapturing() && m.mode != modeAssistant && m.frame%2 == 0 {
+			cmds = append(cmds, m.captureAssistantCmd())
 		}
 		switch {
 		case m.follow == "":
@@ -446,12 +448,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMouse(msg)
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
-	case askDoneMsg:
-		m.finishAsk(msg)
+	case assistantStartedMsg:
+		cmd := m.finishAssistantStart(msg)
+		return m, cmd
+	case assistantFrameMsg:
+		m.applyAssistantFrame(msg)
 		return m, nil
-	case askResetMsg:
-		m.finishReset(msg)
-		return m, nil
+	case assistantTickMsg:
+		if m.mode != modeAssistant || msg.gen != m.assist.tickGen {
+			return m, nil
+		}
+		next := assistantTick(m.assist.tickGen)
+		if !m.assistantCapturing() {
+			return m, next
+		}
+		return m, tea.Batch(next, m.captureAssistantCmd())
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -553,8 +564,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateFilter(msg)
 		case modePalette:
 			return m.updatePalette(msg)
-		case modeAsk:
-			return m.updateAsk(msg)
+		case modeAssistant:
+			return m.updateAssistant(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -590,6 +601,15 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	}
 }
 
+// scrollbackFor asks for extra history so the anchored view can grow before the
+// next capture.
+func scrollbackFor(scroll, h int) int {
+	if scroll <= 0 {
+		return 0
+	}
+	return scroll + 2*h
+}
+
 func (m Model) capturePreview() tea.Cmd {
 	t := m.current()
 	if t == nil {
@@ -598,12 +618,8 @@ func (m Model) capturePreview() tea.Cmd {
 	id := t.ID
 	name, ok := m.liveSession(id)
 	l := m.layout()
-	w, h := m.width-2, l.previewH-2
-	// Extra history lets the anchored view grow before the next capture.
-	scrollback := 0
-	if m.previewScroll > 0 {
-		scrollback = m.previewScroll + 2*h
-	}
+	w, h := l.boardW-2, l.previewH-2
+	scrollback := scrollbackFor(m.previewScroll, h)
 	return func() tea.Msg {
 		msg := previewMsg{taskID: id}
 		if ok {
@@ -775,8 +791,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case paletteKey:
 		return m, m.openPalette()
 	case askKey:
-		cmd := m.openAsk()
+		cmd := m.openAssistant(false)
 		return m, cmd
+	case newAskKey:
+		cmd := m.openAssistant(true)
+		return m, cmd
+	case liveExitKey:
+		m.assist.open = false
 	case "left", "h":
 		m.col = max(0, m.col-1)
 	case "right", "l":
@@ -954,7 +975,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if msg.String() == "<" {
 				step = -4
 			}
-			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.width)
+			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.boardWidth())
 			m.savePrefs()
 		}
 	case "0":

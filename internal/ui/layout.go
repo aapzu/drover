@@ -21,13 +21,17 @@ type colBox struct {
 type layout struct {
 	bodyY, bodyH       int
 	boardH             int
+	boardW, assistantW int
 	previewY, previewH int
 	cols               []colBox
 	hiddenColumns      bool
 }
 
+func (m Model) bodyHeight() int { return max(0, m.height-headerHeight-footerHeight) }
+
 func (m Model) layout() layout {
-	l := layout{bodyY: headerHeight, bodyH: max(0, m.height-headerHeight-footerHeight)}
+	l := layout{bodyY: headerHeight, bodyH: m.bodyHeight()}
+	l.assistantW, l.boardW = m.assistantWidth(), m.boardWidth()
 	if !m.prefs.HidePreview && l.bodyH >= minPreviewHeight+minBoardHeight {
 		h := m.prefs.PreviewHeight
 		if h == 0 {
@@ -59,13 +63,13 @@ func (m Model) layout() layout {
 // columnWindow picks the columns that fit around the selected one and their
 // widths. Resized columns keep their width; the rest share what is left.
 func (m Model) columnWindow() (start int, widths []int) {
-	cols := m.columns()
-	if len(cols) == 0 || m.width <= 0 {
+	cols, width := m.columns(), m.boardWidth()
+	if len(cols) == 0 || width <= 0 {
 		return 0, nil
 	}
 	want := func(i int) (int, bool) {
 		if w, ok := m.prefs.ColumnWidths[cols[i].ID]; ok {
-			return clamp(w, minResizedWidth, m.width), true
+			return clamp(w, minResizedWidth, width), true
 		}
 		return minColumnWidth, false
 	}
@@ -75,14 +79,14 @@ func (m Model) columnWindow() (start int, widths []int) {
 	for grew := true; grew; {
 		grew = false
 		if end < len(cols) {
-			if w, _ := want(end); used+w <= m.width {
+			if w, _ := want(end); used+w <= width {
 				used += w
 				end++
 				grew = true
 			}
 		}
 		if start > 0 {
-			if w, _ := want(start - 1); used+w <= m.width {
+			if w, _ := want(start - 1); used+w <= width {
 				used += w
 				start--
 				grew = true
@@ -98,7 +102,7 @@ func (m Model) columnWindow() (start int, widths []int) {
 			auto = append(auto, i-start)
 		}
 	}
-	slack := m.width - used
+	slack := width - used
 	if len(auto) == 0 {
 		widths[len(widths)-1] += slack
 		return start, widths
@@ -121,6 +125,7 @@ const (
 	hitColumnEdge
 	hitPreview
 	hitPreviewEdge
+	hitAssistant
 )
 
 type hit struct {
@@ -131,6 +136,9 @@ type hit struct {
 }
 
 func (l layout) hitTest(m Model, x, y int) hit {
+	if l.assistantW > 0 && x >= l.boardW && y >= l.bodyY && y < l.bodyY+l.bodyH {
+		return hit{kind: hitAssistant}
+	}
 	if l.previewH > 0 && y >= l.previewY && y < l.previewY+l.previewH {
 		if y == l.previewY {
 			return hit{kind: hitPreviewEdge}
