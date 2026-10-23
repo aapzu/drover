@@ -70,9 +70,10 @@ type Engine struct {
 	stopping  context.Context
 	stop      context.CancelFunc
 
-	focused      string
-	alerted      map[string]time.Time
-	idleStopping sync.Map
+	focused            string
+	alerted            map[string]time.Time
+	idleStopping       sync.Map
+	backgroundScanning sync.Map
 }
 
 // Executable is the path of the running drover binary, symlinks resolved.

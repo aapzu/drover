@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,7 @@ func (e *Engine) Tick() {
 		}
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
+		followUps = append(followUps, e.backgroundScans()...)
 		followUps = append(followUps, e.dequeue()...)
 		if time.Since(e.lastPoll) > 1500*time.Millisecond {
 			e.lastPoll = time.Now()
@@ -114,6 +116,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				continue
 			}
 			s.Forked = ev.Source == "fork"
+			if ev.Source == "startup" || ev.Source == "resume" {
+				s.Background = nil
+			}
 			if ev.TranscriptPath != "" {
 				s.TranscriptPath = ev.TranscriptPath
 			}
@@ -161,6 +166,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if id, ok := ev.BackgroundAgent(); ok {
+				s.Background = append(s.Background, id)
+			}
 			if ev.ToolName == "ExitPlanMode" {
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
@@ -201,6 +209,45 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				next = func() { e.respawnPending(taskID, key); then() }
 			}
 			out = append(out, func() { next(); e.alertTurnDone(taskID, key, reply) })
+		}
+	}
+	return out
+}
+
+// backgroundScans returns follow-ups that read the transcripts of sessions with
+// background agents for the completion notices of those agents. Called with mu
+// held.
+func (e *Engine) backgroundScans() []func() {
+	var out []func()
+	for _, t := range e.state.Tasks {
+		for key, s := range t.Sessions {
+			if s.Status != store.StatusRunning || !s.HasBackground() {
+				continue
+			}
+			path := e.transcriptOf(t, s)
+			if path == "" {
+				continue
+			}
+			if _, scanning := e.backgroundScanning.LoadOrStore(s, true); scanning {
+				continue
+			}
+			taskID, offset := t.ID, s.BackgroundScan
+			if s.BackgroundScanPath != path {
+				offset = 0
+			}
+			out = append(out, func() {
+				defer e.backgroundScanning.Delete(s)
+				done, next, err := claude.BackgroundDone(path, offset)
+				if err != nil {
+					return
+				}
+				e.with(func() {
+					if task := e.find(taskID); task != nil && task.Sessions[key] == s {
+						s.Background = slices.DeleteFunc(s.Background, func(id string) bool { return slices.Contains(done, id) })
+						s.BackgroundScanPath, s.BackgroundScan = path, next
+					}
+				})
+			})
 		}
 	}
 	return out
@@ -261,6 +308,7 @@ func (e *Engine) followBackground(t *store.Task, s *store.Session) func() {
 	s.Status = store.StatusExternal
 	s.Activity = store.ActivityIdle
 	s.Pending = nil
+	s.Background = nil
 	s.PID = 0
 	if l, ok := claude.Running()[s.AgentSessionID]; ok {
 		s.PID = l.PID
