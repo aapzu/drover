@@ -670,7 +670,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 	}
 }
 
-func TestPromptInReviewMovesCardBack(t *testing.T) {
+func TestPromptInReviewStaysInReview(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
@@ -701,9 +701,10 @@ func TestPromptInReviewMovesCardBack(t *testing.T) {
 	if err := e.Send(task.ID, "TWEAK the footer"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, e, "the prompt to move the card to Executing", func(t *store.Task) bool {
-		return t.ColumnID == "exec"
-	})
+	time.Sleep(600 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("a prompt in review moved the card to %s", got)
+	}
 }
 
 // A manual start in a column without autoSpawn can still be queued, and must
