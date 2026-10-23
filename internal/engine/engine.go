@@ -522,7 +522,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	if t != nil {
 		owner = e.owner(t)
 		ownerSess := owner.Sessions[store.MainSession]
-		ownerRunning := ownerSess != nil && ownerSess.Status == store.StatusRunning
+		ownerRunning := ownerSess != nil && ownerSess.Status == store.StatusRunning && ownerSess.Activity != store.ActivityStarting
 		from, _, _ = board.Column(t.ColumnID)
 		for _, m := range store.Members(e.state.Tasks, owner) {
 			if m == t {

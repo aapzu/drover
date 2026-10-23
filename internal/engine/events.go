@@ -427,7 +427,7 @@ func (e *Engine) prRequested(taskID string, visit int) {
 // with other settings, in place or by resuming its conversation, and restarts
 // one that was asked to move into its worktree but didn't. A keepAgent column
 // drops a pending settings switch and keeps the agent's settings, unless it
-// must relocate.
+// already has a move into its worktree pending.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
