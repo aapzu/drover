@@ -98,12 +98,13 @@ type Session struct {
 	RespawnPending bool `json:"respawnPending,omitempty"`
 	// Relocate is the worktree a running scratch agent was asked to move into,
 	// until its hooks report it there.
-	Relocate           string    `json:"relocate,omitempty"`
-	Background         []string  `json:"background,omitempty"`
-	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
-	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
-	// AutomatedPrompt is the automation message typed into the agent, until
-	// its hooks report the prompt.
+	Relocate           string   `json:"relocate,omitempty"`
+	Background         []string `json:"background,omitempty"`
+	BackgroundScanPath string   `json:"backgroundScanPath,omitempty"`
+	BackgroundScan     int64    `json:"backgroundScan,omitempty"`
+	// AutomatedPrompt is the automation message last typed into the agent. The
+	// next UserPromptSubmit clears it; one that matches it is not a user prompt,
+	// so it does not reopen a card in review.
 	AutomatedPrompt string    `json:"automatedPrompt,omitempty"`
 	Pending         []Pending `json:"pending,omitempty"`
 	LastReply       string    `json:"lastReply,omitempty"`

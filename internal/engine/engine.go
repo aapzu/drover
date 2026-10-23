@@ -1407,6 +1407,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		s.RespawnPending = false
 		s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool { return p.Relocate != "" })
 		s.Relocate = ""
+		s.AutomatedPrompt = ""
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
