@@ -84,7 +84,7 @@ func idleFor(s *store.Session, d time.Duration) bool {
 // queued.
 func idle(s *store.Session) bool {
 	return s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && s.Started &&
-		len(s.Pending) == 0 && !s.RespawnPending
+		len(s.Pending) == 0 && !s.RespawnPending && !s.HasBackground()
 }
 
 // idleTimeouts returns follow-ups suspending agents idle for longer than the

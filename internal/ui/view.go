@@ -49,8 +49,6 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderHelp())
 	case modeImport:
 		body = m.place(bodyHeight, m.renderImport(bodyHeight))
-	case modeAsk:
-		body = m.renderAsk(bodyHeight)
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
@@ -94,7 +92,7 @@ func (m Model) renderHeader() string {
 			switch {
 			case s.Activity == store.ActivityPermission || stuckStarting(s):
 				attention++
-			case s.Activity == store.ActivityIdle:
+			case s.Activity == store.ActivityIdle && !s.HasBackground():
 				waiting++
 			default:
 				working++
@@ -134,9 +132,6 @@ func (m Model) renderFooter() string {
 	if m.mode == modeSend {
 		return " " + bold.Render("Send ›") + " " + m.sendInput.View()
 	}
-	if m.mode == modeAsk {
-		return m.renderAskFooter()
-	}
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
@@ -144,24 +139,28 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:   "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : ask  ? help  q quit",
-		modePalette: "↑↓ select  enter run  esc cancel",
-		modeLive:    "LIVE: ctrl+q back to board",
-		modeForm:    "tab switch field  ctrl+s save  esc cancel",
-		modeMove:    "1-9 pick column  any other key cancels",
-		modeConfirm: "y confirm  any other key cancels",
-		modeDetail:  "↑↓ scroll  esc close",
-		modeHelp:    "any key closes",
+		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
+		modePalette:   "↑↓ select  enter run  esc cancel",
+		modeLive:      "LIVE: ctrl+q back to board",
+		modeAssistant: "ASSISTANT: ctrl+q back to board",
+		modeForm:      "tab switch field  ctrl+s save  esc cancel",
+		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
+		modeConfirm:   "y confirm  any other key cancels",
+		modeDetail:    "↑↓ scroll  esc close",
+		modeHelp:      "any key closes",
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
 
 func (m Model) renderMain(l layout) string {
-	board := m.renderBoard(l)
-	if l.previewH == 0 {
-		return board
+	main := m.renderBoard(l)
+	if l.previewH > 0 {
+		main = lipgloss.JoinVertical(lipgloss.Left, main, m.renderPreview(l.previewH))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, board, m.renderPreview(l.previewH))
+	if l.assistantW == 0 {
+		return main
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, main, m.renderAssistant(l.assistantW, l.bodyH))
 }
 
 func (m Model) renderBoard(l layout) string {
@@ -172,7 +171,7 @@ func (m Model) renderBoard(l layout) string {
 	}
 	board := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
 	if l.hiddenColumns {
-		board = lipgloss.PlaceHorizontal(m.width, lipgloss.Left, board)
+		board = lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, board)
 	}
 	return board
 }
@@ -220,7 +219,11 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 		count += fmt.Sprintf(" +%d", hidden)
 	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
-	summary := dim.Render(ansi.Truncate(columnSummary(col), inner-1, "…"))
+	note := ""
+	if m.prefs.ShowSettings {
+		note = columnSummary(col)
+	}
+	summary := dim.Render(ansi.Truncate(note, inner-1, "…"))
 	if dropping {
 		nameStyle = nameStyle.Reverse(true)
 		summary = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(ansi.Truncate("⤓ drop to move here", inner-1, "…"))
@@ -296,6 +299,9 @@ func (m Model) status(t *store.Task) string {
 	case store.ActivityPermission:
 		return needsYou.Render("◆ needs you") + pending
 	case store.ActivityIdle:
+		if s.HasBackground() {
+			return thinking.Render("◌ background agents") + pending
+		}
 		return idle.Render("● idle") + pending
 	case store.ActivityStarting:
 		return thinking.Render(spinner[m.frame%len(spinner)]+" starting") + pending
@@ -537,15 +543,19 @@ func (m Model) renderPreview(height int) string {
 	} else if m.drag.kind == dragPreview {
 		style = style.BorderForeground(accent)
 	}
-	inner := m.width - 2
+	return titledBox(style, title, body, m.boardWidth(), height)
+}
+
+func titledBox(style lipgloss.Style, title, body string, width, height int) string {
+	inner, rows := width-2, max(0, height-2)
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, inner, "")
 	}
-	if len(lines) > height-2 {
-		lines = lines[len(lines)-(height-2):]
+	if len(lines) > rows {
+		lines = lines[len(lines)-rows:]
 	}
-	box := style.Width(inner).Height(height - 2).Render(strings.Join(lines, "\n"))
+	box := style.Width(inner).Height(rows).Render(strings.Join(lines, "\n"))
 	// Draw the title into the top border.
 	top, rest, _ := strings.Cut(box, "\n")
 	label := ansi.Truncate(title, inner-2, "…")
@@ -595,15 +605,17 @@ func (m Model) renderMovePicker() string {
 		return ""
 	}
 	lines := []string{bold.Render(fmt.Sprintf("Move #%d to…", t.Number)), ""}
-	for i, c := range m.columns() {
-		if i >= 9 {
-			break
-		}
+	cur := m.columnOf(t)
+	for i, c := range m.moveColumns() {
 		marker := "  "
-		if c.ID == m.columnOf(t) {
+		if i == m.moveSel {
 			marker = "▸ "
 		}
-		lines = append(lines, fmt.Sprintf("%s%s  %s  %s", marker, bold.Render(fmt.Sprint(i+1)), c.Name, dim.Render(columnSummary(c))))
+		current := ""
+		if c.ID == cur {
+			current = dim.Render(" (current)")
+		}
+		lines = append(lines, fmt.Sprintf("%s%s  %s%s  %s", marker, bold.Render(fmt.Sprint(i+1)), c.Name, current, dim.Render(columnSummary(c))))
 	}
 	return modalStyle.Render(strings.Join(lines, "\n"))
 }
@@ -614,7 +626,7 @@ func (m Model) renderHelp() string {
 		{"←→ / h l", "select column"},
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
-		{"m 1-9", "move card to column"},
+		{"m", "move card to a column (↑↓ and enter, or 1-9)"},
 		{"n", "new Claude session (no branch until moved right)"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
@@ -624,7 +636,8 @@ func (m Model) renderHelp() string {
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
-		{":", "ask the board's assistant about cards, or have it move them"},
+		{":", "open and type into the assistant panel (Ctrl-q returns, again hides it)"},
+		{"N", "start a new assistant conversation"},
 		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},
@@ -638,6 +651,7 @@ func (m Model) renderHelp() string {
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
+		{"t", "show or hide column settings under column names"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},
@@ -655,6 +669,7 @@ func (m Model) renderHelp() string {
 		{"drag column edge", "resize the column"},
 		{"drag preview top", "resize the preview"},
 		{"click preview", "type into the agent"},
+		{"click assistant", "type into the assistant"},
 	}) + "\n\n" + section("Live mode", [][2]string{
 		{"ctrl+q", "back to board"},
 		{"mouse wheel", "scroll the agent's history"},
