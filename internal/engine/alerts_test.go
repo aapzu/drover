@@ -86,9 +86,18 @@ func TestIdleTimeoutSparesKeptAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
-	time.Sleep(2 * time.Second)
-	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning || hasLog(e.Snapshot().Tasks[0], "suspended after") {
-		t.Fatalf("idle timeout suspended a kept agent: %+v", s)
+	plain := startIdleAgent(t, e, "Plain agent")
+	e.with(func() { e.find(plain.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	waitForAll(t, e, "the plain agent to be suspended", func(tasks []*store.Task) bool {
+		for _, other := range tasks {
+			if other.ID == plain.ID {
+				return other.Sessions[store.MainSession].Status == store.StatusSuspended
+			}
+		}
+		return false
+	})
+	if task := e.Snapshot().Tasks[0]; task.Sessions[store.MainSession].Status != store.StatusRunning || hasLog(task, "suspended after") {
+		t.Fatalf("idle timeout suspended a kept agent: %+v", task.Sessions[store.MainSession])
 	}
 }
 

@@ -554,7 +554,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
 	sess := owner.Sessions[store.MainSession]
-	keeps := sess != nil && sess.Status == store.StatusRunning && (target.KeepAgent && drives || !drives && e.sessionColumn(owner).KeepAgent)
+	keeps := sess != nil && sess.Status == store.StatusRunning && target.KeepAgent && drives
 	e.mu.Unlock()
 
 	e.with(func() {
@@ -1296,14 +1296,14 @@ func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t {
+		if o == t || e.sessionColumn(o).KeepAgent {
 			continue
 		}
 		for _, s := range o.Sessions {
 			if !idle(s) {
 				continue
 			}
-			if (victim == nil || s.UpdatedAt.Before(victim.UpdatedAt)) && !e.sessionColumn(o).KeepAgent {
+			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
 				victim, owner = s, o
 			}
 		}

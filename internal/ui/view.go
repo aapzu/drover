@@ -263,6 +263,8 @@ func (m Model) status(t *store.Task) string {
 	if s == nil {
 		return ""
 	}
+	// A group card the agent isn't working for doesn't show the agent's activity
+	// unless it sits in an agent column, or a keepAgent column that keeps the agent running.
 	driver := store.Driver(m.snap.Tasks, store.Owner(m.snap.Tasks, t))
 	if col, _, _ := m.snap.Board.Column(t.ColumnID); driver != t && !col.AutoSpawn && !col.KeepAgent {
 		return ""
