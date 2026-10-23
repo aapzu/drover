@@ -74,7 +74,7 @@ emit "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$sid\"}"
 while IFS= read -r line; do
   echo "typed:$line" >> "$FAKE_LOG"
   case "$line" in
-    /plan) echo "  ⏸ plan mode on (shift+tab to cycle)";;
+    */plan) echo "  ⏸ plan mode on (shift+tab to cycle)";;
     *) turn "$line";;
   esac
 done
@@ -318,6 +318,64 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 	if !strings.Contains(launches[1], "--permission-mode\nacceptEdits") || !strings.Contains(launches[1], "--resume") {
 		t.Errorf("respawn should resume in the board's default mode:\n%s", launches[1])
+	}
+}
+
+func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
+	root, log := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Interrupt me", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"SLOW work"}` + "\n")
+	busy := waitFor(t, e, "the turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.PermissionMode != "acceptEdits" || !s.RespawnPending {
+		t.Fatalf("the running turn should keep its mode until interrupted: mode=%s pending=%v", s.PermissionMode, s.RespawnPending)
+	}
+
+	transcript := claude.TranscriptPath(busy.Sessions[store.MainSession].AgentSessionID, busy.WorktreePath)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt := `{"type":"user","message":{"content":"Interrupt me"}}`
+	interrupt := `{"type":"user","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	if err := os.WriteFile(transcript, []byte(prompt+"\n"+interrupt+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, e, "the interrupted agent to switch to plan mode", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s.PermissionMode == "plan" && !s.RespawnPending && s.Activity == store.ActivityIdle
+	})
+	if got := readFile(log); strings.Count(got, "---") != 1 || !strings.Contains(got, "typed:\x1b/plan") {
+		t.Errorf("want Escape then /plan typed into the same agent, not a restart:\n%s", got)
 	}
 }
 
