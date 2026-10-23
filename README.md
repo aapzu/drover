@@ -178,7 +178,9 @@ open, and to Verify in develop once it merges:
   changes, while `C` and the automatic archive keep such a worktree.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. The session runs Haiku
-  unless that column sets a `modelOverride`. Your first message
+  unless that column sets a `modelOverride`, and in that column's
+  `permissionMode` when it sets one (the default board uses `plan`).
+  Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words
   unless `autoName` is `false`. Unless it stays (below), the card then moves to
   the first agent column (Planning by default), which creates its worktree and

@@ -2653,3 +2653,52 @@ func TestSlotEvictionSparesKeptAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.Remove(filepath.Join(root, "drover.json"))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the session to launch", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 1
+	})
+	if launch := strings.Split(readFile(log), "---")[0]; !strings.Contains(launch, "--permission-mode\nplan") {
+		t.Errorf("a new session should launch in its column's plan mode:\n%s", launch)
+	}
+}
+
+func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.Remove(filepath.Join(root, "drover.json"))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart in the work column", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	launches := strings.Split(readFile(log), "---")
+	if strings.Contains(launches[1], "--permission-mode") {
+		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
+	}
+}
