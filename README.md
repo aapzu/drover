@@ -72,7 +72,8 @@ panel to type into it. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
-`esc` and `ctrl+c` included. `ctrl+q` returns to the board.
+`esc` and `ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop
+the agent. `ctrl+q` returns to the board.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. Typing in live mode jumps back to the bottom.

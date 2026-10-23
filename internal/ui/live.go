@@ -198,6 +198,9 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		return m, nil
 	}
+	if msg.Type == tea.KeyCtrlZ {
+		return m, nil
+	}
 	t := m.current()
 	if t == nil {
 		return m, nil
