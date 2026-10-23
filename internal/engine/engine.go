@@ -1428,6 +1428,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			s.AgentSessionID = uuid.NewString()
 			s.Started = false
 			s.LastReply = ""
+			s.Summary = ""
 			s.EventsOffset = 0
 			os.Remove(events)
 		} else if info, err := os.Stat(events); err == nil {

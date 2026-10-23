@@ -104,6 +104,7 @@ type Session struct {
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
 	Pending            []Pending `json:"pending,omitempty"`
 	LastReply          string    `json:"lastReply,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`

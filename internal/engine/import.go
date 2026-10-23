@@ -194,7 +194,7 @@ func (e *Engine) pollExternal() []func() {
 		path := s.TranscriptPath
 		out = append(out, func() {
 			reply := claude.LastAssistantText(path)
-			e.with(func() { s.LastReply = reply })
+			e.with(func() { s.LastReply, s.Summary = reply, "" })
 		})
 	}
 	for _, t := range e.state.Tasks {

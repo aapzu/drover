@@ -208,7 +208,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			reply := ev.Reply()
 			s.LastReply = reply
+			s.Summary = ""
 			out = append(out, func() { e.scanUsage(taskID, key) })
+			out = append(out, func() { e.summarize(taskID, key, reply) })
 			next := func() {
 				if owner := e.taskByID(taskID); !e.shipTask(owner) {
 					e.flushPending(owner, key)
