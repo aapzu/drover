@@ -1205,10 +1205,10 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	name := ""
 	if busy {
 		name = sess.Tmux
+		sess.RespawnPending = true
 	}
 	e.mu.Unlock()
 	if busy {
-		e.with(func() { sess.RespawnPending = true })
 		if interrupt {
 			unlock := e.lockTyping(name)
 			err := tmux.SendKey(name, "Escape")
