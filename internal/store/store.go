@@ -102,8 +102,11 @@ type Session struct {
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
-	Pending            []Pending `json:"pending,omitempty"`
-	LastReply          string    `json:"lastReply,omitempty"`
+	// AutomatedPrompt is the automation message typed into the agent, until
+	// its hooks report the prompt.
+	AutomatedPrompt string    `json:"automatedPrompt,omitempty"`
+	Pending         []Pending `json:"pending,omitempty"`
+	LastReply       string    `json:"lastReply,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -179,8 +182,9 @@ func (p *PR) IsReview() bool { return p != nil && p.Review }
 
 // Pending is a message waiting for the session to become idle.
 type Pending struct {
-	Text     string `json:"text"`
-	Relocate string `json:"relocate,omitempty"`
+	Text      string `json:"text"`
+	Relocate  string `json:"relocate,omitempty"`
+	Automated bool   `json:"automated,omitempty"`
 }
 
 type LogEntry struct {

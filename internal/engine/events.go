@@ -169,7 +169,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
-			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
+			automated := s.AutomatedPrompt != "" && prompt == s.AutomatedPrompt
+			s.AutomatedPrompt = ""
+			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && !automated && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
 				out = append(out, func() { e.reopenReview(taskID, visit) })
 			}
 			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {

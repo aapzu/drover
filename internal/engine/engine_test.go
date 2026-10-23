@@ -40,6 +40,7 @@ turn() {
   case "$1" in
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
     *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
+    *AUTOMATED*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"AUTOMATED the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
@@ -704,6 +705,41 @@ func TestPromptInReviewMovesCardBack(t *testing.T) {
 	waitFor(t, e, "the prompt to move the card to Executing", func(t *store.Task) bool {
 		return t.ColumnID == "exec"
 	})
+}
+
+func TestAutomationPromptInReviewKeepsCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","automations":{"onTurnEnd":[{"name":"Nudge","type":"send_message","message":"AUTOMATED the footer"}]}},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the automation to prompt the agent twice", func(t *store.Task) bool {
+		runs := 0
+		for _, entry := range t.Log {
+			if strings.Contains(entry.Text, `"Nudge" ran`) {
+				runs++
+			}
+		}
+		return runs >= 2
+	})
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("an automation's prompt moved the card to %s", got)
+	}
 }
 
 // A manual start in a column without autoSpawn can still be queued, and must

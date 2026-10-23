@@ -1517,6 +1517,9 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 	if p.Relocate != "" {
 		s.Relocate = p.Relocate
 	}
+	if p.Automated {
+		s.AutomatedPrompt = strings.TrimSpace(p.Text)
+	}
 	s.UpdatedAt = time.Now()
 	e.mu.Unlock()
 
@@ -1527,6 +1530,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		if err != nil {
 			s.Activity = store.ActivityIdle
 			s.Relocate = ""
+			s.AutomatedPrompt = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
 	})

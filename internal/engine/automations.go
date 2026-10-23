@@ -294,7 +294,7 @@ func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) 
 		e.mu.Lock()
 		owner := e.owner(t)
 		e.mu.Unlock()
-		e.sendMessage(owner, store.MainSession, e.render(t, row.Message, gc, false))
+		e.sendPending(owner, store.MainSession, store.Pending{Text: e.render(t, row.Message, gc, false), Automated: true})
 	case "run_script":
 		err = e.runShellRow(t, row, row.Script, gc)
 	case "notify":
