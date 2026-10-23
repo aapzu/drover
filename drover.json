@@ -6,7 +6,8 @@
       "id": "todo",
       "name": "Sessions",
       "role": "todo",
-      "color": "#6b7280"
+      "color": "#6b7280",
+      "permissionMode": "plan"
     },
     {
       "id": "planning",

@@ -90,6 +90,13 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	}
 }
 
+func TestDefaultSessionsColumnIsPlanMode(t *testing.T) {
+	b := Default()
+	if got := b.PermissionMode(b.TodoColumn()); got != "plan" {
+		t.Errorf("default Sessions mode = %q, want plan", got)
+	}
+}
+
 func TestReviewFlow(t *testing.T) {
 	load := func(flow string) (*Board, error) {
 		dir := t.TempDir()

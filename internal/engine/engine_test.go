@@ -320,6 +320,29 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 }
 
+func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"Sessions","role":"todo","permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the session to launch", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 1
+	})
+	if launch := readFile(log); !strings.Contains(launch, "--permission-mode\nplan") {
+		t.Errorf("a new session should launch in its column's plan mode:\n%s", launch)
+	}
+}
+
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[

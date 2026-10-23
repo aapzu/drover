@@ -359,7 +359,7 @@ func Default() *Board {
 		Notifications:    DefaultNotifications(),
 		AutoName:         true,
 		Columns: []Column{
-			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280"},
+			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
 			{ID: "self-review", Name: "Self-review", Color: "#06b6d4", AutoSpawn: true,
