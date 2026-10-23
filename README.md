@@ -294,9 +294,9 @@ a PR is in review:
 ```json
 "automations": {
   "onEnter": [
-    { "name": "Remove extra comments", "type": "send_message", "message": "Run comment-destroyer subagent" },
-    { "name": "Simplify", "type": "send_message", "message": "/simplify" },
-    { "name": "Review", "type": "send_message", "message": "/pr-review-toolkit:review-pr" },
+    { "name": "Remove extra comments", "type": "send_message", "message": "If you already ran the comment-destroyer subagent on the current diff, skip this. Otherwise run it." },
+    { "name": "Simplify", "type": "send_message", "message": "If you already ran /simplify on the current diff, skip this. Otherwise run /simplify." },
+    { "name": "Review", "type": "send_message", "message": "If you already ran /pr-review-toolkit:review-pr on the current diff, skip this. Otherwise run it." },
     { "name": "Build", "type": "run_script", "script": "go build ./... && go vet ./..." },
     { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],
