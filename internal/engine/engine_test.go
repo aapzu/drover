@@ -2687,17 +2687,21 @@ func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
+	waitFor(t, e, "the session to go idle", func(card *store.Task) bool {
+		s := card.Sessions[store.MainSession]
 		return s != nil && s.Activity == store.ActivityIdle
 	})
+	launches := strings.Split(readFile(log), "---")
+	if !strings.Contains(launches[0], "--permission-mode\nplan") {
+		t.Fatalf("the session should start in plan mode before the move:\n%s", launches[0])
+	}
 	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	waitForAll(t, e, "the agent to restart in the work column", func([]*store.Task) bool {
 		return strings.Count(readFile(log), "---") >= 2
 	})
-	launches := strings.Split(readFile(log), "---")
+	launches = strings.Split(readFile(log), "---")
 	if strings.Contains(launches[1], "--permission-mode") {
 		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
 	}
