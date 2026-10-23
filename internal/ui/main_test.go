@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 
 func TestStateStaysInTempDir(t *testing.T) {
 	state := os.Getenv("XDG_STATE_HOME")
-	if state == "" || !strings.HasPrefix(store.Dir("/repo"), state) {
+	if !strings.HasPrefix(state, filepath.Clean(os.TempDir())+string(filepath.Separator)) || !strings.HasPrefix(store.Dir("/repo"), state) {
 		t.Fatalf("state for /repo is not under XDG_STATE_HOME %q", state)
 	}
 }
