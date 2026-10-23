@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,11 @@ var Socket = func() string {
 	}
 	return "drover"
 }()
+
+var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+// SafeName makes s usable inside a session name.
+func SafeName(s string) string { return nonName.ReplaceAllString(s, "-") }
 
 // DetachKey returns from an attached session to the board.
 const DetachKey = "C-q"

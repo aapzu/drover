@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -750,10 +749,8 @@ func (e *Engine) SuspendAll() []Handoff {
 	return out
 }
 
-var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-
 func (e *Engine) tmuxName(t *store.Task) string {
-	project := nonName.ReplaceAllString(e.ProjectName, "-")
+	project := tmux.SafeName(e.ProjectName)
 	return fmt.Sprintf("%s-%d-%s", project, t.Number, t.ID[:6])
 }
 

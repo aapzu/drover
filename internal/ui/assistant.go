@@ -125,10 +125,8 @@ func (m *Model) openAssistant(fresh bool) tea.Cmd {
 		if fresh {
 			m.setFlash("The assistant is still starting; press " + newAskKey + " again once it has")
 		}
-	case fresh:
-		cmds = append(cmds, m.startAssistantSession(true))
-	case !m.assist.running():
-		cmds = append(cmds, m.startAssistantSession(false))
+	case fresh || !m.assist.running():
+		cmds = append(cmds, m.startAssistantSession(fresh))
 	default:
 		cmds = append(cmds, m.captureAssistantCmd())
 	}
@@ -144,7 +142,8 @@ func (m *Model) focusAssistant() tea.Cmd {
 func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	board := m.snap.Board
 	if board == nil {
-		return m.finishAssistantStart(assistantStartedMsg{epoch: m.assist.epoch, err: errors.New("the board isn't loaded yet")})
+		m.failAssistantStart(errors.New("the board isn't loaded yet"))
+		return nil
 	}
 	m.assist.session, m.assist.lastErr = sessionStarting, nil
 	m.assist.clearFrame()
@@ -161,6 +160,11 @@ func (m *Model) startAssistantSession(fresh bool) tea.Cmd {
 	}
 }
 
+func (m *Model) failAssistantStart(err error) {
+	m.assist.fail(err)
+	m.setFlash("Starting the assistant failed: " + err.Error())
+}
+
 func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 	if msg.created {
 		m.assist.owns = true
@@ -169,8 +173,7 @@ func (m *Model) finishAssistantStart(msg assistantStartedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
-		m.assist.fail(msg.err)
-		m.setFlash("Starting the assistant failed: " + msg.err.Error())
+		m.failAssistantStart(msg.err)
 		return nil
 	}
 	m.assist.session = sessionRunning

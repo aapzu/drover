@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -49,10 +48,8 @@ var (
 	}
 )
 
-var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-
 func SessionName(root string) string {
-	return nonName.ReplaceAllString(filepath.Base(store.Dir(root)), "-") + "-assistant"
+	return tmux.SafeName(filepath.Base(store.Dir(root))) + "-assistant"
 }
 
 func SessionID(root string) string {
