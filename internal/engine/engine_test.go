@@ -728,7 +728,6 @@ func TestAutomationPromptInReviewKeepsCard(t *testing.T) {
 	if err := e.Start(task.ID); err != nil {
 		t.Fatal(err)
 	}
-	// The flag is cleared when the hook reports the second automated prompt.
 	waitFor(t, e, "the automated prompt to be reported twice", func(t *store.Task) bool {
 		runs := 0
 		for _, entry := range t.Log {
