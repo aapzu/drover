@@ -9,8 +9,7 @@
       "Bash(git worktree list *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
-      "Bash(go build ./...)",
-      "Bash(go test ./...)"
+      "Bash(go build ./...)"
     ]
   }
 }
