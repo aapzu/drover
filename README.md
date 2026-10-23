@@ -309,9 +309,9 @@ The column's automations, trimmed to the review and PR steps:
 ```json
 "automations": {
   "onEnter": [
-    { "name": "Remove extra comments", "type": "send_message", "message": "Run comment-destroyer subagent" },
-    { "name": "Simplify", "type": "send_message", "message": "/simplify" },
-    { "name": "Review", "type": "send_message", "message": "/pr-review-toolkit:review-pr" },
+    { "name": "Remove extra comments", "type": "send_message", "message": "Run comment-destroyer subagent unless you already ran it on the current diff." },
+    { "name": "Simplify", "type": "send_message", "message": "Run /simplify unless you already ran it on the current diff." },
+    { "name": "Review", "type": "send_message", "message": "Run /pr-review-toolkit:review-pr unless you already ran it on the current diff." },
     { "name": "Build", "type": "run_script", "script": "go build ./... && go vet ./..." },
     { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],

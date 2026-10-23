@@ -5,7 +5,7 @@ A Go (Bubble Tea) TUI; see `README.md` for what it does. Code is `main.go` plus 
 ## Rules
 
 - **Always work in a git worktree; never edit files in the main checkout**, even for a one-line fix. If you're already in a worktree (e.g. `.kangentic/worktrees/<N>`), work there. Otherwise create one before editing. The main checkout may hold someone else's uncommitted work, so don't edit, stash, or reset it.
-- **If something doesn't work in the sandbox, run it outside the sandbox.** Git worktree and branch operations, tmux, `gh`, the Go build cache, network access and writes outside the repo are the usual failures. Retry the failing command with the sandbox disabled instead of working around it or giving up. Don't skip a step because it failed once in the sandbox.
+- **If something doesn't work in the sandbox, run it outside the sandbox.** Git worktree and branch operations, commit signing, `git push`, tmux, `gh`, the Go build cache, network access and writes outside the repo are the usual failures. Retry the failing command with the sandbox disabled instead of working around it or giving up. Don't skip a step because it failed once in the sandbox.
 
 ## Workflow
 
