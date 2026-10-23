@@ -1424,6 +1424,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		if prompt != "" {
 			s.Activity = store.ActivityThinking
 			s.TurnInVisit = true
+			markSent(s, prompt)
 		}
 	})
 	if stop != "" {
@@ -1504,6 +1505,9 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		s.Relocate = p.Relocate
 	}
 	s.UpdatedAt = time.Now()
+	if !p.User {
+		markSent(s, p.Text)
+	}
 	e.mu.Unlock()
 
 	defer e.lockTyping(name)()
@@ -1512,7 +1516,11 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		s.UpdatedAt = time.Now()
 		if err != nil {
 			s.Activity = store.ActivityIdle
+			s.TurnInVisit = false
 			s.Relocate = ""
+			if !p.User {
+				takeSent(s, p.Text)
+			}
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
 	})
@@ -1539,7 +1547,7 @@ func (e *Engine) Send(id, text string) error {
 	if t == nil {
 		return errors.New("no running agent for this task")
 	}
-	e.sendMessage(t, store.MainSession, text)
+	e.sendPending(t, store.MainSession, store.Pending{Text: text, User: true})
 	return nil
 }
 

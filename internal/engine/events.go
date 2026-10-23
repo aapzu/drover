@@ -143,6 +143,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Started = true
 			s.TurnInVisit = true
 			prompt := strings.TrimSpace(ev.Prompt)
+			own := takeSent(s, prompt)
 			typed := prompt != "" && !strings.HasPrefix(prompt, "/")
 			if t.Title == "" && typed {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
@@ -165,7 +166,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
-			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
+			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && !own && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
 				out = append(out, func() { e.reopenReview(taskID, visit) })
 			}
 			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
@@ -222,6 +223,23 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		}
 	}
 	return out
+}
+
+// markSent records a prompt drover sends to s. Called with mu held.
+func markSent(s *store.Session, prompt string) {
+	s.Sent = append(s.Sent, strings.TrimSpace(prompt))
+}
+
+// takeSent reports whether prompt is one drover sent to s, and forgets that
+// send. Called with mu held.
+func takeSent(s *store.Session, prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	i := slices.Index(s.Sent, prompt)
+	if i < 0 {
+		return false
+	}
+	s.Sent = slices.Delete(s.Sent, i, i+1)
+	return true
 }
 
 // checkInterrupted returns follow-ups that find working sessions whose turn

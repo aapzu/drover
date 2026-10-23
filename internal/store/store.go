@@ -101,6 +101,9 @@ type Session struct {
 	Relocate  string    `json:"relocate,omitempty"`
 	Pending   []Pending `json:"pending,omitempty"`
 	LastReply string    `json:"lastReply,omitempty"`
+
+	Sent []string `json:"-"`
+
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -175,6 +178,7 @@ func (p *PR) IsReview() bool { return p != nil && p.Review }
 type Pending struct {
 	Text     string `json:"text"`
 	Relocate string `json:"relocate,omitempty"`
+	User     bool   `json:"user,omitempty"`
 }
 
 type LogEntry struct {

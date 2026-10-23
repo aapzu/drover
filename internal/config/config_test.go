@@ -149,6 +149,17 @@ func TestWorktreesDirMustNotContainRoot(t *testing.T) {
 	}
 }
 
+func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
+	col, _, ok := Default().Column("executing")
+	if !ok || len(col.Automations.OnTurnEnd) != 1 {
+		t.Fatalf("default executing column has no turn-end rule: %+v", col)
+	}
+	row := col.Automations.OnTurnEnd[0]
+	if row.Type != "move_to_column" || row.TargetColumn != "self-review" || row.Condition == "" {
+		t.Fatalf("default turn-end rule: %+v", row)
+	}
+}
+
 func TestPRFlow(t *testing.T) {
 	if err := Default().validate(); err != nil {
 		t.Fatalf("default board: %v", err)

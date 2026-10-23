@@ -20,7 +20,7 @@ import (
 
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
+  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *ASKS_ME*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""
@@ -41,6 +41,8 @@ turn() {
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
     *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
+    *"Idle agent"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"Idle agent"}';;
+    *AUTOMATION*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"AUTOMATION review"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
   sleep 0.2
@@ -65,6 +67,7 @@ turn() {
   esac
   case "$1" in
     /code-review*) reply='Looks fine.\nVerdict: Ready';;
+    *ASKS_ME*) reply='Ready to merge. ASKS_ME: should I?';;
     *) reply='Did the work.\n\nFindings: applied';;
   esac
   emit "{\"hook_event_name\":\"Stop\",\"last_assistant_message\":\"$reply\"}"
@@ -646,6 +649,59 @@ func TestPromptInReviewMovesCardBack(t *testing.T) {
 	waitFor(t, e, "the prompt to move the card to Executing", func(t *store.Task) bool {
 		return t.ColumnID == "exec"
 	})
+}
+
+func TestAutomationPromptsInReviewStayPut(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","autoSpawn":true,
+	    "automations":{"onEnter":[{"name":"Review","type":"send_message","message":"AUTOMATION review"}]}},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the automation's turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("automation prompt moved the card to %s", got)
+	}
+}
+
+func TestAutomationSentToIdleAgentInReviewStaysPut(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","autoSpawn":true,
+	    "automations":{"onEnter":[{"name":"Review","type":"send_message","message":"AUTOMATION review"}]}},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`)
+
+	task := e.CreateTask("Idle agent", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the automation's turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return hasLog(t, `Automation "Review" ran`) && s != nil && s.Activity == store.ActivityIdle && len(s.Sent) == 0
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("automation prompt moved the card to %s", got)
+	}
 }
 
 // A manual start in a column without autoSpawn can still be queued, and must
@@ -2495,5 +2551,60 @@ func TestTickArchivesStaleDoneCards(t *testing.T) {
 	}
 	if !reloaded.Snapshot().Tasks[0].Archived {
 		t.Error("archived state didn't survive a reload")
+	}
+}
+
+func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
+	for _, c := range []struct{ title, want string }{
+		{"ASKS_ME ready to merge?", "self-review"},
+		{"Plain work", "exec"},
+	} {
+		t.Run(c.title, func(t *testing.T) {
+			e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,
+	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"self-review",
+	      "condition":"The reply ends by asking me for a decision or input"}]}},
+	  {"id":"self-review","name":"Waiting for me","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+
+			task := e.CreateTask(c.title, "")
+			if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, e, "the turn-end rule to decide", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				if s == nil || !s.Started || s.Activity != store.ActivityIdle {
+					return false
+				}
+				return t.ColumnID == "self-review" || hasLog(t, "condition not met")
+			})
+			if got := e.Snapshot().Tasks[0].ColumnID; got != c.want {
+				t.Fatalf("card in %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+func TestTurnEndMoveStillShipsPR(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,
+	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"self-review",
+	      "condition":"The reply ends by asking me for a decision or input"}]}},
+	  {"id":"self-review","name":"Waiting for me","autoSpawn":true},
+	  {"id":"review","name":"In review"},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`)
+
+	task := e.CreateTask("ONEPR ASKS_ME merge?", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the PR to ship to In review", func(t *store.Task) bool {
+		return t.ColumnID == "review"
+	})
+	if !hasLog(e.Snapshot().Tasks[0], "moving to Waiting for me") {
+		t.Fatal("the card did not pass through Waiting for me")
 	}
 }

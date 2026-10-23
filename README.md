@@ -151,6 +151,8 @@ open, and to Verify in develop once it merges:
 | Verify in develop | Plain |
 | Done | Done |
 
+When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check.
+
 ## How it works
 
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
