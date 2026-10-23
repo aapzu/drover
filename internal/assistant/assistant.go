@@ -189,6 +189,8 @@ func describeColumns(b *config.Board) string {
 			what = "no agent; a card moved here loses its worktree and conversation"
 		case c.IsDone():
 			what = "finished cards; the agent stops and the worktree is kept until the card is archived"
+		case c.KeepAgent:
+			what = "a running agent is kept instead of suspended, and none starts here"
 		case c.IsAgent():
 			what = "an agent works on the card"
 			if c.PermissionMode != "" {

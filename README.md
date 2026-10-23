@@ -129,7 +129,7 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   `keepAgent` (not allowed on `autoSpawn`, To Do or Done columns) leaves a
   running agent running when a card moves in, instead of suspending it. The
   column itself starts no agent, and the kept agent keeps its model, effort and
-  permission mode rather than switching them to the column's. The idle timeout and slot evictions skip
+  permission mode rather than switching them to the column's, unless it must move into its worktree. The idle timeout and slot evictions skip
   its agent, though it still counts toward `maxConcurrent`.
 - **Automations.** Columns run rows when a card enters them or an agent's
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
@@ -163,7 +163,7 @@ These settings work in `drover.json` and, for you alone, in
 ```
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
-  except that a start you make suspends the agent that has been idle longest, outside a keepAgent column.
+  except that a start you make suspends the agent that has been idle longest, but never one in a `keepAgent` column.
 - **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
   except one in a `keepAgent` column.
   `r` resumes it. 0, the default, never does.

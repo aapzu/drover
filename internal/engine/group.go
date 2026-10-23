@@ -26,6 +26,10 @@ func (e *Engine) sessionColumn(owner *store.Task) config.Column {
 	return col
 }
 
+// keepsAgent reports whether owner's agent sits in a keepAgent column, which
+// suspensions leave alone. Called with mu held.
+func (e *Engine) keepsAgent(owner *store.Task) bool { return e.sessionColumn(owner).KeepAgent }
+
 func isAgentColumn(c config.Column) bool { return c.IsAgent() }
 
 // workColumn is where the work happens: the first agent column that isn't a

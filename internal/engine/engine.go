@@ -521,15 +521,19 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	var nextDriver string
 	if t != nil {
 		owner = e.owner(t)
+		ownerSess := owner.Sessions[store.MainSession]
+		ownerRunning := ownerSess != nil && ownerSess.Status == store.StatusRunning
 		from, _, _ = board.Column(t.ColumnID)
 		for _, m := range store.Members(e.state.Tasks, owner) {
 			if m == t {
 				continue
 			}
 			col, _, _ := board.Column(m.ColumnID)
-			if isAgentColumn(col) || col.KeepAgent {
+			if isAgentColumn(col) || col.KeepAgent && ownerRunning {
 				othersActive = true
-				nextDriver = m.ID
+				if nextDriver == "" || isAgentColumn(col) {
+					nextDriver = m.ID
+				}
 			}
 			othersEnded = othersEnded && (col.IsTodo() || col.IsDone())
 			othersTodo = othersTodo && col.IsTodo()
@@ -554,7 +558,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
 	sess := owner.Sessions[store.MainSession]
-	keeps := sess != nil && sess.Status == store.StatusRunning && target.KeepAgent && drives
+	keeps := sess != nil && sess.Status == store.StatusRunning && sess.Activity != store.ActivityStarting && target.KeepAgent && drives
 	e.mu.Unlock()
 
 	e.with(func() {
@@ -1296,7 +1300,7 @@ func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t || e.sessionColumn(o).KeepAgent {
+		if o == t || e.keepsAgent(o) {
 			continue
 		}
 		for _, s := range o.Sessions {
