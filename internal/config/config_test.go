@@ -155,7 +155,7 @@ func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
 		t.Fatalf("default executing column has no turn-end rule: %+v", col)
 	}
 	row := col.Automations.OnTurnEnd[0]
-	if row.Type != "move_to_column" || row.TargetColumn != "self-review" || row.Condition == "" {
+	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
 		t.Fatalf("default turn-end rule: %+v", row)
 	}
 }
