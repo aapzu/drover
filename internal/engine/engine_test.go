@@ -1543,6 +1543,51 @@ func TestClosingStopsBackgroundConversation(t *testing.T) {
 	}
 }
 
+func TestDiscardSilentDropsOnlyUntouchedNewSessions(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	var elsewhere string
+	for _, c := range e.board.Columns {
+		if !c.IsTodo() {
+			elsewhere = c.ID
+			break
+		}
+	}
+	newCard := func(title string, scratch bool) *store.Task {
+		task := e.CreateTask(title, "")
+		e.with(func() {
+			task.Sessions = map[string]*store.Session{store.MainSession: {Key: store.MainSession, Scratch: scratch}}
+		})
+		return task
+	}
+	silent := newCard("", true)
+	titled := newCard("Titled", true)
+	moved := newCard("", true)
+	e.with(func() { moved.ColumnID = elsewhere })
+	notScratch := newCard("", false)
+	withWorktree := newCard("", true)
+	e.with(func() { withWorktree.WorktreePath = "/elsewhere" })
+	slashOnly := newCard("", true)
+	e.with(func() { slashOnly.Sessions[store.MainSession].Started = true })
+
+	for _, task := range []*store.Task{silent, titled, moved, notScratch, withWorktree, slashOnly} {
+		if err := e.DiscardSilent(task.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	found := map[string]bool{}
+	for _, x := range e.Snapshot().Tasks {
+		found[x.ID] = true
+	}
+	if found[silent.ID] {
+		t.Error("a new session left without a message should be dropped")
+	}
+	for name, task := range map[string]*store.Task{"titled": titled, "moved out of To Do": moved, "not a scratch session": notScratch, "with a worktree": withWorktree, "started": slashOnly} {
+		if !found[task.ID] {
+			t.Errorf("a %s card should be kept", name)
+		}
+	}
+}
+
 func TestClosingLeavesTerminalConversationAndSaysSo(t *testing.T) {
 	e := newEngineWithClaudeDir(t)
 	exited := liveConversation(t, "in-terminal", "interactive")

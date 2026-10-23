@@ -196,6 +196,9 @@ func (m Model) startLive() (Model, tea.Cmd) {
 func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == liveExitKey {
 		m.mode = modeBoard
+		if t := m.current(); t != nil {
+			return m, m.discardSilent(t.ID)
+		}
 		return m, nil
 	}
 	if msg.Type == tea.KeyCtrlZ {

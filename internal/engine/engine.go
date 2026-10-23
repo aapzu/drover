@@ -332,6 +332,25 @@ func (e *Engine) NewSession() (*store.Task, error) {
 	return task, nil
 }
 
+// DiscardSilent deletes a card whose scratch session never started, and stops
+// its agent. A card that is titled, has a worktree, has left To Do, or has a
+// started conversation is kept.
+func (e *Engine) DiscardSilent(id string) error {
+	t, owner, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return nil
+	}
+	e.mu.Lock()
+	s := scratchSession(t)
+	silent := s != nil && !s.Started && t.Title == "" && t.WorktreePath == "" && t.ColumnID == e.board.TodoColumn().ID
+	e.mu.Unlock()
+	if !silent {
+		return nil
+	}
+	return e.deleteCard(t, owner)
+}
+
 // startScratch runs t's conversation in the main checkout. The caller holds
 // the task lock.
 func (e *Engine) startScratch(t *store.Task, fresh bool) error {
@@ -364,6 +383,11 @@ func (e *Engine) DeleteTask(id string) error {
 	if t == nil {
 		return nil
 	}
+	return e.deleteCard(t, owner)
+}
+
+// deleteCard is DeleteTask once the card's group is locked.
+func (e *Engine) deleteCard(t, owner *store.Task) error {
 	e.mu.Lock()
 	members := store.Members(e.state.Tasks, owner)
 	e.mu.Unlock()
@@ -378,7 +402,7 @@ func (e *Engine) DeleteTask(id string) error {
 			e.handOver(owner, members[1])
 		}
 		for i, x := range e.state.Tasks {
-			if x.ID == id {
+			if x.ID == t.ID {
 				e.state.Tasks = append(e.state.Tasks[:i], e.state.Tasks[i+1:]...)
 				break
 			}

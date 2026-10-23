@@ -61,6 +61,7 @@ type actionDoneMsg struct {
 }
 type attachDoneMsg struct {
 	id       string
+	agent    bool
 	paneGone bool
 	err      error
 }
@@ -533,6 +534,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncFocus()
 		m.applySnap(m.eng.Snapshot())
 		var cmds []tea.Cmd
+		if msg.agent {
+			if cmd := m.discardSilent(msg.id); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
 			cmds = append(cmds, tea.EnableMouseCellMotion)
@@ -681,6 +687,15 @@ func (m Model) action(id, label string, fn func() error) tea.Cmd {
 	})
 }
 
+// discardSilent asks the engine to drop the card if it is still untitled.
+func (m Model) discardSilent(id string) tea.Cmd {
+	if t := m.task(id); t == nil || t.Title != "" {
+		return nil
+	}
+	eng := m.eng
+	return m.action(id, "discarding", func() error { return eng.DiscardSilent(id) })
+}
+
 // runOp marks the card busy, runs work off the UI thread and returns its
 // result with the board as it stands afterwards. A card runs one op at a time.
 func runOp(eng snapshotter, busy map[string]op, id string, o op, work func() actionDoneMsg) tea.Cmd {
@@ -705,7 +720,7 @@ func (m *Model) attach(id string) (tea.Cmd, bool) {
 	m.attached = id
 	m.syncFocus()
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
-		return attachDoneMsg{id: id, paneGone: !tmux.Has(name), err: err}
+		return attachDoneMsg{id: id, agent: true, paneGone: !tmux.Has(name), err: err}
 	}), true
 }
 
