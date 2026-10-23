@@ -83,6 +83,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 	t := store.Driver(e.state.Tasks, owner)
 	col, idx, _ := e.board.Column(t.ColumnID)
 	board := e.board
+	fixing := t.PR != nil && t.PR.FixFrom != ""
 	e.mu.Unlock()
 
 	if sessKey == store.MainSession {
@@ -95,8 +96,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 				e.execute(t, row, gc)
 				continue
 			}
-			if t.PR != nil && t.PR.FixFrom != "" {
-				// A fix turn that pushes returns the card to the opened column.
+			if fixing {
 				e.logf(t, "Automation %q skipped: fixing review comments", rowName(row))
 				continue
 			}
@@ -110,9 +110,8 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			e.logf(t, "Automation %q: moving to %s", rowName(row), target.Name)
 			err := e.moveLocked(t.ID, target.ID, MoveOptions{Message: message})
 			if err == nil {
-				if !e.shipOpenedPR(owner) {
-					e.flushPending(owner, sessKey)
-				}
+				e.shipOpenedPR(owner)
+				e.flushPending(owner, sessKey)
 				return
 			}
 			e.logf(t, "Automation %q: move to %s failed: %v", rowName(row), target.Name, err)
