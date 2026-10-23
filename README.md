@@ -356,11 +356,7 @@ board uses:
   each further PR's card starts.
 - **changesRequested:** a new review requesting changes moves a card from
   `opened` here and sends the agent `changesRequestedMessage`. Once the agent
-  has pushed a new head and is idle, the card goes back to `opened`. Any
-  prompt to the agent of a card in `opened` also moves it here, without running
-  the column's enter automations. It returns to `opened` once the agent pushes a
-  new head to the card's PR. This column must have `autoSpawn`, or the prompt
-  doesn't move the card.
+  has pushed a new head and is idle, the card goes back to `opened`.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
 - **released:** once the merge commit reaches `releaseBranch` on origin
