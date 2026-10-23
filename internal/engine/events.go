@@ -69,6 +69,7 @@ func (e *Engine) Tick() {
 		}
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
+		followUps = append(followUps, e.backgroundScans()...)
 		followUps = append(followUps, e.dequeue()...)
 		if time.Since(e.lastPoll) > 1500*time.Millisecond {
 			e.lastPoll = time.Now()
@@ -123,6 +124,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				continue
 			}
 			s.Forked = ev.Source == "fork"
+			if ev.Source == "startup" || ev.Source == "resume" {
+				s.Background = nil
+			}
 			if ev.TranscriptPath != "" {
 				s.TranscriptPath = ev.TranscriptPath
 			}
@@ -143,7 +147,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Started = true
 			s.TurnInVisit = true
 			prompt := strings.TrimSpace(ev.Prompt)
-			own := takeSent(s, prompt)
 			typed := prompt != "" && !strings.HasPrefix(prompt, "/")
 			if t.Title == "" && typed {
 				t.Title, t.Prompt = claude.FirstLine(prompt), prompt
@@ -166,9 +169,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
-			if f := e.board.PRFlow; f != nil && f.ChangesRequested != "" && prompt != "" && !own && e.inColumn(store.Driver(e.state.Tasks, t), f.Opened) {
-				out = append(out, func() { e.reopenReview(taskID, visit) })
-			}
 			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
 				e.addPRs(t, urls, true)
 			}
@@ -180,6 +180,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if id, ok := ev.BackgroundAgent(); ok {
+				s.Background = append(s.Background, id)
+			}
 			if ev.ToolName == "ExitPlanMode" {
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
@@ -225,21 +228,43 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 	return out
 }
 
-// markSent records a prompt drover sends to s. Called with mu held.
-func markSent(s *store.Session, prompt string) {
-	s.Sent = append(s.Sent, strings.TrimSpace(prompt))
-}
-
-// takeSent reports whether prompt is one drover sent to s, and forgets that
-// send. Called with mu held.
-func takeSent(s *store.Session, prompt string) bool {
-	prompt = strings.TrimSpace(prompt)
-	i := slices.Index(s.Sent, prompt)
-	if i < 0 {
-		return false
+// backgroundScans returns follow-ups that read the transcripts of sessions with
+// background agents for the completion notices of those agents. Called with mu
+// held.
+func (e *Engine) backgroundScans() []func() {
+	var out []func()
+	for _, t := range e.state.Tasks {
+		for key, s := range t.Sessions {
+			if s.Status != store.StatusRunning || !s.HasBackground() {
+				continue
+			}
+			path := e.transcriptOf(t, s)
+			if path == "" {
+				continue
+			}
+			if _, scanning := e.backgroundScanning.LoadOrStore(s, true); scanning {
+				continue
+			}
+			taskID, offset := t.ID, s.BackgroundScan
+			if s.BackgroundScanPath != path {
+				offset = 0
+			}
+			out = append(out, func() {
+				defer e.backgroundScanning.Delete(s)
+				done, next, err := claude.BackgroundDone(path, offset)
+				if err != nil {
+					return
+				}
+				e.with(func() {
+					if task := e.find(taskID); task != nil && task.Sessions[key] == s {
+						s.Background = slices.DeleteFunc(s.Background, func(id string) bool { return slices.Contains(done, id) })
+						s.BackgroundScanPath, s.BackgroundScan = path, next
+					}
+				})
+			})
+		}
 	}
-	s.Sent = slices.Delete(s.Sent, i, i+1)
-	return true
+	return out
 }
 
 // checkInterrupted returns follow-ups that find working sessions whose turn
@@ -280,6 +305,7 @@ func (e *Engine) checkInterrupted() []func() {
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {
+					e.respawnPending(taskID, key)
 					e.flushPending(task, key)
 				}
 			})
@@ -297,6 +323,7 @@ func (e *Engine) followBackground(t *store.Task, s *store.Session) func() {
 	s.Status = store.StatusExternal
 	s.Activity = store.ActivityIdle
 	s.Pending = nil
+	s.Background = nil
 	s.PID = 0
 	if l, ok := claude.Running()[s.AgentSessionID]; ok {
 		s.PID = l.PID
@@ -348,53 +375,6 @@ func (e *Engine) planExit(taskID string, visit int) {
 			s.RespawnPending = false
 		}
 	})
-}
-
-// reopenReview moves the card the agent works for from the prFlow's opened
-// column to its changesRequested column when the agent gets a prompt while the
-// card is in opened, since it is working again. The move skips the target's
-// enter automations and does nothing unless that column has autoSpawn. It
-// records the PR's head in FixFrom, so prStep moves the card back to opened
-// once the agent pushes a new head and is idle.
-func (e *Engine) reopenReview(taskID string, visit int) {
-	unlock := e.lockTask(taskID)
-	defer unlock()
-	e.mu.Lock()
-	t := e.find(taskID)
-	flow := e.board.PRFlow
-	if t == nil || t.Visit != visit || flow == nil {
-		e.mu.Unlock()
-		return
-	}
-	card := store.Driver(e.state.Tasks, t)
-	target, ok := e.board.Find(flow.ChangesRequested)
-	moves := ok && e.inColumn(card, flow.Opened) && target.ID != card.ColumnID
-	e.mu.Unlock()
-	if !moves || !isAgentColumn(target) {
-		return
-	}
-	e.logf(card, "Prompted in review, moving to %s", target.Name)
-	if err := e.moveLocked(card.ID, target.ID, MoveOptions{skipEnter: true}); err != nil {
-		e.notify("#%d: moving to %s failed: %v", card.Number, target.Name, err)
-		e.logf(card, "Review reopen move failed: %v", err)
-		// The column changes before the agent starts, so the card may have
-		// moved even though the agent didn't.
-		e.mu.Lock()
-		stayed := card.ColumnID != target.ID
-		e.mu.Unlock()
-		if stayed {
-			return
-		}
-	}
-	e.with(func() {
-		switch pr := card.PR; {
-		case pr == nil || pr.HeadSHA == "":
-			card.AddLog("PR head unknown, the card won't return to " + flow.Opened + " by itself")
-		default:
-			pr.FixFrom = pr.HeadSHA
-		}
-	})
-	e.claimTurn(t, taskID)
 }
 
 // shipTask runs shipOpenedPR under the task lock, if a move is pending.
@@ -514,7 +494,9 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 
 // respawnPending switches an agent whose card moved mid-turn into a column
 // with other settings, in place or by resuming its conversation, and restarts
-// one that was asked to move into its worktree but didn't.
+// one that was asked to move into its worktree but didn't. A keepAgent column
+// drops a pending settings switch and keeps the agent's settings, unless it
+// already has a move into its worktree pending.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -528,7 +510,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && (s.Relocate != "" || settingsDiffer(s, col, mode))
+		key == store.MainSession && (s.Relocate != "" || !col.KeepAgent && settingsDiffer(s, col, mode))
 	relocate := ""
 	if s != nil {
 		relocate = s.Relocate

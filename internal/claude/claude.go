@@ -128,6 +128,7 @@ type Event struct {
 	SessionID            string `json:"session_id"`
 	Source               string `json:"source"`
 	ToolName             string `json:"tool_name"`
+	ToolUseID            string `json:"tool_use_id"`
 	NotificationType     string `json:"notification_type"`
 	Message              string `json:"message"`
 	Prompt               string `json:"prompt"`
@@ -220,6 +221,21 @@ func ReviewedPRs(prompt string) []string {
 // reviewed.
 const reviewReach = 40
 
+// BackgroundAgent returns the tool use id of an Agent call that started its
+// agent in the background, which keeps working after the turn ends.
+func (e Event) BackgroundAgent() (string, bool) {
+	if e.ToolName != "Agent" {
+		return "", false
+	}
+	var res struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(e.ToolResponse, &res) != nil || res.Status != "async_launched" {
+		return "", false
+	}
+	return e.ToolUseID, true
+}
+
 // CreatedPRs returns the pull request URLs a Bash `gh pr create` or
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
 // looked at never count as its own.
@@ -299,6 +315,23 @@ func TranscriptPRs(path string, offset int64) ([]string, int64, error) {
 		}
 	})
 	return urls, offset, err
+}
+
+var taskNoticeID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+
+// BackgroundDone returns the tool use ids of background agents whose completion
+// notice was written after offset, and the new offset.
+func BackgroundDone(path string, offset int64) ([]string, int64, error) {
+	var ids []string
+	offset, err := readLines(path, offset, func(line []byte) {
+		if !bytes.Contains(line, []byte("<task-notification>")) {
+			return
+		}
+		for _, m := range taskNoticeID.FindAllSubmatch(line, -1) {
+			ids = append(ids, string(m[1]))
+		}
+	})
+	return ids, offset, err
 }
 
 // readLines calls fn with each complete line after offset and returns the

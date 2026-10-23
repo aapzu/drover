@@ -13,6 +13,23 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -28,13 +45,32 @@ jobs:
           git config --global user.name ci
           git config --global user.email ci@example.com
           git config --global init.defaultBranch main
-      - name: Check formatting
+      - name: Test packages other than engine
+        run: go list ./... | grep -v '/internal/engine$' | xargs go test
+
+  test-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Configure git identity
         run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "$unformatted"
+          git config --global user.name ci
+          git config --global user.email ci@example.com
+          git config --global init.defaultBranch main
+      - name: Test engine shard
+        run: |
+          tests=$(go test -list '^Test' ./internal/engine | grep '^Test' | awk -v s=${{ matrix.shard }} 'NR % 4 == s' | paste -sd'|' -)
+          if [ -z "$tests" ]; then
+            echo "no engine tests in shard ${{ matrix.shard }}"
             exit 1
           fi
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test ./...
+          go test -run "^($tests)\$" ./internal/engine

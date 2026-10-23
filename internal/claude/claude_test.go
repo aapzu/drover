@@ -145,6 +145,42 @@ func TestTranscriptPRs(t *testing.T) {
 	}
 }
 
+func TestBackgroundAgentAndDone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	background := `{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_use_id":"toolu_1",` +
+		`"tool_response":{"isAsync":true,"status":"async_launched","agentId":"a1"}}`
+	foreground := `{"hook_event_name":"PostToolUse","tool_name":"Agent","tool_use_id":"toolu_2",` +
+		`"tool_response":{"status":"completed","content":[]}}`
+	for _, line := range []string{background, foreground} {
+		RecordHook(path, strings.NewReader(line))
+	}
+	events, _, _ := ReadEvents(path, 0)
+	var got []string
+	for _, ev := range events {
+		if id, ok := ev.BackgroundAgent(); ok {
+			got = append(got, id)
+		}
+	}
+	if !slices.Equal(got, []string{"toolu_1"}) {
+		t.Fatalf("background agents %v, want [toolu_1]", got)
+	}
+
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(transcript, []byte(strings.Join([]string{
+		`{"type":"user","message":{"content":"hi"}}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n</task-notification>"}`,
+		"",
+	}, "\n")), 0o644)
+	ids, offset, err := BackgroundDone(transcript, 0)
+	if err != nil || !slices.Equal(ids, []string{"toolu_1"}) {
+		t.Fatalf("done %v, err %v", ids, err)
+	}
+	ids, _, _ = BackgroundDone(transcript, offset)
+	if len(ids) != 0 {
+		t.Errorf("after offset got %v", ids)
+	}
+}
+
 func TestAsksForPR(t *testing.T) {
 	for prompt, want := range map[string]bool{
 		"Looks good, open a PR":                      true,

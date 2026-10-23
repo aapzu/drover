@@ -161,3 +161,38 @@ func TestImportSplitsSessionThatOpenedSeveralPRs(t *testing.T) {
 		t.Errorf("re-importing added %d cards", n)
 	}
 }
+
+func TestDiscoverSessionsSkipsTheAssistantsConversation(t *testing.T) {
+	root, _ := setupProject(t)
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	os.MkdirAll(filepath.Join(claudeDir, "sessions"), 0o755)
+	const assistantID = "6f1c1f0e-8c35-4a0e-9d3c-0d6a4a2f7a11"
+	register := func(id string) {
+		agent := exec.Command("sleep", "60")
+		if err := agent.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { agent.Process.Kill(); agent.Wait() })
+		path := filepath.Join(claudeDir, "sessions", fmt.Sprintf("%d.json", agent.Process.Pid))
+		entry, _ := json.Marshal(claude.Live{PID: agent.Process.Pid, SessionID: id, Cwd: root, Status: "busy"})
+		os.WriteFile(path, entry, 0o644)
+	}
+	register(assistantID)
+	register("abcdef12-other")
+	if err := os.MkdirAll(store.Dir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir(root), "assistant-session"), []byte(assistantID+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, _ := e.DiscoverSessions(40)
+	if len(found) != 1 || found[0].SessionID != "abcdef12-other" {
+		t.Fatalf("discover = %+v; the assistant's own conversation must not be offered for import", found)
+	}
+}
