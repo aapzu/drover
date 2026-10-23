@@ -84,6 +84,7 @@ type Column struct {
 	Role           string      `json:"role,omitempty"`
 	Color          string      `json:"color,omitempty"`
 	AutoSpawn      bool        `json:"autoSpawn,omitempty"`
+	KeepAgent      bool        `json:"keepAgent,omitempty"`
 	PermissionMode string      `json:"permissionMode,omitempty"`
 	ModelOverride  string      `json:"modelOverride,omitempty"`
 	EffortOverride string      `json:"effortOverride,omitempty"`
@@ -260,6 +261,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
 		}
 		seen[c.ID] = true
+		if c.KeepAgent && (c.AutoSpawn || c.IsTodo() || c.IsDone()) {
+			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn, To Do or Done", FileName, c.ID)
+		}
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {

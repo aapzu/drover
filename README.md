@@ -125,7 +125,12 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
   Code's own default when that is unset. A model or effort change respawns the
   agent with `--resume`. A permission change switches it in place while it is
   idle, and respawns it when that fails or the target leaves the mode to Claude
-  Code. A card keeps one conversation across every column.
+  Code. A card keeps one conversation across every column. A column with
+  `keepAgent` (not allowed on `autoSpawn`, To Do or Done columns) leaves a
+  running agent running when a card moves in, instead of suspending it. It
+  starts none, and keeps the agent's model, effort and permission mode rather
+  than switching them to the column's. The idle timeout and slot evictions skip
+  its agent, though it still counts toward `maxConcurrent`.
 - **Automations.** Columns run rows when a card enters them or an agent's
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
   once its plan is approved.
@@ -159,7 +164,8 @@ These settings work in `drover.json` and, for you alone, in
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
   except that a start you make suspends the agent that has been idle longest.
-- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long.
+- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
+  except one in a `keepAgent` column.
   `r` resumes it. 0, the default, never does.
 - **`notifications`** shows a desktop notification and a notice on the board
   when an agent finishes a turn and stays idle, asks for a permission, has a

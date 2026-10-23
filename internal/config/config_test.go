@@ -172,6 +172,28 @@ func TestPRFlow(t *testing.T) {
 	}
 }
 
+func TestKeepAgent(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, column string
+		ok           bool
+	}{
+		{"plain column", `{"id":"in-review","name":"In review","keepAgent":true}`, true},
+		{"autoSpawn", `{"id":"in-review","name":"In review","autoSpawn":true,"keepAgent":true}`, false},
+		{"to do", `{"id":"backlog","name":"To Do","role":"todo","keepAgent":true}`, false},
+		{"done", `{"id":"done","name":"Done","role":"done","keepAgent":true}`, false},
+	} {
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},`+tc.column+`]}`), 0o644)
+		board, _, err := Load(dir)
+		if (err == nil) != tc.ok {
+			t.Fatalf("%s: loaded = %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
+		}
+		if tc.ok && !board.Columns[1].KeepAgent {
+			t.Errorf("%s: keepAgent not loaded", tc.name)
+		}
+	}
+}
+
 func TestParseAge(t *testing.T) {
 	for in, want := range map[string]time.Duration{
 		"7d":    7 * 24 * time.Hour,

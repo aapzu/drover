@@ -527,7 +527,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 				continue
 			}
 			col, _, _ := board.Column(m.ColumnID)
-			if isAgentColumn(col) {
+			if isAgentColumn(col) || col.KeepAgent {
 				othersActive = true
 				nextDriver = m.ID
 			}
@@ -553,6 +553,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	}
 	e.mu.Lock()
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
+	sess := owner.Sessions[store.MainSession]
+	keeps := sess != nil && sess.Status == store.StatusRunning && (target.KeepAgent && drives || !drives && e.sessionColumn(owner).KeepAgent)
 	e.mu.Unlock()
 
 	e.with(func() {
@@ -588,6 +590,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.stopSessions(owner, "", store.StatusExited)
 		e.with(func() { owner.Sessions = nil })
 		return e.removeWorktree(owner)
+	case keeps:
+		return nil
 	case !isAgentColumn(target):
 		e.stopSessions(owner, "", store.StatusSuspended)
 		if target.IsTodo() {
@@ -1286,7 +1290,8 @@ func (e *Engine) runningCount() int {
 
 // freeSlot suspends the agent on another task that has been idle longest, to
 // make room for a start you asked for. It returns that agent's tmux session to
-// stop, or "" when no agent is idle. Called with mu held.
+// stop, or "" when no agent is idle. An agent in a keepAgent column is never
+// chosen. Called with mu held.
 func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
@@ -1298,7 +1303,7 @@ func (e *Engine) freeSlot(t *store.Task) string {
 			if !idle(s) {
 				continue
 			}
-			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
+			if (victim == nil || s.UpdatedAt.Before(victim.UpdatedAt)) && !e.sessionColumn(o).KeepAgent {
 				victim, owner = s, o
 			}
 		}

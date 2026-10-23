@@ -75,6 +75,23 @@ func TestIdleTimeoutSuspendsUnfocusedAgents(t *testing.T) {
 	})
 }
 
+func TestIdleTimeoutSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"idleTimeoutMinutes":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	time.Sleep(2 * time.Second)
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning || hasLog(e.Snapshot().Tasks[0], "suspended after") {
+		t.Fatalf("idle timeout suspended a kept agent: %+v", s)
+	}
+}
+
 func TestBoardSetsAgentLimit(t *testing.T) {
 	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"maxConcurrent":3,`))
 	if got := e.Snapshot().MaxConcurrent; got != 3 {

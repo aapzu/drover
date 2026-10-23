@@ -320,6 +320,48 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 }
 
+func TestKeepAgentLeavesPendingRespawnAlone(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("SLOW work", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning turn to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityThinking
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && !s.RespawnPending
+	})
+	time.Sleep(time.Second)
+	s := e.Snapshot().Tasks[0].Sessions[store.MainSession]
+	if s.Status != store.StatusRunning || s.PermissionMode != "plan" {
+		t.Fatalf("a kept agent was respawned: status=%v mode=%s", s.Status, s.PermissionMode)
+	}
+	if n := strings.Count(readFile(log), "---"); n != 1 {
+		t.Fatalf("want 1 launch, got %d", n)
+	}
+}
+
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
@@ -483,6 +525,28 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	}
 	if tmux.Has(fmt.Sprintf("repo-1-%s", task.ID[:6])) {
 		t.Errorf("tmux session still running after move to To Do")
+	}
+}
+
+func TestKeepAgentColumnLeavesAgentRunning(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"park","name":"Parked"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
+		t.Fatalf("keepAgent column stopped the agent: status=%v", s.Status)
+	}
+	if err := e.Move(task.ID, "park", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusSuspended {
+		t.Fatalf("a plain column should suspend the agent: status=%v", s.Status)
 	}
 }
 
@@ -1269,6 +1333,39 @@ func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	}
 	if !hasLog(task(first.ID), "free a slot for #") || !hasLog(task(second.ID), "to free a slot") {
 		t.Error("both cards should log the suspension")
+	}
+}
+
+func TestSlotEvictionSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"maxConcurrent":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"watch","name":"In review","keepAgent":true},
+	  {"id":"review","name":"Review"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	first := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(first.ID, "watch", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	second := e.CreateTask("Second", "")
+	if err := e.Move(second.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range e.Snapshot().Tasks {
+		s := task.Sessions[store.MainSession]
+		switch task.ID {
+		case first.ID:
+			if s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
+				t.Fatalf("a kept agent was evicted for another start: status=%v", s.Status)
+			}
+		case second.ID:
+			if s != nil && s.Status == store.StatusRunning {
+				t.Fatalf("second agent should not start past the limit: status=%v", s.Status)
+			}
+		}
 	}
 }
 
