@@ -332,6 +332,23 @@ func (e *Engine) NewSession() (*store.Task, error) {
 	return task, nil
 }
 
+// DiscardSilent deletes a new session's card, and stops its agent, if you left
+// it without saying anything.
+func (e *Engine) DiscardSilent(id string) error {
+	e.mu.Lock()
+	t := e.find(id)
+	silent := false
+	if t != nil && t.Title == "" && t.WorktreePath == "" && t.ColumnID == e.board.TodoColumn().ID {
+		s := scratchSession(t)
+		silent = s != nil && !s.Started
+	}
+	e.mu.Unlock()
+	if !silent {
+		return nil
+	}
+	return e.DeleteTask(id)
+}
+
 // startScratch runs t's conversation in the main checkout. The caller holds
 // the task lock.
 func (e *Engine) startScratch(t *store.Task, fresh bool) error {

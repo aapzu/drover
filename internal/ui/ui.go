@@ -521,6 +521,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncFocus()
 		m.applySnap(m.eng.Snapshot())
 		var cmds []tea.Cmd
+		if cmd := m.discardSilent(msg.id); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
 			cmds = append(cmds, tea.EnableMouseCellMotion)
@@ -661,6 +664,18 @@ func (m Model) action(id, label string, fn func() error) tea.Cmd {
 	return runOp(m.eng, m.busy, id, op{label: label}, func() actionDoneMsg {
 		return actionDoneMsg{err: fn()}
 	})
+}
+
+// discardSilent drops the card when you left its new session without saying
+// anything.
+func (m Model) discardSilent(id string) tea.Cmd {
+	for _, t := range m.snap.Tasks {
+		if t.ID == id && t.Title == "" {
+			eng := m.eng
+			return m.action(id, "discarding", func() error { return eng.DiscardSilent(id) })
+		}
+	}
+	return nil
 }
 
 // runOp marks the card busy, runs work off the UI thread and returns its
