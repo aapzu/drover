@@ -144,7 +144,7 @@ func (m Model) renderFooter() string {
 		modeLive:      "LIVE: ctrl+q back to board",
 		modeAssistant: "ASSISTANT: ctrl+q back to board",
 		modeForm:      "tab switch field  ctrl+s save  esc cancel",
-		modeMove:      "1-9 pick column  any other key cancels",
+		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
@@ -600,15 +600,17 @@ func (m Model) renderMovePicker() string {
 		return ""
 	}
 	lines := []string{bold.Render(fmt.Sprintf("Move #%d to…", t.Number)), ""}
-	for i, c := range m.columns() {
-		if i >= 9 {
-			break
-		}
+	cur := m.columnOf(t)
+	for i, c := range m.moveColumns() {
 		marker := "  "
-		if c.ID == m.columnOf(t) {
+		if i == m.moveSel {
 			marker = "▸ "
 		}
-		lines = append(lines, fmt.Sprintf("%s%s  %s  %s", marker, bold.Render(fmt.Sprint(i+1)), c.Name, dim.Render(columnSummary(c))))
+		current := ""
+		if c.ID == cur {
+			current = dim.Render(" (current)")
+		}
+		lines = append(lines, fmt.Sprintf("%s%s  %s%s  %s", marker, bold.Render(fmt.Sprint(i+1)), c.Name, current, dim.Render(columnSummary(c))))
 	}
 	return modalStyle.Render(strings.Join(lines, "\n"))
 }
@@ -619,7 +621,7 @@ func (m Model) renderHelp() string {
 		{"←→ / h l", "select column"},
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
-		{"m 1-9", "move card to column"},
+		{"m", "move card to a column (↑↓ and enter, or 1-9)"},
 		{"n", "new Claude session (no branch until moved right)"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},

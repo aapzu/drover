@@ -44,7 +44,7 @@ drover
 | `ctrl+k` | search and run a command |
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
-| `m` then `1`–`9` | move card to a column |
+| `m`, then ↑↓ and enter, or `1`–`9` | move card to a column |
 | `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
@@ -304,7 +304,7 @@ a PR is in review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The message lists specific review findings that are still unfixed" }
+      "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" }
   ]
 }
 ```
