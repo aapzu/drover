@@ -322,10 +322,7 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 
 func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"Sessions","role":"todo","permissionMode":"plan"},
-	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	os.Remove(filepath.Join(root, "drover.json"))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)

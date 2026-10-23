@@ -92,7 +92,7 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 
 func TestDefaultSessionsColumnIsPlanMode(t *testing.T) {
 	b := Default()
-	if got := b.PermissionMode(b.TodoColumn()); got != "plan" {
+	if got := b.TodoColumn().PermissionMode; got != "plan" {
 		t.Errorf("default Sessions mode = %q, want plan", got)
 	}
 }
