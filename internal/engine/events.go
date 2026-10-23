@@ -262,6 +262,7 @@ func (e *Engine) checkInterrupted() []func() {
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {
+					e.respawnPending(taskID, key)
 					e.flushPending(task, key)
 				}
 			})
