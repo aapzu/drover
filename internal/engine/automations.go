@@ -445,6 +445,25 @@ func runShell(ctx context.Context, dir, script string, env []string, timeout tim
 	return err
 }
 
+// summarize sets the card's one-line summary of a finished reply. A summary
+// that finishes after the session replied again is dropped.
+func (e *Engine) summarize(taskID, key, reply string) {
+	if strings.TrimSpace(reply) == "" {
+		return
+	}
+	answer, err := claude.AskHaiku(e.stopping, e.Root,
+		"Summarize this coding agent's reply in at most 15 words: what it did, or what it needs from you. Reply with the summary only.\n\n<reply>\n"+truncatePrompt(reply)+"\n</reply>")
+	summary := claude.FirstLine(answer)
+	if err != nil || summary == "" {
+		return
+	}
+	e.with(func() {
+		if t := e.find(taskID); t != nil && t.Sessions[key] != nil && t.Sessions[key].LastReply == reply {
+			t.Sessions[key].Summary = summary
+		}
+	})
+}
+
 // autoName replaces the placeholder title of a new session's card with a
 // short summary of your first message, unless the title changed meanwhile.
 func (e *Engine) autoName(taskID, prompt, placeholder string) {

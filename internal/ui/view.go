@@ -367,9 +367,10 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	if u := usageLabel(m.sessionFor(t)); u != "" && lipgloss.Width(metaLine)+lipgloss.Width(u)+1 <= content {
 		metaLine += strings.Repeat(" ", content-lipgloss.Width(metaLine)-lipgloss.Width(u)) + dim.Render(u)
 	}
-	lines := []string{line1, line2, metaLine}
+	s := m.sessionFor(t)
+	lines := []string{line1, line2, metaLine, summaryLine(s, content)}
 	if m.prefs.Density == densityTall {
-		lines = append(lines, replyLines(m.sessionFor(t), content, 3)...)
+		lines = append(lines, replyLines(s, content, 2)...)
 	}
 	// Width excludes the border, which adds one cell on each side.
 	return style.Width(width - 2).Render(strings.Join(lines, "\n"))
@@ -492,6 +493,14 @@ func reviewBadge(pr *store.PR) string {
 		return idle.Render("✓ you reviewed") + " "
 	}
 	return ""
+}
+
+// summaryLine is the session's one-line summary, or a blank row until it has one.
+func summaryLine(s *store.Session, width int) string {
+	if s == nil || s.Summary == "" {
+		return ""
+	}
+	return muted.Render(ansi.Truncate(s.Summary, width, "…"))
 }
 
 // replyLines is the start of the agent's last reply, padded to n lines.

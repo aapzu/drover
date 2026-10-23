@@ -23,7 +23,7 @@ func (d density) cardHeight() int {
 	case densityTall:
 		return 8
 	}
-	return 5
+	return 6
 }
 
 // prefs is the board layout, kept per repo in the store's ui.json.
