@@ -669,8 +669,7 @@ func (m Model) action(id, label string, fn func() error) tea.Cmd {
 	})
 }
 
-// discardSilent asks the engine to drop the card if it is still untitled. The
-// title check only spares titled cards the busy mark; the engine decides.
+// discardSilent asks the engine to drop the card if it is still untitled.
 func (m Model) discardSilent(id string) tea.Cmd {
 	if t := m.task(id); t == nil || t.Title != "" {
 		return nil
