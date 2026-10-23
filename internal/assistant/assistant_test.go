@@ -182,6 +182,7 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 	for _, want := range []string{
 		"my-app at /work/my-app",
 		"branch from develop",
+		"write cards as #<number> and their title",
 		"- Sessions (id todo): no agent; a card moved here loses its worktree",
 		"- Executing (id exec): an agent works on the card in auto mode",
 		"- Waiting (id wait): no agent runs here",
