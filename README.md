@@ -289,8 +289,10 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
   and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
 
 This repo's own board cleans up, simplifies, reviews and builds on entering
-In review, asks for fixes if the review reported issues, and notifies you once
-a PR is in review:
+In review. At the end of each agent turn it asks for fixes if the review
+reported issues, or has the agent open the PR once none remain (only on a card
+with no PR yet). The In review column notifies you when the PR is in review.
+The column's automations, trimmed to the review and PR steps:
 
 ```json
 "automations": {
@@ -304,7 +306,11 @@ a PR is in review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" }
+      "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" },
+    { "name": "Open PR", "type": "send_message",
+      "message": "Commit the changes, push the branch and open the PR with gh pr create, then watch its checks.",
+      "condition": "The message is a reply to the code review or to applying its fixes, and lists no review findings left to fix. Missing tests and uncommitted changes don't count as findings",
+      "conditionScript": "test -z \"$DROVER_PRNUMBER\"" }
   ]
 }
 ```
