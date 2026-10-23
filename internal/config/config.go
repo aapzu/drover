@@ -365,7 +365,10 @@ func Default() *Board {
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
-			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
+			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{{
+				Name: "Waiting for me", Type: "move_to_column", TargetColumn: "self-review",
+				Condition: "The reply ends by asking me for a decision or input",
+			}}}},
 			{ID: "self-review", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},

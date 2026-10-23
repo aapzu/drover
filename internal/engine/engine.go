@@ -1534,6 +1534,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		s.UpdatedAt = time.Now()
 		if err != nil {
 			s.Activity = store.ActivityIdle
+			s.TurnInVisit = false
 			s.Relocate = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
