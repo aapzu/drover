@@ -225,7 +225,7 @@ review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The message says a specific review finding is still open and the agent will fix it. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" }
+      "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" }
   ]
 }
 ```
