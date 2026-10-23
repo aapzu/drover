@@ -208,13 +208,13 @@ func Start(root, exe string, board *config.Board) (created bool, err error) {
 	if running(root) {
 		return false, nil
 	}
-	if err := start(root, exe, board); err != nil {
+	if err := launch(root, exe, board); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func start(root, exe string, board *config.Board) error {
+func launch(root, exe string, board *config.Board) error {
 	id, resume, err := conversation(root)
 	if err != nil {
 		return err
@@ -244,7 +244,7 @@ func Restart(root, exe string, board *config.Board) error {
 	if err := forget(root); err != nil {
 		return err
 	}
-	return start(root, exe, board)
+	return launch(root, exe, board)
 }
 
 // Reset waits for a question in progress and fails while the panel's session runs.

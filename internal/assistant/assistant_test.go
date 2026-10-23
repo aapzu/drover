@@ -311,6 +311,9 @@ func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
 	}
+	if len(got) < 2 || got[0] != "claude" || got[1] != "-p" || slices.Contains(got, "--permission-mode") {
+		t.Errorf("ask must run headless claude -p without the panel's permission mode: %q", got)
+	}
 	if !strings.Contains(flagValue(got, "--settings"), root) {
 		t.Errorf("the sandbox settings don't lock the repo %q: %q", root, got)
 	}
