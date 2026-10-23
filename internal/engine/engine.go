@@ -1201,6 +1201,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	mode := e.board.PermissionMode(col)
 	changed := live && settingsDiffer(sess, col, mode)
 	busy := changed && sess.Activity != store.ActivityIdle && sess.Activity != store.ActivityStarting
+	interrupt := busy && mode == "plan" && sess.PermissionMode != "plan"
 	name := ""
 	if busy {
 		name = sess.Tmux
@@ -1208,12 +1209,17 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	e.mu.Unlock()
 	if busy {
 		e.with(func() { sess.RespawnPending = true })
-		if mode != "plan" {
+		if !interrupt {
 			e.logf(t, "Agent switches to %s's settings when its current turn ends", col.Name)
-		} else if err := tmux.SendKey(name, "Escape"); err != nil {
-			e.logf(t, "Couldn't interrupt the turn to switch to %s's settings: %v", col.Name, err)
 		} else {
-			e.logf(t, "Interrupting the turn to switch to %s's settings", col.Name)
+			unlock := e.lockTyping(name)
+			err := tmux.SendKey(name, "Escape")
+			unlock()
+			if err != nil {
+				e.logf(t, "Couldn't interrupt the turn to switch to %s's settings: %v", col.Name, err)
+			} else {
+				e.logf(t, "Interrupting the turn to switch to %s's settings", col.Name)
+			}
 		}
 	}
 
