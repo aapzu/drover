@@ -86,6 +86,32 @@ func TestIdleTimeoutSuspendsUnfocusedAgents(t *testing.T) {
 	})
 }
 
+func TestIdleTimeoutSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"idleTimeoutMinutes":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	plain := startIdleAgent(t, e, "Plain agent")
+	e.with(func() { e.find(plain.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	waitForAll(t, e, "the plain agent to be suspended", func(tasks []*store.Task) bool {
+		for _, other := range tasks {
+			if other.ID == plain.ID {
+				return other.Sessions[store.MainSession].Status == store.StatusSuspended
+			}
+		}
+		return false
+	})
+	if task := e.Snapshot().Tasks[0]; task.Sessions[store.MainSession].Status != store.StatusRunning || hasLog(task, "suspended after") {
+		t.Fatalf("idle timeout suspended a kept agent: %+v", task.Sessions[store.MainSession])
+	}
+}
+
 func TestBoardSetsAgentLimit(t *testing.T) {
 	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"maxConcurrent":3,`))
 	if got := e.Snapshot().MaxConcurrent; got != 3 {

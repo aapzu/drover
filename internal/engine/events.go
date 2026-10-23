@@ -544,7 +544,9 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 
 // respawnPending switches an agent whose card moved mid-turn into a column
 // with other settings, in place or by resuming its conversation, and restarts
-// one that was asked to move into its worktree but didn't.
+// one that was asked to move into its worktree but didn't. A keepAgent column
+// drops a pending settings switch and keeps the agent's settings, unless it
+// already has a move into its worktree pending.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -558,7 +560,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && (s.Relocate != "" || settingsDiffer(s, col, mode))
+		key == store.MainSession && (s.Relocate != "" || !col.KeepAgent && settingsDiffer(s, col, mode))
 	relocate := ""
 	if s != nil {
 		relocate = s.Relocate

@@ -182,6 +182,8 @@ func columnSummary(c config.Column) string {
 		return "sessions · main checkout"
 	case c.IsDone():
 		return "finished · archive removes worktree"
+	case c.KeepAgent:
+		return "agent kept running"
 	case !c.AutoSpawn:
 		return "agent paused"
 	}
@@ -264,10 +266,10 @@ func (m Model) status(t *store.Task) string {
 	if s == nil {
 		return ""
 	}
-	// A group card the agent isn't working for doesn't show the agent's
-	// activity unless it sits in an agent column itself.
+	// A group card the agent isn't working for doesn't show the agent's activity
+	// unless it sits in an agent column or a keepAgent column.
 	driver := store.Driver(m.snap.Tasks, store.Owner(m.snap.Tasks, t))
-	if col, _, _ := m.snap.Board.Column(t.ColumnID); driver != t && !col.AutoSpawn {
+	if col, _, _ := m.snap.Board.Column(t.ColumnID); driver != t && !col.AutoSpawn && !col.KeepAgent {
 		return ""
 	}
 	switch s.Status {

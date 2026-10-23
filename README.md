@@ -90,7 +90,7 @@ Every column is one of four kinds:
 | --- | --- | --- | --- | --- |
 | **To Do** | `"role": "todo"` | none; a running agent stops and the conversation resets once the whole group is back here | none | removed when the group returns here |
 | **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing |
-| **Plain** | neither | none; a running agent is suspended | `send_message` is skipped, `run_script` and `notify` run | kept |
+| **Plain** | neither | none; a running agent is suspended, unless `keepAgent` is set | `send_message` is skipped, `run_script` and `notify` run | kept |
 | **Done** | `"role": "done"` | suspended | none | kept until the card is archived |
 
 - **To Do** is where new sessions and imported past sessions land. Without a
@@ -102,7 +102,11 @@ Every column is one of four kinds:
 - **Plain** columns are for waiting, such as "In review" or "Verify in
   develop". Their automations can ping you with `notify` or run a check with
   `run_script`, for example `go test ./...` as a `conditionScript` on a
-  `move_to_column` row.
+  `move_to_column` row. With `keepAgent` set, a running agent stays running when
+  a card moves in; the column starts none, and its agent keeps its model, effort
+  and permission mode, unless a move into its worktree is already pending. The
+  idle timeout and slot evictions skip that agent, though it still counts toward
+  `maxConcurrent`.
 - **Done** cards can be archived; `archiveDoneAfter` does it automatically.
   See [How it works](#how-it-works).
 
@@ -115,6 +119,7 @@ Each column takes these fields:
 | `role` | `todo` or `done`. Leave it out for other columns. |
 | `color` | Header color, such as `"#3b82f6"`. |
 | `autoSpawn` | Makes an agent column. |
+| `keepAgent` | On a plain column: keeps a running agent when a card moves in, instead of suspending it. Not allowed with `autoSpawn`, To Do or Done. |
 | `permissionMode` | Passed as `claude --permission-mode`. Without it, the board's `defaultPermissionMode`, or Claude Code's own default. |
 | `modelOverride` | Passed as `claude --model`. |
 | `effortOverride` | Passed as `claude --effort`. |
@@ -235,8 +240,10 @@ These settings work in `drover.json` and, for you alone, in
 ```
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
-  except that a start you make suspends the agent that has been idle longest.
-- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long.
+  except that a start you make suspends the agent that has been idle longest,
+  but never one in a `keepAgent` column.
+- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
+  except one in a `keepAgent` column.
   `r` resumes it. 0, the default, never does.
 - **`notifications`** shows a desktop notification and a notice on the board
   when an agent finishes a turn and stays idle, asks for a permission, has a
