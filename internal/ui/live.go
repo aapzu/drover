@@ -168,7 +168,6 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		return m, nil
 	}
-	// Ctrl-z would stop the agent in its pane, so live mode drops it.
 	if msg.Type == tea.KeyCtrlZ {
 		return m, nil
 	}
