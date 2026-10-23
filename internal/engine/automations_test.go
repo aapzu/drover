@@ -289,7 +289,7 @@ func TestInitialPromptKeepsGatedMessageRow(t *testing.T) {
 		{Type: "send_message", Message: "/code-review", ConditionScript: "true"},
 		{Type: "send_message", Message: "/code-review", Condition: "The work is done"},
 	} {
-		prompt, rest := e.initialPrompt(&store.Task{Title: "Do the work"}, []config.Automation{row}, groupContext{})
+		prompt, rest, _ := e.initialPrompt(&store.Task{Title: "Do the work"}, []config.Automation{row}, groupContext{})
 		if prompt != "Do the work" || len(rest) != 1 || rest[0] != row {
 			t.Errorf("prompt = %q, rest = %v", prompt, rest)
 		}

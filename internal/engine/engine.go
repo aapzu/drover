@@ -338,7 +338,7 @@ func (e *Engine) startScratch(t *store.Task, fresh bool) error {
 	e.mu.Lock()
 	col := e.board.TodoColumn()
 	e.mu.Unlock()
-	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", true)
+	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", false, true)
 	e.with(func() {
 		if s := t.Sessions[store.MainSession]; s != nil {
 			s.Scratch, s.Stay = true, false
@@ -890,7 +890,7 @@ func (e *Engine) relocateByRespawn(t *store.Task, s *store.Session, col config.C
 	e.mu.Lock()
 	fresh := !s.Started
 	e.mu.Unlock()
-	if err := e.spawn(t, col, key, worktree, fresh, "", false); err != nil {
+	if err := e.spawn(t, col, key, worktree, fresh, "", false, false); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
 	}
 }
@@ -927,7 +927,7 @@ func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, wo
 	name := t.Sessions[key].Tmux
 	e.mu.Unlock()
 	tmux.Stop(name)
-	return true, e.spawn(t, col, key, worktree, false, "", false)
+	return true, e.spawn(t, col, key, worktree, false, "", false, false)
 }
 
 // retune switches a running agent to col's permission mode as you would,
@@ -1242,15 +1242,15 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	case live || queued:
 	default:
 		fresh := !started
-		prompt := ""
+		prompt, automated := "", false
 		if fresh {
-			prompt, enter = e.initialPrompt(card, enter, gc)
+			prompt, enter, automated = e.initialPrompt(card, enter, gc)
 			if message != "" {
 				prompt += "\n\n" + message
 				message = ""
 			}
 		}
-		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
+		if err := e.spawn(t, col, key, worktree, fresh, prompt, automated, evict); err != nil {
 			return err
 		}
 	}
@@ -1267,21 +1267,21 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 // initialPrompt is the first message of a fresh session. A column whose enter
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
-func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (string, []config.Automation) {
+func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (prompt string, rest []config.Automation, automated bool) {
 	if len(enter) > 0 && enter[0].Type == "send_message" && !enter[0].Conditional() {
 		row := enter[0]
 		e.logf(t, "Automation %q: started agent with message", rowName(row))
-		return e.render(t, row.Message, gc, false), enter[1:]
+		return e.render(t, row.Message, gc, false), enter[1:], true
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if strings.TrimSpace(t.Prompt) == "" {
-		return t.Title, enter
+		return t.Title, enter, false
 	}
 	if strings.HasPrefix(t.Prompt, t.Title) {
-		return t.Prompt, enter
+		return t.Prompt, enter, false
 	}
-	return t.Title + "\n\n" + t.Prompt, enter
+	return t.Title + "\n\n" + t.Prompt, enter, false
 }
 
 // limit is how many agents may run at once. Called with mu held.
@@ -1369,7 +1369,7 @@ func (e *Engine) notifyQueued(t *store.Task) {
 // spawn starts the agent in tmux, or queues it when the concurrency limit is
 // reached; with evict it first tries to suspend an idle agent. The caller
 // holds the task lock.
-func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, fresh bool, prompt string, evict bool) error {
+func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, fresh bool, prompt string, automated, evict bool) error {
 	dir := e.sessionDir(t, key)
 	events := filepath.Join(dir, "events.jsonl")
 	settings := filepath.Join(dir, "settings.json")
@@ -1409,6 +1409,9 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool { return p.Relocate != "" })
 		s.Relocate = ""
 		s.AutomatedPrompt = ""
+		if automated {
+			s.AutomatedPrompt = strings.TrimSpace(prompt)
+		}
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
@@ -1429,7 +1432,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			if prompt != "" {
 				// The prompt waits with the queued session and is typed in
 				// once a slot frees up and the agent is ready.
-				s.Pending = append([]store.Pending{{Text: prompt}}, s.Pending...)
+				s.Pending = append([]store.Pending{{Text: prompt, Automated: automated}}, s.Pending...)
 			}
 			t.AddLog("Agent queued: concurrency limit reached")
 			e.notifyQueued(t)

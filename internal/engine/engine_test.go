@@ -707,6 +707,35 @@ func TestPromptInReviewMovesCardBack(t *testing.T) {
 	})
 }
 
+func TestSpawnAutomationPromptInReviewKeepsCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","autoSpawn":true,"automations":{"onEnter":[{"name":"Nudge","type":"send_message","message":"AUTOMATED the footer"}]}},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The reply comes after the hook reports the spawn prompt.
+	waitFor(t, e, "the spawned agent to reply", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.LastReply != ""
+	})
+	waitNotBusy(t, e)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("the spawn prompt moved the card to %s", got)
+	}
+}
+
 func TestAutomationPromptInReviewKeepsCard(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
