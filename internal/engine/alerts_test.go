@@ -11,6 +11,17 @@ import (
 	"github.com/aapzu/drover/internal/store"
 )
 
+func TestIdleSkipsBackgroundAgents(t *testing.T) {
+	s := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true}
+	if !idle(s) {
+		t.Fatal("an idle agent with nothing running should be idle")
+	}
+	s.Background = []string{"toolu_1"}
+	if idle(s) {
+		t.Error("an agent with a background agent still running should not be idle")
+	}
+}
+
 const lifecycleBoard = `{%s"columns":[
   {"id":"todo","name":"To Do","role":"todo"},
   {"id":"exec","name":"Executing","autoSpawn":true},
@@ -73,6 +84,32 @@ func TestIdleTimeoutSuspendsUnfocusedAgents(t *testing.T) {
 	waitFor(t, e, "the idle agent to be suspended", func(t *store.Task) bool {
 		return t.Sessions[store.MainSession].Status == store.StatusSuspended && hasLog(t, "Agent suspended after 1 min idle")
 	})
+}
+
+func TestIdleTimeoutSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"idleTimeoutMinutes":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	plain := startIdleAgent(t, e, "Plain agent")
+	e.with(func() { e.find(plain.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	waitForAll(t, e, "the plain agent to be suspended", func(tasks []*store.Task) bool {
+		for _, other := range tasks {
+			if other.ID == plain.ID {
+				return other.Sessions[store.MainSession].Status == store.StatusSuspended
+			}
+		}
+		return false
+	})
+	if task := e.Snapshot().Tasks[0]; task.Sessions[store.MainSession].Status != store.StatusRunning || hasLog(task, "suspended after") {
+		t.Fatalf("idle timeout suspended a kept agent: %+v", task.Sessions[store.MainSession])
+	}
 }
 
 func TestBoardSetsAgentLimit(t *testing.T) {

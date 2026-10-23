@@ -149,6 +149,17 @@ func TestWorktreesDirMustNotContainRoot(t *testing.T) {
 	}
 }
 
+func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
+	col, _, ok := Default().Column("executing")
+	if !ok || len(col.Automations.OnTurnEnd) != 1 {
+		t.Fatalf("default executing column has no turn-end rule: %+v", col)
+	}
+	row := col.Automations.OnTurnEnd[0]
+	if row.Type != "move_to_column" || row.TargetColumn != "self-review" || row.Condition == "" {
+		t.Fatalf("default turn-end rule: %+v", row)
+	}
+}
+
 func TestPRFlow(t *testing.T) {
 	if err := Default().validate(); err != nil {
 		t.Fatalf("default board: %v", err)
@@ -169,6 +180,28 @@ func TestPRFlow(t *testing.T) {
 	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`), 0o644)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("prFlow.requested without autoSpawn accepted")
+	}
+}
+
+func TestKeepAgent(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, column string
+		ok           bool
+	}{
+		{"plain column", `{"id":"in-review","name":"In review","keepAgent":true}`, true},
+		{"autoSpawn", `{"id":"in-review","name":"In review","autoSpawn":true,"keepAgent":true}`, false},
+		{"to do", `{"id":"backlog","name":"To Do","role":"todo","keepAgent":true}`, false},
+		{"done", `{"id":"done","name":"Done","role":"done","keepAgent":true}`, false},
+	} {
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},`+tc.column+`]}`), 0o644)
+		board, _, err := Load(dir)
+		if (err == nil) != tc.ok {
+			t.Fatalf("%s: loaded = %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
+		}
+		if tc.ok && !board.Columns[1].KeepAgent {
+			t.Errorf("%s: keepAgent not loaded", tc.name)
+		}
 	}
 }
 

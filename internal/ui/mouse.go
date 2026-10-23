@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -36,7 +35,7 @@ type dragState struct {
 const doubleClick = 400 * time.Millisecond
 
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter {
+	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter && m.mode != modeAssistant {
 		m.drag = dragState{}
 		return m, nil
 	}
@@ -44,14 +43,13 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Action == tea.MouseActionPress && tea.MouseEvent(msg).IsWheel():
 		h := l.hitTest(m, msg.X, msg.Y)
+		if h.kind == hitAssistant {
+			return m.wheelAssistant(msg, l)
+		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
 			if name, ok := m.wheelTarget(); ok {
-				code := 65 // SGR wheel down
-				if msg.Button == tea.MouseButtonWheelUp {
-					code = 64
-				}
-				x, y := clamp(msg.X, 1, m.width-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
-				m.keys.send(keyJob{session: name, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)})
+				x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
 				return m, nil
 			}
 			if msg.Button == tea.MouseButtonWheelUp {
@@ -59,7 +57,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.scrollPreview(-3)
 		}
-		if m.mode == modeLive || (h.kind != hitCard && h.kind != hitColumn) {
+		if m.mode == modeLive || m.mode == modeAssistant || (h.kind != hitCard && h.kind != hitColumn) {
 			return m, nil
 		}
 		m.col = h.col
@@ -94,6 +92,11 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.mode != modeLive {
 				return m.startLive()
 			}
+		case hitAssistant:
+			if m.mode != modeAssistant {
+				cmd := m.focusAssistant()
+				return m, cmd
+			}
 		}
 
 	case msg.Action == tea.MouseActionMotion:
@@ -107,7 +110,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag.x, m.drag.y = msg.X, msg.Y
 		case dragColumn:
 			id := m.columns()[m.drag.col].ID
-			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.width)
+			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.boardWidth())
 		case dragPreview:
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
 		}
@@ -120,7 +123,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag = dragState{}
 			h := l.hitTest(m, d.x, d.y)
 			t := m.task(d.task)
-			if t == nil || h.kind == hitNone || h.kind == hitPreview || h.kind == hitPreviewEdge || h.col == d.fromCol {
+			if t == nil || (h.kind != hitCard && h.kind != hitColumn && h.kind != hitColumnEdge) || h.col == d.fromCol {
 				return m, nil
 			}
 			target := m.columns()[h.col]

@@ -44,7 +44,7 @@ drover
 | `ctrl+k` | search and run a command |
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
-| `m` then `1`–`9` | move card to a column |
+| `m`, then ↑↓ and enter, or `1`–`9` | move card to a column |
 | `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
@@ -56,7 +56,7 @@ drover
 | `r` / `S` | start or resume / suspend the agent |
 | `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
 | `u` | update the worktree from its base branch |
-| `:` | ask the board's assistant a question, or have it move cards (`ctrl+n` starts over) |
+| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns to the board, `Ctrl-q` again hides it) / start a new assistant conversation |
 | `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
@@ -67,11 +67,13 @@ drover
 
 With the mouse on, drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to
-resize, and click the preview to type into the agent. Layout is saved in
-`ui.json` in the project's state directory.
+resize, click the preview to type into the agent, and click the assistant
+panel to type into it. Layout is saved in `ui.json` in the project's state
+directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
-`esc` and `ctrl+c` included. `ctrl+q` returns to the board.
+`esc` and `ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop
+the agent. `ctrl+q` returns to the board.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. Typing in live mode jumps back to the bottom.
@@ -88,7 +90,7 @@ Every column is one of four kinds:
 | --- | --- | --- | --- | --- |
 | **To Do** | `"role": "todo"` | none; a running agent stops and the conversation resets once the whole group is back here | none | removed when the group returns here |
 | **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing |
-| **Plain** | neither | none; a running agent is suspended | `send_message` is skipped, `run_script` and `notify` run | kept |
+| **Plain** | neither | none; a running agent is suspended, unless `keepAgent` is set | `send_message` is skipped, `run_script` and `notify` run | kept |
 | **Done** | `"role": "done"` | suspended | none | kept until the card is archived |
 
 - **To Do** is where new sessions and imported past sessions land. Without a
@@ -100,7 +102,11 @@ Every column is one of four kinds:
 - **Plain** columns are for waiting, such as "In review" or "Verify in
   develop". Their automations can ping you with `notify` or run a check with
   `run_script`, for example `go test ./...` as a `conditionScript` on a
-  `move_to_column` row.
+  `move_to_column` row. With `keepAgent` set, a running agent stays running when
+  a card moves in; the column starts none, and its agent keeps its model, effort
+  and permission mode, unless a move into its worktree is already pending. The
+  idle timeout and slot evictions skip that agent, though it still counts toward
+  `maxConcurrent`.
 - **Done** cards can be archived; `archiveDoneAfter` does it automatically.
   See [How it works](#how-it-works).
 
@@ -113,6 +119,7 @@ Each column takes these fields:
 | `role` | `todo` or `done`. Leave it out for other columns. |
 | `color` | Header color, such as `"#3b82f6"`. |
 | `autoSpawn` | Makes an agent column. |
+| `keepAgent` | On a plain column: keeps a running agent when a card moves in, instead of suspending it. Not allowed with `autoSpawn`, To Do or Done. |
 | `permissionMode` | Passed as `claude --permission-mode`. Without it, the board's `defaultPermissionMode`, or Claude Code's own default. |
 | `modelOverride` | Passed as `claude --model`. |
 | `effortOverride` | Passed as `claude --effort`. |
@@ -151,6 +158,8 @@ open, and to Verify in develop once it merges:
 | Verify in develop | Plain |
 | Done | Done |
 
+When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check.
+
 ## How it works
 
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
@@ -171,7 +180,9 @@ open, and to Verify in develop once it merges:
   changes, while `C` and the automatic archive keep such a worktree.
 - **Sessions first, branches later.** `n` opens a Claude session in the main
   checkout, on a card in the first (To Do role) column. The session runs Haiku
-  unless that column sets a `modelOverride`. Your first message
+  unless that column sets a `modelOverride`, and in that column's
+  `permissionMode` when it sets one (the default board uses `plan`).
+  Your first message
   becomes the card's title, which Claude Haiku then shortens to a few words
   unless `autoName` is `false`. Unless it stays (below), the card then moves to
   the first agent column (Planning by default), which creates its worktree and
@@ -233,8 +244,10 @@ These settings work in `drover.json` and, for you alone, in
 ```
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
-  except that a start you make suspends the agent that has been idle longest.
-- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long.
+  except that a start you make suspends the agent that has been idle longest,
+  but never one in a `keepAgent` column.
+- **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
+  except one in a `keepAgent` column.
   `r` resumes it. 0, the default, never does.
 - **`notifications`** shows a desktop notification and a notice on the board
   when an agent finishes a turn and stays idle, asks for a permission, has a
@@ -288,8 +301,10 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
   and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
 
 This repo's own board cleans up, simplifies, reviews and builds on entering
-In review, asks for fixes if the review reported issues, and notifies you once
-a PR is in review:
+In review. At the end of each agent turn it asks for fixes if the review
+reported issues, or has the agent open the PR once none remain (only on a card
+with no PR yet). The In review column notifies you when the PR is in review.
+The column's automations, trimmed to the review and PR steps:
 
 ```json
 "automations": {
@@ -303,7 +318,11 @@ a PR is in review:
   "onTurnEnd": [
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
-      "condition": "The message lists specific review findings that are still unfixed" }
+      "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" },
+    { "name": "Open PR", "type": "send_message",
+      "message": "Commit the changes, push the branch and open the PR with gh pr create, then watch its checks.",
+      "condition": "The message is a reply to the code review or to applying its fixes, and lists no review findings left to fix. Missing tests and uncommitted changes don't count as findings",
+      "conditionScript": "test -z \"$DROVER_PRNUMBER\"" }
   ]
 }
 ```
@@ -356,11 +375,7 @@ board uses:
   each further PR's card starts.
 - **changesRequested:** a new review requesting changes moves a card from
   `opened` here and sends the agent `changesRequestedMessage`. Once the agent
-  has pushed a new head and is idle, the card goes back to `opened`. Any
-  prompt to the agent of a card in `opened` also moves it here, without running
-  the column's enter automations. It returns to `opened` once the agent pushes a
-  new head to the card's PR. This column must have `autoSpawn`, or the prompt
-  doesn't move the card.
+  has pushed a new head and is idle, the card goes back to `opened`.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
 - **released:** once the merge commit reaches `releaseBranch` on origin
@@ -493,31 +508,74 @@ drover ask "which cards are waiting on review?"
 
 ### Asking the board
 
-`drover ask <question>` (or `:` on the board) asks an assistant that knows the
-repo, the board's columns, and every card's column, branch, worktree and agent
-state. It can move, add, edit and delete cards when you tell it to. It is a
-headless `claude -p --model sonnet` session that runs the commands above, so
-changes go through the open board like any other. It takes no agent slot and
-isn't a card.
+`:` opens a side panel next to the board that runs the real Claude Code
+interface as the board's assistant. It knows the repo, the board's columns, and
+every card's column, branch, worktree and agent state, and can move, add, edit
+and delete cards when you tell it to, and answer questions about the code and
+its history. It runs the commands above, so changes go through the open board
+like any other. It takes no agent slot and isn't a card.
+
+- The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
+  focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
+  `ctrl+q` returns to the board with the panel still showing, and `ctrl+q` on
+  the board hides it. You can also click the panel to focus it, and use the
+  mouse wheel to scroll it.
+- It is the `claude --model sonnet` TUI in a session on the private tmux server
+  (`tmux -L drover ls`), started in the repo. It stops when the board that
+  opened it quits or its terminal closes, and the conversation resumes the next
+  time you open the panel.
+- One conversation per project. `N` (or the palette's "Start a new assistant
+  conversation") opens the panel on a new conversation. Claude keeps the
+  conversation itself; drover keeps only its id, in `assistant-session` in the
+  project's state directory, so a conversation switched inside Claude with
+  `/clear` or `/resume` isn't tracked.
+
+What the assistant may do is the same in the panel and in `drover ask`:
+
+- Besides read-only git (below), it may only run `drover list`, `move`, `add`,
+  `edit` and `rm`, and never `--force`. Anything else is denied without asking
+  (`dontAsk` mode in the panel). It is told to ask you before deleting a card or
+  moving one to To Do, which removes its worktree. In a one-off `drover ask`
+  you answer that in the next question.
+- The repo is read-only to it, enforced in the tool permissions: Read, Grep and
+  Glob, which Claude limits to the repo, and the git subcommands `status`,
+  `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,
+  `rev-parse`, `describe` and `cat-file`. Everything else is refused: no edit
+  or write tool, no other shell commands, and no git subcommand that changes
+  the repo, a branch or a worktree.
+- Asked for a change, it offers a card with a title and prompt and runs
+  `drover add` once you agree. That is an instruction to it, not a restriction.
+- It ignores your user, project and local Claude settings, so none of your allow
+  rules or `env` apply, but CLAUDE.md files still load. Managed settings still
+  apply. If they auto-allow sandboxed Bash commands, the permission rules no
+  longer limit what it runs; the sandbox does, and drover denies it writes to
+  the repo there.
+- These limits are on the assistant's tools. In the panel you are typing into a
+  real Claude Code session, so what you run yourself (`!` commands, slash
+  commands) isn't limited by them.
+
+`drover ask <question>` asks the same assistant from your shell, as a headless
+`claude -p` session on the same conversation:
 
 ```sh
 drover ask "what needs me right now?"
 drover ask "move #4 and #7 to In review"
+drover ask "where does the card state get saved?"
 drover ask --new "start over: what's in Planning?"
 ```
 
-- One conversation per project continues across questions, so "and #3 too"
-  works. `--new` (or `ctrl+n` in the pane) forgets it. Claude keeps the
-  conversation itself; drover keeps only its id, in `assistant-session` in the
-  project's state directory. The pane's history is not kept between runs of the
-  board, but the conversation is. If a saved conversation can no longer be
-  resumed, every question fails until you use `--new`.
-- It may only run `drover list`, `move`, `add`, `edit` and `rm`, and never
-  `--force`. It is told to ask you before deleting a card or moving one to To
-  Do, which removes its worktree. In a one-off `drover ask` you answer that
-  in the next question.
+- It refuses while the board's assistant session is running, which is from the
+  first time you open the panel until the board that opened it quits or Claude
+  exits (hiding the panel doesn't stop it), since two Claudes must not share a
+  conversation. The error names the `tmux -L drover kill-session` command that
+  ends the session, for when a board died without quitting. `--new` forgets the
+  conversation, but is refused too while the session runs (press `N` on the
+  board instead).
 - A question of `-` is read from stdin. A question that gets no answer within
-  ten minutes fails, and the board may have been partly changed.
+  ten minutes fails, and the board may have been partly changed. A saved
+  conversation whose transcript is gone starts over by itself. If `claude`
+  still can't resume one that has a transcript, every question fails until you
+  use `--new`.
 
 ## Notes
 
@@ -525,6 +583,7 @@ drover ask --new "start over: what's in Planning?"
   (default `~/.local/state`), outside the repo so they can't be committed.
   Every worktree of a repo opens the same board.
 - Agents run in a private tmux server (`tmux -L drover ls`) and keep
-  running after you quit. Automations only run while the board is open.
-  Events that arrive while it's closed are processed when you reopen it.
+  running after you quit; the session the panel opened does not, once that
+  board quits or its terminal closes. Automations only run while the board is
+  open. Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only.

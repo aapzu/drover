@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/gitx"
@@ -48,6 +49,9 @@ func (e *Engine) DiscoverSessions(limit int) (found []claude.Found, more bool) {
 		}
 	}
 	e.mu.Unlock()
+	if id := assistant.SessionID(e.Root); id != "" {
+		skip[id] = true
+	}
 	all, more := claude.Discover(e.Root, skip, limit)
 	for _, f := range all {
 		// Sessions the board itself launched in its worktrees are not imports.

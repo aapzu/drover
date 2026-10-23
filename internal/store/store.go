@@ -98,11 +98,13 @@ type Session struct {
 	RespawnPending bool `json:"respawnPending,omitempty"`
 	// Relocate is the worktree a running scratch agent was asked to move into,
 	// until its hooks report it there.
-	Relocate  string    `json:"relocate,omitempty"`
-	Pending   []Pending `json:"pending,omitempty"`
-	LastReply string    `json:"lastReply,omitempty"`
-	// Summary is a one-line Haiku summary of LastReply, shown on the card.
-	Summary string `json:"summary,omitempty"`
+	Relocate           string    `json:"relocate,omitempty"`
+	Background         []string  `json:"background,omitempty"`
+	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
+	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
+	Pending            []Pending `json:"pending,omitempty"`
+	LastReply          string    `json:"lastReply,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -127,6 +129,9 @@ type Session struct {
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
 }
+
+// HasBackground reports whether the session's background agents are still running.
+func (s *Session) HasBackground() bool { return len(s.Background) > 0 }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves
 // the choice to Claude Code.
