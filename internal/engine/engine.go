@@ -521,8 +521,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	var nextDriver string
 	if t != nil {
 		owner = e.owner(t)
-		ownerSess := owner.Sessions[store.MainSession]
-		ownerRunning := ownerSess != nil && ownerSess.Status == store.StatusRunning && ownerSess.Activity != store.ActivityStarting
+		ownerRunning := live(owner.Sessions[store.MainSession])
 		from, _, _ = board.Column(t.ColumnID)
 		for _, m := range store.Members(e.state.Tasks, owner) {
 			if m == t {
@@ -558,7 +557,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
 	sess := owner.Sessions[store.MainSession]
-	keeps := sess != nil && sess.Status == store.StatusRunning && sess.Activity != store.ActivityStarting && target.KeepAgent && drives
+	keeps := live(sess) && target.KeepAgent && drives
 	e.mu.Unlock()
 
 	e.with(func() {

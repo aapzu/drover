@@ -26,6 +26,12 @@ func (e *Engine) sessionColumn(owner *store.Task) config.Column {
 	return col
 }
 
+// live reports whether s is a running agent that has finished starting. A
+// session still starting is not kept.
+func live(s *store.Session) bool {
+	return s != nil && s.Status == store.StatusRunning && s.Activity != store.ActivityStarting
+}
+
 // keepsAgent reports whether the column of the card driving owner's agent is a keepAgent
 // column. Idle timeouts and slot evictions leave such an agent alone.
 // Called with mu held.
