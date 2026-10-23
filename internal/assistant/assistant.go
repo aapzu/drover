@@ -169,7 +169,7 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"Change the board only when asked. Before `rm`, or a move to the To Do column, say what you are about to do and wait for the user to agree: " +
 		"a move to To Do deletes the card's worktree even with uncommitted changes. `rm` refuses while the worktree has uncommitted changes; " +
 		"report that instead of working around it, and never pass --force.\n" +
-		"Answer briefly, in plain text without markdown headings. Always write cards as #<number> and their title, even in short answers."
+		"Answer briefly, in plain text without markdown headings, and always write cards as #<number> and their title."
 }
 
 func baseBranch(b *config.Board) string {
