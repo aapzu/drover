@@ -328,6 +328,7 @@ func (e *Engine) followBackground(t *store.Task, s *store.Session) func() {
 	s.Activity = store.ActivityIdle
 	s.Pending = nil
 	s.Background = nil
+	s.AutomatedPrompt = ""
 	s.PID = 0
 	if l, ok := claude.Running()[s.AgentSessionID]; ok {
 		s.PID = l.PID

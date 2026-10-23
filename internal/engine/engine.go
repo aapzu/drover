@@ -647,6 +647,7 @@ func (e *Engine) TakeOver(id string) error {
 		e.with(func() {
 			if s := externalSession(owner); s != nil {
 				s.Status, s.Activity, s.Pending = store.StatusSuspended, store.ActivityIdle, nil
+				s.AutomatedPrompt = ""
 			}
 			if pid != 0 {
 				t.AddLog(fmt.Sprintf("Stopped agent in another terminal (pid %d) to resume it here", pid))

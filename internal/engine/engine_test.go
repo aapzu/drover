@@ -728,15 +728,18 @@ func TestAutomationPromptInReviewKeepsCard(t *testing.T) {
 	if err := e.Start(task.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, e, "the automation to prompt the agent twice", func(t *store.Task) bool {
+	// The flag is cleared when the hook reports the second automated prompt.
+	waitFor(t, e, "the automated prompt to be reported twice", func(t *store.Task) bool {
 		runs := 0
 		for _, entry := range t.Log {
 			if strings.Contains(entry.Text, `"Nudge" ran`) {
 				runs++
 			}
 		}
-		return runs >= 2
+		s := t.Sessions[store.MainSession]
+		return runs >= 2 && s != nil && s.AutomatedPrompt == ""
 	})
+	waitNotBusy(t, e)
 	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
 		t.Fatalf("an automation's prompt moved the card to %s", got)
 	}
