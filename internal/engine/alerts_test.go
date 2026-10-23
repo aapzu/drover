@@ -11,6 +11,17 @@ import (
 	"github.com/aapzu/drover/internal/store"
 )
 
+func TestIdleSkipsBackgroundAgents(t *testing.T) {
+	s := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true}
+	if !idle(s) {
+		t.Fatal("an idle agent with nothing running should be idle")
+	}
+	s.Background = []string{"toolu_1"}
+	if idle(s) {
+		t.Error("an agent with a background agent still running should not be idle")
+	}
+}
+
 const lifecycleBoard = `{%s"columns":[
   {"id":"todo","name":"To Do","role":"todo"},
   {"id":"exec","name":"Executing","autoSpawn":true},

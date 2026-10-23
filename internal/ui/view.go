@@ -92,7 +92,7 @@ func (m Model) renderHeader() string {
 			switch {
 			case s.Activity == store.ActivityPermission || stuckStarting(s):
 				attention++
-			case s.Activity == store.ActivityIdle:
+			case s.Activity == store.ActivityIdle && !s.HasBackground():
 				waiting++
 			default:
 				working++
@@ -297,6 +297,9 @@ func (m Model) status(t *store.Task) string {
 	case store.ActivityPermission:
 		return needsYou.Render("◆ needs you") + pending
 	case store.ActivityIdle:
+		if s.HasBackground() {
+			return thinking.Render("◌ background agents") + pending
+		}
 		return idle.Render("● idle") + pending
 	case store.ActivityStarting:
 		return thinking.Render(spinner[m.frame%len(spinner)]+" starting") + pending
