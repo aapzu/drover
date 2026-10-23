@@ -84,11 +84,12 @@ func idleFor(s *store.Session, d time.Duration) bool {
 // queued.
 func idle(s *store.Session) bool {
 	return s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && s.Started &&
-		len(s.Pending) == 0 && !s.RespawnPending
+		len(s.Pending) == 0 && !s.RespawnPending && !s.HasBackground()
 }
 
 // idleTimeouts returns follow-ups suspending agents idle for longer than the
-// board's idleTimeoutMinutes. Called with mu held.
+// board's idleTimeoutMinutes, except those in a keepAgent column. Called with
+// mu held.
 func (e *Engine) idleTimeouts() []func() {
 	minutes := e.board.IdleTimeoutMinutes
 	if minutes <= 0 {
@@ -96,7 +97,7 @@ func (e *Engine) idleTimeouts() []func() {
 	}
 	var out []func()
 	for _, t := range e.state.Tasks {
-		if t.ID == e.focused || !idleFor(t.Sessions[store.MainSession], time.Duration(minutes)*time.Minute) {
+		if t.ID == e.focused || !idleFor(t.Sessions[store.MainSession], time.Duration(minutes)*time.Minute) || e.keepsAgent(t) {
 			continue
 		}
 		if _, stopping := e.idleStopping.LoadOrStore(t.ID, true); stopping {
@@ -118,7 +119,7 @@ func (e *Engine) suspendIdle(id string, minutes int) {
 		return
 	}
 	e.mu.Lock()
-	due := owner.ID != e.focused && idleFor(owner.Sessions[store.MainSession], time.Duration(minutes)*time.Minute)
+	due := owner.ID != e.focused && idleFor(owner.Sessions[store.MainSession], time.Duration(minutes)*time.Minute) && !e.keepsAgent(owner)
 	e.mu.Unlock()
 	if !due {
 		return

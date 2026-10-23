@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,7 @@ func (e *Engine) Tick() {
 		}
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
+		followUps = append(followUps, e.backgroundScans()...)
 		followUps = append(followUps, e.dequeue()...)
 		if time.Since(e.lastPoll) > 1500*time.Millisecond {
 			e.lastPoll = time.Now()
@@ -103,6 +105,14 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Relocate = ""
 			t.AddLog("Agent moved into the worktree")
 		}
+		if n := len(s.Pending); ev.Cwd != "" && n > 0 {
+			s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool {
+				return p.Relocate != "" && sameDir(ev.Cwd, p.Relocate)
+			})
+			if len(s.Pending) < n {
+				t.AddLog("Agent is already in the worktree")
+			}
+		}
 		switch ev.Name {
 		case "SessionStart":
 			if ev.Source == "startup" && s.Started && ev.SessionID != s.AgentSessionID {
@@ -114,6 +124,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				continue
 			}
 			s.Forked = ev.Source == "fork"
+			if ev.Source == "startup" || ev.Source == "resume" {
+				s.Background = nil
+			}
 			if ev.TranscriptPath != "" {
 				s.TranscriptPath = ev.TranscriptPath
 			}
@@ -144,9 +157,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			if s.Scratch && t.Title != "" {
 				switch {
-				case !typed || !e.hasPlanColumn():
+				case !typed:
 					out = append(out, func() { e.leaveScratchWorking(taskID, false) })
-				case !s.Routing:
+				case s.Routing:
+					s.NextRoute = prompt
+				default:
 					s.Routing = true
 					out = append(out, func() { e.routeScratch(taskID, prompt) })
 				}
@@ -159,8 +174,15 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
+			if s.Scratch && s.Stay && editsFiles(ev.ToolName) {
+				s.Stay = false
+				out = append(out, func() { e.leaveScratchWorking(taskID, true) })
+			}
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if id, ok := ev.BackgroundAgent(); ok {
+				s.Background = append(s.Background, id)
+			}
 			if ev.ToolName == "ExitPlanMode" {
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
@@ -206,6 +228,45 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 	return out
 }
 
+// backgroundScans returns follow-ups that read the transcripts of sessions with
+// background agents for the completion notices of those agents. Called with mu
+// held.
+func (e *Engine) backgroundScans() []func() {
+	var out []func()
+	for _, t := range e.state.Tasks {
+		for key, s := range t.Sessions {
+			if s.Status != store.StatusRunning || !s.HasBackground() {
+				continue
+			}
+			path := e.transcriptOf(t, s)
+			if path == "" {
+				continue
+			}
+			if _, scanning := e.backgroundScanning.LoadOrStore(s, true); scanning {
+				continue
+			}
+			taskID, offset := t.ID, s.BackgroundScan
+			if s.BackgroundScanPath != path {
+				offset = 0
+			}
+			out = append(out, func() {
+				defer e.backgroundScanning.Delete(s)
+				done, next, err := claude.BackgroundDone(path, offset)
+				if err != nil {
+					return
+				}
+				e.with(func() {
+					if task := e.find(taskID); task != nil && task.Sessions[key] == s {
+						s.Background = slices.DeleteFunc(s.Background, func(id string) bool { return slices.Contains(done, id) })
+						s.BackgroundScanPath, s.BackgroundScan = path, next
+					}
+				})
+			})
+		}
+	}
+	return out
+}
+
 // checkInterrupted returns follow-ups that find working sessions whose turn
 // you interrupted.
 func (e *Engine) checkInterrupted() []func() {
@@ -244,6 +305,7 @@ func (e *Engine) checkInterrupted() []func() {
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {
+					e.respawnPending(taskID, key)
 					e.flushPending(task, key)
 				}
 			})
@@ -261,6 +323,7 @@ func (e *Engine) followBackground(t *store.Task, s *store.Session) func() {
 	s.Status = store.StatusExternal
 	s.Activity = store.ActivityIdle
 	s.Pending = nil
+	s.Background = nil
 	s.PID = 0
 	if l, ok := claude.Running()[s.AgentSessionID]; ok {
 		s.PID = l.PID
@@ -407,8 +470,14 @@ func (e *Engine) prRequested(taskID string, visit int) {
 		e.logf(card, "PR-request move failed: %v", err)
 		return
 	}
-	// A turn that ended during the move had its turn end dropped as
-	// belonging to the previous visit; run it for this one.
+	e.claimTurn(t, taskID)
+}
+
+// claimTurn makes the agent's current turn count for the visit a move just
+// started. A turn that already ended had its turn end dropped as belonging to
+// the previous visit, so it is run for this one; a turn still in progress is
+// marked as part of the new visit. Does nothing unless the main session runs.
+func (e *Engine) claimTurn(t *store.Task, taskID string) {
 	e.with(func() {
 		s := t.Sessions[store.MainSession]
 		if s == nil || s.Status != store.StatusRunning {
@@ -425,7 +494,9 @@ func (e *Engine) prRequested(taskID string, visit int) {
 
 // respawnPending switches an agent whose card moved mid-turn into a column
 // with other settings, in place or by resuming its conversation, and restarts
-// one that was asked to move into its worktree but didn't.
+// one that was asked to move into its worktree but didn't. A keepAgent column
+// drops a pending settings switch and keeps the agent's settings, unless it
+// already has a move into its worktree pending.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -439,7 +510,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && (s.Relocate != "" || settingsDiffer(s, col, mode))
+		key == store.MainSession && (s.Relocate != "" || !col.KeepAgent && settingsDiffer(s, col, mode))
 	relocate := ""
 	if s != nil {
 		relocate = s.Relocate
@@ -542,6 +613,16 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)
+}
+
+// editsFiles reports whether tool changes files itself, which a session routed
+// to stay in the main checkout must not do.
+func editsFiles(tool string) bool {
+	switch tool {
+	case "Edit", "MultiEdit", "Write", "NotebookEdit":
+		return true
+	}
+	return false
 }
 
 // sameDir reports whether a and b are the same directory, through symlinks

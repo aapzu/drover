@@ -15,7 +15,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -70,9 +69,10 @@ type Engine struct {
 	stopping  context.Context
 	stop      context.CancelFunc
 
-	focused      string
-	alerted      map[string]time.Time
-	idleStopping sync.Map
+	focused            string
+	alerted            map[string]time.Time
+	idleStopping       sync.Map
+	backgroundScanning sync.Map
 }
 
 // Executable is the path of the running drover binary, symlinks resolved.
@@ -341,7 +341,7 @@ func (e *Engine) startScratch(t *store.Task, fresh bool) error {
 	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", true)
 	e.with(func() {
 		if s := t.Sessions[store.MainSession]; s != nil {
-			s.Scratch = true
+			s.Scratch, s.Stay = true, false
 		}
 	})
 	return err
@@ -521,15 +521,18 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	var nextDriver string
 	if t != nil {
 		owner = e.owner(t)
+		ownerRunning := live(owner.Sessions[store.MainSession])
 		from, _, _ = board.Column(t.ColumnID)
 		for _, m := range store.Members(e.state.Tasks, owner) {
 			if m == t {
 				continue
 			}
 			col, _, _ := board.Column(m.ColumnID)
-			if isAgentColumn(col) {
+			if isAgentColumn(col) || col.KeepAgent && ownerRunning {
 				othersActive = true
-				nextDriver = m.ID
+				if nextDriver == "" || isAgentColumn(col) {
+					nextDriver = m.ID
+				}
 			}
 			othersEnded = othersEnded && (col.IsTodo() || col.IsDone())
 			othersTodo = othersTodo && col.IsTodo()
@@ -553,6 +556,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	}
 	e.mu.Lock()
 	drives := isAgentColumn(target) || store.Driver(e.state.Tasks, owner) == t
+	sess := owner.Sessions[store.MainSession]
+	keeps := live(sess) && target.KeepAgent && drives
 	e.mu.Unlock()
 
 	e.with(func() {
@@ -588,6 +593,8 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		e.stopSessions(owner, "", store.StatusExited)
 		e.with(func() { owner.Sessions = nil })
 		return e.removeWorktree(owner)
+	case keeps:
+		return nil
 	case !isAgentColumn(target):
 		e.stopSessions(owner, "", store.StatusSuspended)
 		if target.IsTodo() {
@@ -750,10 +757,8 @@ func (e *Engine) SuspendAll() []Handoff {
 	return out
 }
 
-var nonName = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
-
 func (e *Engine) tmuxName(t *store.Task) string {
-	project := nonName.ReplaceAllString(e.ProjectName, "-")
+	project := tmux.SafeName(e.ProjectName)
 	return fmt.Sprintf("%s-%d-%s", project, t.Number, t.ID[:6])
 }
 
@@ -842,7 +847,7 @@ func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) 
 	case !moved && started:
 		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
 	}
-	e.with(func() { s.Started, s.TranscriptPath, s.Scratch = moved, "", false })
+	e.with(func() { s.Started, s.TranscriptPath, s.Scratch, s.Stay = moved, "", false, false })
 }
 
 // moveConversation moves the transcript at path into worktree's project and
@@ -873,7 +878,7 @@ func (e *Engine) relocateLive(t *store.Task, s *store.Session, worktree string) 
 	if !ok || !tmux.Has(name) {
 		return store.Pending{}, false
 	}
-	e.with(func() { s.Scratch = false })
+	e.with(func() { s.Scratch, s.Stay = false, false })
 	e.logf(t, "Asking the agent to move into the worktree")
 	return store.Pending{Relocate: worktree, Text: fmt.Sprintf("This task now has its own git worktree at %s on branch %s. "+
 		"Call the EnterWorktree tool with path %q to switch into it, and do all further work there.", worktree, branch, worktree)}, true
@@ -1201,10 +1206,26 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	mode := e.board.PermissionMode(col)
 	changed := live && settingsDiffer(sess, col, mode)
 	busy := changed && sess.Activity != store.ActivityIdle && sess.Activity != store.ActivityStarting
+	interrupt := busy && mode == "plan" && sess.PermissionMode != "plan" && !sess.RespawnPending
+	name := ""
+	if busy {
+		name = sess.Tmux
+		sess.RespawnPending = true
+	}
 	e.mu.Unlock()
 	if busy {
-		e.with(func() { sess.RespawnPending = true })
-		e.logf(t, "Agent switches to %s's settings when its current turn ends", col.Name)
+		if interrupt {
+			unlock := e.lockTyping(name)
+			err := tmux.SendKey(name, "Escape")
+			unlock()
+			if err != nil {
+				e.logf(t, "Couldn't interrupt the turn to switch to %s's settings: %v", col.Name, err)
+			} else {
+				e.logf(t, "Interrupting the turn to switch to %s's settings", col.Name)
+			}
+		} else {
+			e.logf(t, "Agent switches to %s's settings when its current turn ends", col.Name)
+		}
 	}
 
 	enter := col.Automations.OnEnter
@@ -1286,12 +1307,13 @@ func (e *Engine) runningCount() int {
 
 // freeSlot suspends the agent on another task that has been idle longest, to
 // make room for a start you asked for. It returns that agent's tmux session to
-// stop, or "" when no agent is idle. Called with mu held.
+// stop, or "" when no agent is idle. An agent in a keepAgent column is never
+// chosen. Called with mu held.
 func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t {
+		if o == t || e.keepsAgent(o) {
 			continue
 		}
 		for _, s := range o.Sessions {

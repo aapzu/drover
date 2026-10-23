@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -9,7 +10,8 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// liveExitKey is the only key live mode keeps; it matches tmux.DetachKey.
+// liveExitKey is the only key live mode and the assistant panel keep; it matches
+// tmux.DetachKey.
 // Option chords can't be reserved: macOS types them as characters such as å.
 const liveExitKey = "ctrl+q"
 
@@ -60,6 +62,34 @@ func tmuxKey(msg tea.KeyMsg) (literal, key string) {
 		return "", ""
 	}
 	return "", mods.String() + s
+}
+
+func keyJobFor(session string, msg tea.KeyMsg) (job keyJob, ok bool) {
+	job = keyJob{session: session}
+	if msg.Paste {
+		job.paste = string(msg.Runes)
+		return job, true
+	}
+	job.literal, job.key = tmuxKey(msg)
+	return job, job.literal != "" || job.key != ""
+}
+
+func afterKey(capture tea.Cmd) tea.Cmd {
+	if capture == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		time.Sleep(40 * time.Millisecond)
+		return capture()
+	}
+}
+
+func wheelJob(session string, up bool, x, y int) keyJob {
+	code := 65
+	if up {
+		code = 64
+	}
+	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)}
 }
 
 type keyJob struct {
@@ -168,6 +198,9 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		return m, nil
 	}
+	if msg.Type == tea.KeyCtrlZ {
+		return m, nil
+	}
 	t := m.current()
 	if t == nil {
 		return m, nil
@@ -177,20 +210,11 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setFlash("No running agent here. Ctrl-q returns to the board.")
 		return m, nil
 	}
-	job := keyJob{session: name}
-	if msg.Paste {
-		job.paste = string(msg.Runes)
-	} else {
-		job.literal, job.key = tmuxKey(msg)
-		if job.literal == "" && job.key == "" {
-			return m, nil
-		}
+	job, ok := keyJobFor(name, msg)
+	if !ok {
+		return m, nil
 	}
 	m.keys.send(job)
 	m.previewScroll = 0
-	capture := m.capturePreview()
-	return m, func() tea.Msg {
-		time.Sleep(40 * time.Millisecond)
-		return capture()
-	}
+	return m, afterKey(m.capturePreview())
 }

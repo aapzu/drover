@@ -20,7 +20,7 @@ import (
 
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *"exactly PLAN or DIRECT"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
+  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""
@@ -39,6 +39,7 @@ emit() { printf '%s\n' "$1" >> "$events"; }
 turn() {
   case "$1" in
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
+    *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
@@ -73,7 +74,7 @@ emit "{\"hook_event_name\":\"SessionStart\",\"session_id\":\"$sid\"}"
 while IFS= read -r line; do
   echo "typed:$line" >> "$FAKE_LOG"
   case "$line" in
-    /plan) echo "  ⏸ plan mode on (shift+tab to cycle)";;
+    */plan) echo "  ⏸ plan mode on (shift+tab to cycle)";;
     *) turn "$line";;
   esac
 done
@@ -320,52 +321,61 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 }
 
-func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
+func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 	root, log := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runEngine(t, e)
 
-	if _, err := e.NewSession(); err != nil {
+	task := e.CreateTask("Interrupt me", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	waitForAll(t, e, "the session to launch", func([]*store.Task) bool {
-		return strings.Count(readFile(log), "---") >= 1
-	})
-	if launch := strings.Split(readFile(log), "---")[0]; !strings.Contains(launch, "--permission-mode\nplan") {
-		t.Errorf("a new session should launch in its column's plan mode:\n%s", launch)
-	}
-}
-
-func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
-	root, log := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	task, err := e.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
+	ready := waitFor(t, e, "agent to start", func(t *store.Task) bool {
 		s := t.Sessions[store.MainSession]
 		return s != nil && s.Activity == store.ActivityIdle
 	})
-	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitForAll(t, e, "the agent to restart in the work column", func([]*store.Task) bool {
-		return strings.Count(readFile(log), "---") >= 2
+	defer events.Close()
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"SLOW work"}` + "\n")
+	busy := waitFor(t, e, "the turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
 	})
-	launches := strings.Split(readFile(log), "---")
-	if strings.Contains(launches[1], "--permission-mode") {
-		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
+
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.PermissionMode != "acceptEdits" || !s.RespawnPending {
+		t.Fatalf("the running turn should keep its mode until interrupted: mode=%s pending=%v", s.PermissionMode, s.RespawnPending)
+	}
+
+	transcript := claude.TranscriptPath(busy.Sessions[store.MainSession].AgentSessionID, busy.WorktreePath)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prompt := `{"type":"user","message":{"content":"Interrupt me"}}`
+	interrupt := `{"type":"user","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}`
+	if err := os.WriteFile(transcript, []byte(prompt+"\n"+interrupt+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFor(t, e, "the interrupted agent to switch to plan mode", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s.PermissionMode == "plan" && !s.RespawnPending && s.Activity == store.ActivityIdle
+	})
+	if got := readFile(log); strings.Count(got, "---") != 1 || !strings.Contains(got, "typed:\x1b/plan") {
+		t.Errorf("want Escape then /plan typed into the same agent, not a restart:\n%s", got)
 	}
 }
 
@@ -657,6 +667,43 @@ func TestPRRequestMovesCard(t *testing.T) {
 	})
 	if strings.Contains(readFile(log), "/code-review") {
 		t.Error("Self-review's enter group ran on a PR request")
+	}
+}
+
+func TestPromptInReviewStaysInReview(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review"},
+	  {"id":"done","name":"Done","role":"done"}],
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("card left review before it was prompted: %s", got)
+	}
+	if err := e.Send(task.ID, "TWEAK the footer"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(600 * time.Millisecond)
+	if got := e.Snapshot().Tasks[0].ColumnID; got != "review" {
+		t.Fatalf("a prompt in review moved the card to %s", got)
 	}
 }
 
@@ -1888,6 +1935,58 @@ func TestRunningSessionEntersWorktree(t *testing.T) {
 	}
 }
 
+func TestQueuedRelocation(t *testing.T) {
+	for _, there := range []bool{true, false} {
+		t.Run(fmt.Sprintf("already there=%v", there), func(t *testing.T) {
+			root, log := setupProject(t)
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+
+			if _, err := e.NewSession(); err != nil {
+				t.Fatal(err)
+			}
+			ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s != nil && s.Activity == store.ActivityIdle
+			})
+			worktree := t.TempDir()
+			e.with(func() {
+				s := e.find(ready.ID).Sessions[store.MainSession]
+				s.Activity = store.ActivityThinking
+				s.Pending = []store.Pending{{Relocate: worktree, Text: "Call the EnterWorktree tool with path " + worktree}}
+			})
+			cwd := root
+			if there {
+				cwd = worktree
+			}
+			events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer events.Close()
+			events.WriteString(`{"hook_event_name":"Stop","cwd":"` + cwd + `"}` + "\n")
+			waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+				s := t.Sessions[store.MainSession]
+				return s.Activity == store.ActivityIdle && len(s.Pending) == 0 || s.Relocate != ""
+			})
+			if there {
+				time.Sleep(time.Second)
+				if strings.Contains(readFile(log), "EnterWorktree") {
+					t.Errorf("the agent was asked to move into a worktree it was already in:\n%s", readFile(log))
+				}
+				return
+			}
+			waitForAll(t, e, "the agent to be asked to move", func([]*store.Task) bool {
+				return strings.Contains(readFile(log), "typed:Call the EnterWorktree")
+			})
+		})
+	}
+}
+
 func TestInterruptedTurnGoesIdle(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -2455,5 +2554,151 @@ func TestTickArchivesStaleDoneCards(t *testing.T) {
 	}
 	if !reloaded.Snapshot().Tasks[0].Archived {
 		t.Error("archived state didn't survive a reload")
+	}
+}
+
+func TestKeepAgentLeavesPendingRespawnAlone(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("SLOW work", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning turn to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityThinking
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && !s.RespawnPending
+	})
+	time.Sleep(time.Second)
+	s := e.Snapshot().Tasks[0].Sessions[store.MainSession]
+	if s.Status != store.StatusRunning || s.PermissionMode != "plan" {
+		t.Fatalf("a kept agent was respawned: status=%v mode=%s", s.Status, s.PermissionMode)
+	}
+	if n := strings.Count(readFile(log), "---"); n != 1 {
+		t.Fatalf("want 1 launch, got %d", n)
+	}
+}
+
+func TestKeepAgentColumnLeavesAgentRunning(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"park","name":"Parked"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
+		t.Fatalf("keepAgent column stopped the agent: status=%v", s.Status)
+	}
+	if err := e.Move(task.ID, "park", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusSuspended {
+		t.Fatalf("a plain column should suspend the agent: status=%v", s.Status)
+	}
+}
+
+func TestSlotEvictionSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"maxConcurrent":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"watch","name":"In review","keepAgent":true},
+	  {"id":"review","name":"Review"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	first := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(first.ID, "watch", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	second := e.CreateTask("Second", "")
+	if err := e.Move(second.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Start(second.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range e.Snapshot().Tasks {
+		s := task.Sessions[store.MainSession]
+		switch task.ID {
+		case first.ID:
+			if s.Status != store.StatusRunning || !tmux.Has(s.Tmux) {
+				t.Fatalf("a kept agent was evicted for another start: status=%v", s.Status)
+			}
+		case second.ID:
+			if s != nil && s.Status == store.StatusRunning {
+				t.Fatalf("second agent should not start past the limit: status=%v", s.Status)
+			}
+		}
+	}
+}
+
+func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.Remove(filepath.Join(root, "drover.json"))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the session to launch", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 1
+	})
+	if launch := strings.Split(readFile(log), "---")[0]; !strings.Contains(launch, "--permission-mode\nplan") {
+		t.Errorf("a new session should launch in its column's plan mode:\n%s", launch)
+	}
+}
+
+func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.Remove(filepath.Join(root, "drover.json"))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart in the work column", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	launches := strings.Split(readFile(log), "---")
+	if strings.Contains(launches[1], "--permission-mode") {
+		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
 	}
 }

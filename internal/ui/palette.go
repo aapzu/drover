@@ -33,8 +33,11 @@ var paletteCommands = []paletteCommand{
 	{"Archive or restore card", "A"},
 	{"Archive every card in Done", "C"},
 	{"Show or hide archived cards", "v"},
+	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
-	{"Ask the board's assistant about cards, or have it move them", askKey},
+	{"Open the assistant panel and type into it", askKey},
+	{"Hide the assistant panel", liveExitKey},
+	{"Start a new assistant conversation", newAskKey},
 	{"Task details and activity log", "i"},
 	{"Import agents, sessions or Linear issues", "I"},
 	{"Toggle live preview", "p"},
@@ -57,6 +60,8 @@ func keyPress(key string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case liveExitKey:
+		return tea.KeyMsg{Type: tea.KeyCtrlQ}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 }

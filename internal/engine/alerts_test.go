@@ -11,6 +11,17 @@ import (
 	"github.com/aapzu/drover/internal/store"
 )
 
+func TestIdleSkipsBackgroundAgents(t *testing.T) {
+	s := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true}
+	if !idle(s) {
+		t.Fatal("an idle agent with nothing running should be idle")
+	}
+	s.Background = []string{"toolu_1"}
+	if idle(s) {
+		t.Error("an agent with a background agent still running should not be idle")
+	}
+}
+
 const lifecycleBoard = `{%s"columns":[
   {"id":"todo","name":"To Do","role":"todo"},
   {"id":"exec","name":"Executing","autoSpawn":true},
@@ -73,6 +84,32 @@ func TestIdleTimeoutSuspendsUnfocusedAgents(t *testing.T) {
 	waitFor(t, e, "the idle agent to be suspended", func(t *store.Task) bool {
 		return t.Sessions[store.MainSession].Status == store.StatusSuspended && hasLog(t, "Agent suspended after 1 min idle")
 	})
+}
+
+func TestIdleTimeoutSparesKeptAgent(t *testing.T) {
+	e := startWithBoard(t, `{"idleTimeoutMinutes":1,"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"review","name":"In review","keepAgent":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := startIdleAgent(t, e, "Watched PR")
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	e.with(func() { e.find(task.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	plain := startIdleAgent(t, e, "Plain agent")
+	e.with(func() { e.find(plain.ID).Sessions[store.MainSession].UpdatedAt = time.Now().Add(-2 * time.Minute) })
+	waitForAll(t, e, "the plain agent to be suspended", func(tasks []*store.Task) bool {
+		for _, other := range tasks {
+			if other.ID == plain.ID {
+				return other.Sessions[store.MainSession].Status == store.StatusSuspended
+			}
+		}
+		return false
+	})
+	if task := e.Snapshot().Tasks[0]; task.Sessions[store.MainSession].Status != store.StatusRunning || hasLog(task, "suspended after") {
+		t.Fatalf("idle timeout suspended a kept agent: %+v", task.Sessions[store.MainSession])
+	}
 }
 
 func TestBoardSetsAgentLimit(t *testing.T) {
@@ -144,11 +181,18 @@ func promptScratch(t *testing.T, e *Engine, lines ...string) {
 	if _, err := e.NewSession(); err != nil {
 		t.Fatal(err)
 	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+	waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
 		s := t.Sessions[store.MainSession]
 		return s != nil && s.Activity == store.ActivityIdle
 	})
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	emitEvents(t, e, lines...)
+}
+
+// emitEvents has the only card's agent emit the hook events in lines.
+func emitEvents(t *testing.T, e *Engine, lines ...string) {
+	t.Helper()
+	task := e.Snapshot().Tasks[0]
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(task, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,11 +216,111 @@ func TestFirstPromptRoutesPastPlanning(t *testing.T) {
 			e := startWithBoard(t, routingBoard)
 			promptScratch(t, e, typoPrompt)
 			waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
-			if got := e.Snapshot().Tasks[0].ColumnID; got != c.want {
-				t.Errorf("routed %q to %q, want %q", c.route, got, c.want)
+			task := e.Snapshot().Tasks[0]
+			if task.ColumnID != c.want {
+				t.Errorf("routed %q to %q, want %q", c.route, task.ColumnID, c.want)
+			}
+			if wantLog := map[string]string{"FAIL": "using a worktree", "MAYBE": "unexpected answer"}[c.route]; wantLog != "" && !hasLog(task, wantLog) {
+				t.Errorf("no %q in the log", wantLog)
 			}
 		})
 	}
+}
+
+const questionPrompt = `{"hook_event_name":"UserPromptSubmit","prompt":"how does the board pick a column"}`
+
+// stayingSession starts a session whose first prompt is judged to need no
+// worktree and waits until it is idle and staying in the main checkout.
+func stayingSession(t *testing.T, board string) *Engine {
+	t.Helper()
+	t.Setenv("FAKE_ROUTE", "STAY")
+	e := startWithBoard(t, board)
+	promptScratch(t, e, questionPrompt, `{"hook_event_name":"Stop"}`)
+	waitFor(t, e, "the session to stay", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return hasLog(t, "no worktree needed") && s.Activity == store.ActivityIdle
+	})
+	return e
+}
+
+func assertStaying(t *testing.T, e *Engine) {
+	t.Helper()
+	task := e.Snapshot().Tasks[0]
+	s := task.Sessions[store.MainSession]
+	if task.ColumnID != "todo" || task.WorktreePath != "" || !s.Scratch || !s.Stay || s.Status != store.StatusRunning {
+		t.Errorf("session left the main checkout: column %q, worktree %q, %+v", task.ColumnID, task.WorktreePath, s)
+	}
+}
+
+func TestSessionsThatNeedNoWorktreeStayInTheMainCheckout(t *testing.T) {
+	for _, c := range []struct{ name, board string }{
+		{"with a plan column", routingBoard},
+		{"without one", fmt.Sprintf(lifecycleBoard, "")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := stayingSession(t, c.board)
+			time.Sleep(500 * time.Millisecond)
+			assertStaying(t, e)
+		})
+	}
+}
+
+func TestStayingSessionIgnoresSlashCommandsAndStops(t *testing.T) {
+	e := stayingSession(t, routingBoard)
+	emitEvents(t, e, `{"hook_event_name":"UserPromptSubmit","prompt":"/compact"}`, `{"hook_event_name":"Stop"}`)
+	waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle && !t.Sessions[store.MainSession].TurnInVisit
+	})
+	time.Sleep(500 * time.Millisecond)
+	assertStaying(t, e)
+}
+
+func TestStayingSessionLeavesWhenALaterPromptNeedsAWorktree(t *testing.T) {
+	e := stayingSession(t, routingBoard)
+	t.Setenv("FAKE_ROUTE", "DIRECT")
+	emitEvents(t, e, typoPrompt)
+	moved := waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
+	if moved.ColumnID != "exec" {
+		t.Errorf("routed to %q, want exec", moved.ColumnID)
+	}
+	waitFor(t, e, "the agent in its worktree", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.WorktreePath != "" && !s.Scratch && !s.Stay
+	})
+}
+
+func TestPromptTypedDuringTheRouteCheckIsJudgedToo(t *testing.T) {
+	t.Setenv("FAKE_ROUTE", "STAY")
+	t.Setenv("FAKE_ROUTE_DELAY", "1")
+	e := startWithBoard(t, routingBoard)
+	promptScratch(t, e, questionPrompt)
+	time.Sleep(300 * time.Millisecond)
+	t.Setenv("FAKE_ROUTE", "DIRECT")
+	emitEvents(t, e, typoPrompt)
+	moved := waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
+	if moved.ColumnID != "exec" {
+		t.Errorf("routed to %q, want exec", moved.ColumnID)
+	}
+}
+
+func TestStayingSessionLeavesWhenTheAgentEditsAFile(t *testing.T) {
+	e := stayingSession(t, routingBoard)
+	emitEvents(t, e, `{"hook_event_name":"PreToolUse","tool_name":"Edit"}`)
+	moved := waitFor(t, e, "the card to leave To Do", func(t *store.Task) bool { return t.ColumnID != "todo" })
+	if moved.ColumnID != "exec" {
+		t.Errorf("moved to %q, want exec: the agent is already working, so there is nothing to plan", moved.ColumnID)
+	}
+}
+
+func TestMovingAStayingSessionGivesItAWorktree(t *testing.T) {
+	e := stayingSession(t, routingBoard)
+	if err := e.Move(e.Snapshot().Tasks[0].ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the agent in its worktree", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.WorktreePath != "" && !s.Scratch && !s.Stay && s.Status == store.StatusRunning
+	})
 }
 
 func TestTurnEndWaitsForTheRoutingVerdict(t *testing.T) {

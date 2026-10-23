@@ -84,6 +84,7 @@ type Column struct {
 	Role           string      `json:"role,omitempty"`
 	Color          string      `json:"color,omitempty"`
 	AutoSpawn      bool        `json:"autoSpawn,omitempty"`
+	KeepAgent      bool        `json:"keepAgent,omitempty"`
 	PermissionMode string      `json:"permissionMode,omitempty"`
 	ModelOverride  string      `json:"modelOverride,omitempty"`
 	EffortOverride string      `json:"effortOverride,omitempty"`
@@ -260,6 +261,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
 		}
 		seen[c.ID] = true
+		if c.KeepAgent && (c.AutoSpawn || c.IsTodo() || c.IsDone()) {
+			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn, To Do or Done", FileName, c.ID)
+		}
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {
@@ -362,9 +366,9 @@ func Default() *Board {
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true},
-			{ID: "self-review", Name: "Self-review", Color: "#06b6d4", AutoSpawn: true,
+			{ID: "self-review", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
+			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
-			{ID: "in-review", Name: "In review", Color: "#f59e0b"},
 			{ID: "verify", Name: "Verify in develop", Color: "#ec4899"},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},

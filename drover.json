@@ -25,8 +25,14 @@
     },
     {
       "id": "self-review",
-      "name": "Self-review",
+      "name": "Waiting for me",
       "color": "#06b6d4",
+      "autoSpawn": true
+    },
+    {
+      "id": "in-review",
+      "name": "In review",
+      "color": "#f59e0b",
       "autoSpawn": true,
       "automations": {
         "onEnter": [
@@ -49,6 +55,12 @@
             "name": "Build",
             "type": "run_script",
             "script": "go build ./... && go vet ./..."
+          },
+          {
+            "name": "Ping",
+            "type": "notify",
+            "title": "{{title}}",
+            "body": "PR #{{prNumber}} is in review"
           }
         ],
         "onTurnEnd": [
@@ -56,22 +68,14 @@
             "name": "Apply fixes",
             "type": "send_message",
             "message": "Apply the fixes the review found, then run go test ./...",
-            "condition": "The message lists specific review findings that are still unfixed"
-          }
-        ]
-      }
-    },
-    {
-      "id": "in-review",
-      "name": "In review",
-      "color": "#f59e0b",
-      "automations": {
-        "onEnter": [
+            "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed"
+          },
           {
-            "name": "Ping",
-            "type": "notify",
-            "title": "{{title}}",
-            "body": "PR #{{prNumber}} is in review"
+            "name": "Open PR",
+            "type": "send_message",
+            "message": "Commit the changes, push the branch and open the PR with gh pr create, then watch its checks.",
+            "condition": "The message is a reply to the code review or to applying its fixes, and lists no review findings left to fix. Missing tests and uncommitted changes don't count as findings",
+            "conditionScript": "test -z \"$DROVER_PRNUMBER\""
           }
         ]
       }

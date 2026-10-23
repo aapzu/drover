@@ -326,3 +326,241 @@ func TestCursorStaysWhenAnotherCardFinishesMoving(t *testing.T) {
 		t.Errorf("col %d current %v, want the cursor to stay on %s", m.col, got, card.ID)
 	}
 }
+
+func TestMovePickerArrowsChooseAndEnterMoves(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	press := func(k tea.KeyType) {
+		next, _ := m.updateMove(tea.KeyMsg{Type: k})
+		m = next.(Model)
+	}
+	press(tea.KeyDown)
+	press(tea.KeyDown)
+	press(tea.KeyDown)
+	if m.mode != modeMove || m.moveSel != 2 {
+		t.Fatalf("mode = %v, moveSel = %d after three downs, want the picker open on the last column", m.mode, m.moveSel)
+	}
+	press(tea.KeyUp)
+	if m.moveSel != 1 {
+		t.Fatalf("moveSel = %d after up, want 1", m.moveSel)
+	}
+	press(tea.KeyEnter)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after enter, want the move started to c1", got)
+	}
+	if m.mode != modeBoard || m.col != 1 {
+		t.Errorf("mode = %v, col = %d after enter, want the board with the card moved to column 1", m.mode, m.col)
+	}
+}
+
+func TestMovePickerEnterOnCurrentColumnDoesNotMove(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	next, cmd := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
+	}
+}
+
+func TestMovePickerOpensOnCardsColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.col = 2
+	m.selected["c2"] = "c2-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.mode != modeMove || m.moveSel != 2 {
+		t.Errorf("mode = %v, moveSel = %d after m on column 2, want the picker open on column 2", m.mode, m.moveSel)
+	}
+}
+
+func TestMovePickerDigitOnCurrentColumnDoesNotMove(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+
+	next, cmd := m.updateMove(key("1"))
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want the picker closed with no move started", m.mode, cmd != nil, len(m.busy))
+	}
+}
+
+func TestMovePickerDoesNotMoveCardBeyondTheListedColumns(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.col = 9
+	m.selected["c9"] = "c9-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.moveSel != -1 {
+		t.Fatalf("moveSel = %d for a card in column 10, want no cursor on the listed columns", m.moveSel)
+	}
+	next, cmd := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
+		t.Errorf("mode = %v, cmd = %v, busy = %d; want enter to close the picker without moving", m.mode, cmd != nil, len(m.busy))
+	}
+}
+
+func TestMovePickerCancelKeysAndOutOfRangeDigitsDoNotMove(t *testing.T) {
+	keys := []tea.KeyMsg{{Type: tea.KeyEsc}, key("x"), key("0"), key("5")}
+	for _, k := range keys {
+		m := testModel(120, 40, 3, 1)
+		m.mode = modeMove
+		m.modalTask = m.snap.Tasks[0].ID
+		m.moveSel = 2
+
+		next, cmd := m.updateMove(k)
+		m = next.(Model)
+		if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 || m.col != 0 {
+			t.Errorf("%q: mode = %v, cmd = %v, busy = %d, col = %d; want the picker closed with no move", k.String(), m.mode, cmd != nil, len(m.busy), m.col)
+		}
+	}
+}
+
+func TestMovePickerCursorStopsAtTheNinthColumn(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	for range 15 {
+		next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(Model)
+	}
+	if m.moveSel != 8 {
+		t.Fatalf("moveSel = %d after many downs, want it to stop at the ninth column", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c8" {
+		t.Errorf("busy column = %q after enter, want the move to c8", got)
+	}
+}
+
+func TestMovePickerRendersCursorAndCurrentColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 2
+
+	var cursor, current string
+	for _, line := range strings.Split(m.renderMovePicker(), "\n") {
+		if strings.Contains(line, "▸") {
+			cursor = line
+		}
+		if strings.Contains(line, "(current)") {
+			current = line
+		}
+	}
+	if !strings.Contains(cursor, "Col 2") {
+		t.Errorf("cursor line = %q, want it on Col 2", cursor)
+	}
+	if !strings.Contains(current, "Col 0") {
+		t.Errorf("current line = %q, want the (current) tag on Col 0", current)
+	}
+}
+
+func TestMovePickerOpensOnOrphanCardInFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.snap.Tasks[0].ColumnID = "deleted"
+	m.col = 0
+	m.selected["c0"] = m.snap.Tasks[0].ID
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	if m.mode != modeMove || m.moveSel != 0 {
+		t.Errorf("mode = %v, moveSel = %d for an orphan card, want the picker open on column 0", m.mode, m.moveSel)
+	}
+}
+
+func TestMovePickerDigitIgnoresCursorPosition(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updateMove(key("3"))
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c2" {
+		t.Errorf("busy column = %q after moving the cursor and pressing 3, want the move to c2", got)
+	}
+}
+
+func TestMovePickerCursorStaysInRangeWhenBoardShrinks(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 2
+
+	m.applySnap(testModel(120, 40, 2, 1).snap)
+	if m.moveSel != 1 {
+		t.Fatalf("moveSel = %d after the board shrank to two columns, want the last one", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after enter, want the move to c1", got)
+	}
+}
+
+func TestMovePickerCursorStopsAtFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.mode = modeMove
+	m.modalTask = m.snap.Tasks[0].ID
+	m.moveSel = 0
+
+	for range 2 {
+		next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyUp})
+		m = next.(Model)
+	}
+	if m.moveSel != 0 {
+		t.Fatalf("moveSel = %d after up on the first column, want 0", m.moveSel)
+	}
+	next, _ := m.updateMove(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, _ = m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c1" {
+		t.Errorf("busy column = %q after down and enter, want the move to c1", got)
+	}
+}
+
+func TestMovePickerDigitMovesCardBeyondTheListedColumns(t *testing.T) {
+	m := testModel(120, 40, 10, 1)
+	m.col = 9
+	m.selected["c9"] = "c9-t0"
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	next, _ = m.updateMove(key("1"))
+	m = next.(Model)
+	if got := m.busy["c9-t0"].column; got != "c0" {
+		t.Errorf("busy column = %q after m and 1, want the card moved to c0", got)
+	}
+}
+
+func TestMovePickerEnterAdoptsOrphanCardIntoFirstColumn(t *testing.T) {
+	m := testModel(120, 40, 3, 1)
+	m.snap.Tasks[0].ColumnID = "deleted"
+	m.col = 0
+	m.selected["c0"] = m.snap.Tasks[0].ID
+
+	next, _ := m.updateBoard(key("m"))
+	m = next.(Model)
+	next, _ = m.updateMove(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c0" {
+		t.Errorf("busy column = %q after enter on an orphan card, want the move to c0", got)
+	}
+}

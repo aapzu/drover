@@ -128,6 +128,7 @@ type Event struct {
 	SessionID            string `json:"session_id"`
 	Source               string `json:"source"`
 	ToolName             string `json:"tool_name"`
+	ToolUseID            string `json:"tool_use_id"`
 	NotificationType     string `json:"notification_type"`
 	Message              string `json:"message"`
 	Prompt               string `json:"prompt"`
@@ -220,6 +221,21 @@ func ReviewedPRs(prompt string) []string {
 // reviewed.
 const reviewReach = 40
 
+// BackgroundAgent returns the tool use id of an Agent call that started its
+// agent in the background, which keeps working after the turn ends.
+func (e Event) BackgroundAgent() (string, bool) {
+	if e.ToolName != "Agent" {
+		return "", false
+	}
+	var res struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(e.ToolResponse, &res) != nil || res.Status != "async_launched" {
+		return "", false
+	}
+	return e.ToolUseID, true
+}
+
 // CreatedPRs returns the pull request URLs a Bash `gh pr create` or
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
 // looked at never count as its own.
@@ -299,6 +315,23 @@ func TranscriptPRs(path string, offset int64) ([]string, int64, error) {
 		}
 	})
 	return urls, offset, err
+}
+
+var taskNoticeID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+
+// BackgroundDone returns the tool use ids of background agents whose completion
+// notice was written after offset, and the new offset.
+func BackgroundDone(path string, offset int64) ([]string, int64, error) {
+	var ids []string
+	offset, err := readLines(path, offset, func(line []byte) {
+		if !bytes.Contains(line, []byte("<task-notification>")) {
+			return
+		}
+		for _, m := range taskNoticeID.FindAllSubmatch(line, -1) {
+			ids = append(ids, string(m[1]))
+		}
+	})
+	return ids, offset, err
 }
 
 // readLines calls fn with each complete line after offset and returns the
@@ -401,20 +434,46 @@ func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, err
 	return strings.HasPrefix(strings.ToUpper(answer), "YES"), nil
 }
 
-// NeedsPlan asks AskHaiku whether task is worth planning before any work
-// starts. Any answer not starting with DIRECT, and any error, counts as yes.
-func NeedsPlan(ctx context.Context, dir, task string) (bool, error) {
+// Route is how a prompt typed in a session still in the main checkout starts
+// its card.
+type Route int
+
+const (
+	// RoutePlan is the zero value and the fallback: a worktree, planned first.
+	RoutePlan Route = iota
+	// RouteDirect needs a worktree but no plan.
+	RouteDirect
+	// RouteStay changes no files, so the card stays in the main checkout.
+	RouteStay
+)
+
+// RouteTask asks AskHaiku whether task needs a worktree and a plan before any
+// work starts. An answer starting with neither PLAN, DIRECT nor STAY, and any
+// error, means RoutePlan. The prompt tells Haiku to avoid STAY when unsure.
+func RouteTask(ctx context.Context, dir, task string) (Route, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	prompt := "Decide whether this coding task should be planned before work starts.\n" +
-		"Answer DIRECT for a small, specific change, a question, a command to run (commit, rebase, run tests), " +
+	prompt := "Decide how this coding task should start.\n" +
+		"Answer STAY when no file in the repository will change: a question, an explanation, " +
+		"reading or searching code, or checking something's status. " +
+		"Answer DIRECT for a small, specific change, a command to run (commit, rebase, run tests), " +
 		"or when the task says not to plan. Answer PLAN for ambiguous, multi-file or design-heavy work. " +
-		"Reply with exactly PLAN or DIRECT.\n\n<task>\n" + task + "\n</task>"
+		"When unsure whether files will change, don't answer STAY. " +
+		"Reply with exactly PLAN, DIRECT or STAY.\n\n<task>\n" + task + "\n</task>"
 	answer, err := AskHaiku(ctx, dir, prompt)
 	if err != nil {
-		return true, fmt.Errorf("plan check failed: %w", err)
+		return RoutePlan, fmt.Errorf("route check failed: %w", err)
 	}
-	return !strings.HasPrefix(strings.ToUpper(answer), "DIRECT"), nil
+	answer = strings.ToUpper(answer)
+	switch {
+	case strings.HasPrefix(answer, "STAY"):
+		return RouteStay, nil
+	case strings.HasPrefix(answer, "DIRECT"):
+		return RouteDirect, nil
+	case strings.HasPrefix(answer, "PLAN"):
+		return RoutePlan, nil
+	}
+	return RoutePlan, fmt.Errorf("route check failed: unexpected answer %q", FirstLine(answer))
 }
 
 // Interrupted reports whether the transcript's last conversation entry is the

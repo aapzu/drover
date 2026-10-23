@@ -98,15 +98,24 @@ type Session struct {
 	RespawnPending bool `json:"respawnPending,omitempty"`
 	// Relocate is the worktree a running scratch agent was asked to move into,
 	// until its hooks report it there.
-	Relocate  string    `json:"relocate,omitempty"`
-	Pending   []Pending `json:"pending,omitempty"`
-	LastReply string    `json:"lastReply,omitempty"`
+	Relocate           string    `json:"relocate,omitempty"`
+	Background         []string  `json:"background,omitempty"`
+	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
+	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
+	Pending            []Pending `json:"pending,omitempty"`
+	LastReply          string    `json:"lastReply,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
 	HandedOff bool `json:"handedOff,omitempty"`
 	Scratch   bool `json:"scratch,omitempty"`
-	Routing   bool `json:"-"`
+	// Stay keeps a scratch session in the main checkout because its latest
+	// prompt needs no worktree. It is saved so a restart doesn't move the card.
+	Stay    bool `json:"stay,omitempty"`
+	Routing bool `json:"-"`
+	// NextRoute is the latest prompt typed while Routing, judged once the
+	// current check returns.
+	NextRoute string `json:"-"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool         `json:"forked,omitempty"`
@@ -119,6 +128,9 @@ type Session struct {
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
 }
+
+// HasBackground reports whether the session's background agents are still running.
+func (s *Session) HasBackground() bool { return len(s.Background) > 0 }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves
 // the choice to Claude Code.
