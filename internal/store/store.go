@@ -103,8 +103,8 @@ type Session struct {
 	BackgroundScanPath string   `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64    `json:"backgroundScan,omitempty"`
 	// AutomatedPrompt is the automation message last typed into the agent. The
-	// next UserPromptSubmit clears it; one that matches it is not a user prompt,
-	// so it does not reopen a card in review.
+	// next UserPromptSubmit clears it, and a prompt matching it does not reopen a
+	// card in review. Failed typing and spawns clear it too.
 	AutomatedPrompt string    `json:"automatedPrompt,omitempty"`
 	Pending         []Pending `json:"pending,omitempty"`
 	LastReply       string    `json:"lastReply,omitempty"`
