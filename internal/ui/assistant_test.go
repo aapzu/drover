@@ -139,18 +139,25 @@ func TestTypingInThePanelReachesClaudeNotTheBoard(t *testing.T) {
 	}
 }
 
-func TestCtrlQLeavesThePanelOpenAndThenHidesIt(t *testing.T) {
+func TestCtrlQHidesTheFocusedPanel(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
 
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if m.mode != modeBoard || !m.assist.open {
-		t.Fatalf("mode %v, open %v; the panel should stay beside the board", m.mode, m.assist.open)
+	if m.mode != modeBoard || m.assist.open || m.layout().assistantW != 0 || m.layout().boardW != m.width {
+		t.Fatalf("mode %v, open %v; one ctrl+q should hide the panel and return to the board", m.mode, m.assist.open)
 	}
 	m, _ = update(m, key("l"))
 	if m.col != 1 {
 		t.Error("the board should have its keys back")
 	}
+}
+
+func TestCtrlQOnTheBoardHidesAnUnfocusedPanel(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	if m.assist.open || m.layout().assistantW != 0 || m.layout().boardW != m.width {
 		t.Error("ctrl+q on the board should hide the panel")
@@ -158,6 +165,17 @@ func TestCtrlQLeavesThePanelOpenAndThenHidesIt(t *testing.T) {
 }
 
 func TestReopeningAVisiblePanelDoesNotRestartClaude(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, cmd := update(m, key(askKey))
+	runCmds(cmd)
+	if m.mode != modeAssistant || f.starts != 0 || f.restarts != 0 {
+		t.Errorf("mode %v, starts %d, restarts %d; reopening a running panel must not start claude", m.mode, f.starts, f.restarts)
+	}
+}
+
+func TestReopeningAHiddenPanelDoesNotRestartClaude(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
@@ -171,7 +189,7 @@ func TestReopeningAVisiblePanelDoesNotRestartClaude(t *testing.T) {
 func TestClickingThePanelFocusesIt(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	l := m.layout()
 
 	m, _ = update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
@@ -225,7 +243,7 @@ func TestZeroResetsThePanelWidth(t *testing.T) {
 	m := open(t, assistantModel(t))
 	m.prefs.AssistantWidth = 50
 	m.savePrefs()
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("0")})
 	if w := m.layout().assistantW; w != m.width*2/5 {
 		t.Errorf("panel width = %d, want the default %d", w, m.width*2/5)
@@ -424,7 +442,7 @@ func TestCaptureLoopRunsOnceAndOnlyWhileFocused(t *testing.T) {
 	if _, cmd := update(m, assistantTickMsg{gen: gen}); cmd == nil {
 		t.Error("the focused panel stopped capturing")
 	}
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	if _, cmd := update(m, assistantTickMsg{gen: gen}); cmd != nil {
 		t.Error("the loop kept running after the panel lost focus")
 	}
@@ -438,7 +456,7 @@ func TestCaptureLoopRunsOnceAndOnlyWhileFocused(t *testing.T) {
 func TestStoppedPanelIsNotCaptured(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m.assist.session = sessionStopped
 	m.frame = 1
 	if _, cmd := update(m, tickMsg(time.Now())); cmd == nil {
@@ -452,7 +470,7 @@ func TestStoppedPanelIsNotCaptured(t *testing.T) {
 func TestBoardTickCapturesAnUnfocusedPanelOnly(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	frames := func(m Model) int {
 		m.frame, m.snapBusy, m.prefs.HidePreview = 1, true, true
 		_, cmd := update(m, tickMsg(time.Now()))
@@ -513,7 +531,7 @@ func TestFrameStateFollowsTheSession(t *testing.T) {
 	if !strings.Contains(m.View(), "4 lines up") {
 		t.Error("a scrolled panel doesn't say so")
 	}
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m.assist.scroll = 4
 	if !strings.Contains(m.View(), "4 lines up") {
 		t.Error("a scrolled, unfocused panel doesn't say so")
@@ -637,7 +655,7 @@ func TestPanelPassesPastesAndDropsUnmappableKeys(t *testing.T) {
 func TestDroppingACardOnThePanelDoesNothing(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	l := m.layout()
 	m.drag = dragState{kind: dragCard, task: m.snap.Tasks[0].ID, fromCol: 0, x: l.boardW + 2, y: l.bodyY + 2}
 	_, cmd := update(m, tea.MouseMsg{X: l.boardW + 2, Y: l.bodyY + 2, Action: tea.MouseActionRelease})
@@ -671,7 +689,7 @@ func TestMessagesFromAnEarlierStartAreIgnored(t *testing.T) {
 	m, _ = update(m, key(askKey))
 	first := m.assist.epoch
 	m, _ = update(m, assistantStartedMsg{epoch: first, created: true})
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m, cmd := update(m, key(newAskKey))
 	if m.assist.epoch == first {
 		t.Fatal("a new conversation should be a new start")
@@ -719,7 +737,7 @@ func TestNewConversationWaitsForAStartInProgress(t *testing.T) {
 	f := fakePanel(t)
 	m := assistantModel(t)
 	m, _ = update(m, key(askKey))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	epoch := m.assist.epoch
 	m, cmd := update(m, key(newAskKey))
 	runCmds(cmd)
@@ -839,7 +857,6 @@ func TestHitTestAssistantBoundaries(t *testing.T) {
 		}
 	}
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	if got := m.layout().hitTest(m, m.width-1, l.bodyY+1).kind; got == hitAssistant {
 		t.Error("a hidden panel still takes clicks")
 	}
@@ -859,7 +876,7 @@ func TestPaletteAssistantCommandsEachDoTheirOwnThing(t *testing.T) {
 	}
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 
 	m, _ = run(t, m, "Hide the assistant panel")
 	if m.assist.open {
@@ -871,7 +888,7 @@ func TestPaletteAssistantCommandsEachDoTheirOwnThing(t *testing.T) {
 		t.Errorf("open %v, restarts %d", m.assist.open, f.restarts)
 	}
 	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m, cmd = run(t, m, "Open the assistant panel and type into it")
 	runCmds(cmd)
 	if m.mode != modeAssistant || f.restarts != 1 {
@@ -917,7 +934,7 @@ func TestWheelOverTheBoardLeavesItAloneWhileTypingToClaude(t *testing.T) {
 func TestColumnsStayLeftOfThePanelWhenResized(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	for range 80 {
 		m, _ = update(m, key(">"))
 	}
@@ -967,7 +984,6 @@ func TestReopeningAHiddenPanelCapturesAtOnce(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	before := f.captures
 	_, cmd := update(m, key(askKey))
 	runCmds(cmd)
@@ -980,9 +996,8 @@ func TestHiddenPanelIsNotCaptured(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	if m.assist.open {
-		t.Fatal("the second ctrl+q should hide the panel")
+		t.Fatal("ctrl+q should hide the panel")
 	}
 	m.frame, m.snapBusy, m.prefs.HidePreview = 1, true, true
 	_, cmd := update(m, tickMsg(time.Now()))
@@ -1015,20 +1030,16 @@ func TestFocusedCaptureLoopSurvivesTheStartingPhase(t *testing.T) {
 	}
 }
 
-func TestCtrlQLeavesAStoppedPanel(t *testing.T) {
+func TestCtrlQHidesAStoppedPanel(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
 	m.assist.fail(errSessionEnded)
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if m.mode != modeBoard || !m.assist.open {
+	if m.mode != modeBoard || m.assist.open {
 		t.Errorf("mode %v, open %v after ctrl+q in a stopped panel", m.mode, m.assist.open)
 	}
 	if _, ok := sentJob(m); ok {
 		t.Error("ctrl+q was sent to a session that isn't running")
-	}
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if m.assist.open {
-		t.Error("a second ctrl+q should hide the panel")
 	}
 }
 
@@ -1051,7 +1062,7 @@ func TestDroppingACardOnAColumnStillMovesItBesideThePanel(t *testing.T) {
 		m := assistantModel(t)
 		if panel {
 			m = open(t, m)
-			m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+			m.mode = modeBoard
 		}
 		l := m.layout()
 		x, y := l.cols[1].x+2, l.bodyY+columnHeaderHeight+1

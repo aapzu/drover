@@ -229,6 +229,7 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == liveExitKey {
 		m.mode = modeBoard
+		m.assist.open = false
 		return m, nil
 	}
 	switch {
@@ -239,7 +240,7 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.startAssistantSession(false)
 		return m, cmd
 	default:
-		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to return.")
+		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to hide it.")
 		return m, nil
 	}
 	job, ok := keyJobFor(assistant.SessionName(m.eng.Root), msg)
@@ -303,7 +304,7 @@ func (m Model) renderAssistant(width, height int) string {
 	}
 	if focused {
 		style = style.BorderForeground(accent)
-		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q back to board "
+		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q hide "
 	}
 	if m.assist.scroll > 0 {
 		title += thinking.Render(fmt.Sprintf("· ↑ %d lines up ", m.assist.scroll))
