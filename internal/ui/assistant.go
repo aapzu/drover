@@ -298,11 +298,10 @@ func (m Model) renderAssistant(width, height int) string {
 
 	title, hint := " assistant ", "· "+askKey+" to type here "
 	style := panelStyle
-	if m.drag.kind == dragAssistant {
+	if focused || m.drag.kind == dragAssistant {
 		style = style.BorderForeground(accent)
 	}
 	if focused {
-		style = style.BorderForeground(accent)
 		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q back to board "
 	}
 	if m.assist.scroll > 0 {

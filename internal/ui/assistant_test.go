@@ -220,6 +220,20 @@ func TestSavedPanelWidthIsAppliedOnStart(t *testing.T) {
 	}
 }
 
+func TestSavedPanelWidthIsClampedToTheWindow(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	if err := (prefs{AssistantWidth: 500}).save(m.eng.Root); err != nil {
+		t.Fatal(err)
+	}
+	m.prefs = loadPrefs(m.eng.Root)
+	m = open(t, m)
+	l := m.layout()
+	if l.assistantW != m.width-minBoardWidth || l.boardW < minBoardWidth {
+		t.Errorf("board %d + panel %d of %d", l.boardW, l.assistantW, m.width)
+	}
+}
+
 func TestZeroResetsThePanelWidth(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
