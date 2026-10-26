@@ -243,7 +243,7 @@ func TestZeroResetsThePanelWidth(t *testing.T) {
 	m := open(t, assistantModel(t))
 	m.prefs.AssistantWidth = 50
 	m.savePrefs()
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m.mode = modeBoard
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("0")})
 	if w := m.layout().assistantW; w != m.width*2/5 {
 		t.Errorf("panel width = %d, want the default %d", w, m.width*2/5)
