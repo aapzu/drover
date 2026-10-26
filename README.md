@@ -158,7 +158,7 @@ open, and to Verify in develop once it merges:
 | Verify in develop | Plain |
 | Done | Done |
 
-When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. The default board has this rule; a custom `drover.json` needs the `onTurnEnd` automation on its Executing column (see this repo's `drover.json`).
+When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. Custom boards need the `onTurnEnd` automation on their Executing column.
 
 ## How it works
 
