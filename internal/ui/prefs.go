@@ -36,6 +36,9 @@ type prefs struct {
 	NoMouse       bool           `json:"noMouse,omitempty"`
 	ShowArchived  bool           `json:"showArchived,omitempty"`
 	ShowSettings  bool           `json:"showSettings,omitempty"`
+
+	// AssistantWidth is in columns; 0 means the default share of the screen.
+	AssistantWidth int `json:"assistantWidth,omitempty"`
 }
 
 func prefsPath(root string) string { return filepath.Join(store.Dir(root), "ui.json") }

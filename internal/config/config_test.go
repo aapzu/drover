@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -155,8 +156,72 @@ func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
 		t.Fatalf("default executing column has no turn-end rule: %+v", col)
 	}
 	row := col.Automations.OnTurnEnd[0]
-	if row.Type != "move_to_column" || row.TargetColumn != "self-review" || row.Condition == "" {
+	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
 		t.Fatalf("default turn-end rule: %+v", row)
+	}
+}
+
+func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
+	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
+	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
+	for _, tc := range []struct {
+		name, columns, wantName string
+		wantRows                int
+	}{
+		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", 0},
+		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "Apply", 1},
+		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "Waiting for me", 1},
+		{"no waiting-for-me", executing + `}`, "", 0},
+	} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[`+tc.columns+`]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		board, _, err := Load(root)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		col, _, _ := board.Column("executing")
+		if got := len(col.Automations.OnTurnEnd); got != tc.wantRows {
+			t.Errorf("%s: turn-end rows = %d, want %d", tc.name, got, tc.wantRows)
+		}
+		if tc.wantRows > 0 && col.Automations.OnTurnEnd[0].Name != tc.wantName {
+			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, col.Automations.OnTurnEnd[0].Name, tc.wantName)
+		}
+	}
+}
+
+func TestLocalOverlayKeepsWaitingForYou(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, LocalFileName), []byte(`{"maxConcurrent":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	board, _, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, _, _ := board.Column("executing")
+	if len(col.Automations.OnTurnEnd) != 1 {
+		t.Errorf("turn-end rows = %+v, want the default row alongside a local overlay", col.Automations.OnTurnEnd)
+	}
+}
+
+func TestMigratedWaitingForYouMatchesDefault(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	board, _, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := board.Column("executing")
+	want, _, _ := Default().Column("executing")
+	if !reflect.DeepEqual(got.Automations.OnTurnEnd, want.Automations.OnTurnEnd) {
+		t.Errorf("migrated turn-end rows = %+v, want %+v", got.Automations.OnTurnEnd, want.Automations.OnTurnEnd)
 	}
 }
 

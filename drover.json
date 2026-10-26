@@ -21,10 +21,20 @@
       "id": "executing",
       "name": "Executing",
       "color": "#3b82f6",
-      "autoSpawn": true
+      "autoSpawn": true,
+      "automations": {
+        "onTurnEnd": [
+          {
+            "name": "Waiting for me",
+            "type": "move_to_column",
+            "targetColumn": "self-review",
+            "condition": "The reply ends by asking me for a decision or input"
+          }
+        ]
+      }
     },
     {
-      "id": "self-review",
+      "id": "waiting-for-me",
       "name": "Waiting for me",
       "color": "#06b6d4",
       "autoSpawn": true
@@ -88,7 +98,7 @@
     }
   ],
   "prFlow": {
-    "requested": "self-review",
+    "requested": "waiting-for-me",
     "opened": "in-review",
     "changesRequested": "executing",
     "changesRequestedMessage": "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",

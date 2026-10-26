@@ -1317,11 +1317,15 @@ func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc grou
 // limit is how many agents may run at once. Called with mu held.
 func (e *Engine) limit() int { return e.board.Limit() }
 
-func (e *Engine) runningCount() int {
+func (e *Engine) runningCount() int { return e.runningCountExcept(nil) }
+
+// runningCountExcept is runningCount without skip, the session spawn is about
+// to start in its own slot. Called with mu held.
+func (e *Engine) runningCountExcept(skip *store.Session) int {
 	n := 0
 	for _, t := range e.state.Tasks {
 		for _, s := range t.Sessions {
-			if s.Status == store.StatusRunning {
+			if s.Status == store.StatusRunning && s != skip {
 				n++
 			}
 		}
@@ -1450,10 +1454,10 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,
 		}
-		if evict && e.runningCount() >= e.limit() {
+		if evict && e.runningCountExcept(s) >= e.limit() {
 			stop = e.freeSlot(t)
 		}
-		if e.runningCount() >= e.limit() {
+		if e.runningCountExcept(s) >= e.limit() {
 			queue = true
 			s.Status = store.StatusQueued
 			s.Activity = store.ActivityIdle
