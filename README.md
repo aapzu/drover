@@ -56,7 +56,7 @@ drover
 | `r` / `S` | start or resume / suspend the agent |
 | `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
 | `u` | update the worktree from its base branch |
-| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns to the board, `Ctrl-q` again hides it) / start a new assistant conversation |
+| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns to the board and hides it) / start a new assistant conversation |
 | `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
 | `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
 | `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
@@ -517,9 +517,8 @@ like any other. It takes no agent slot and isn't a card.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
-  `ctrl+q` returns to the board with the panel still showing, and `ctrl+q` on
-  the board hides it. You can also click the panel to focus it, and use the
-  mouse wheel to scroll it.
+  `ctrl+q` returns to the board and hides the panel. You can also click the
+  panel to focus it, and use the mouse wheel to scroll it.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
   (`tmux -L drover ls`), started in the repo. It stops when the board that
   opened it quits or its terminal closes, and the conversation resumes the next
