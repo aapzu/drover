@@ -1050,7 +1050,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		n := 0
 		for _, task := range m.tasksForColumn(m.col) {
-			if !task.Archived {
+			if !task.Archived && !task.Hidden {
 				n++
 			}
 		}

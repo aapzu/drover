@@ -559,8 +559,8 @@ func (e *Engine) ArchiveTask(id string, archived, force bool) error {
 	return nil
 }
 
-// ArchiveColumn archives every visible card in a Done column and returns how
-// many were. Hidden cards are left alone. Worktrees with uncommitted changes are kept.
+// ArchiveColumn archives every card in a Done column that isn't hidden and
+// returns how many were. Worktrees with uncommitted changes are kept.
 func (e *Engine) ArchiveColumn(colID string) int {
 	n := 0
 	var owners []string

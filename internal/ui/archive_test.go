@@ -132,3 +132,45 @@ func TestOffBoardCombinations(t *testing.T) {
 		}
 	}
 }
+
+func TestArchiveAllIgnoresHiddenCards(t *testing.T) {
+	m := archiveModel(t)
+	m.col = 1
+	m.prefs.ShowHidden = true
+	m.snap.Tasks[3].Archived, m.snap.Tasks[4].Archived = false, false
+	m.snap.Tasks[4].Hidden = true
+
+	next, _ := m.updateBoard(key("C"))
+	if got := next.(Model).confirmText; !strings.Contains(got, "all 2 cards") {
+		t.Errorf("C with one hidden card: text = %q", got)
+	}
+
+	m.snap.Tasks[3].Hidden = true
+	m.snap.Tasks[5].Hidden = true
+	next, _ = m.updateBoard(key("C"))
+	if got := next.(Model); got.mode == modeConfirm || !strings.Contains(got.flash, "Nothing to archive") {
+		t.Errorf("C with only hidden cards: mode=%v flash=%q", got.mode, got.flash)
+	}
+}
+
+func TestHideKeys(t *testing.T) {
+	m := archiveModel(t)
+
+	if _, cmd := m.updateBoard(key("b")); cmd == nil {
+		t.Error("b on a card didn't start hiding it")
+	}
+
+	next, _ := m.updateBoard(key("B"))
+	if !next.(Model).prefs.ShowHidden {
+		t.Error("B didn't show hidden cards")
+	}
+	next, _ = next.(Model).updateBoard(key("B"))
+	if next.(Model).prefs.ShowHidden {
+		t.Error("second B didn't hide them again")
+	}
+
+	m.snap.Tasks = nil
+	if _, cmd := m.updateBoard(key("b")); cmd != nil {
+		t.Error("b with no card selected did something")
+	}
+}
