@@ -17,6 +17,7 @@ const (
 	dragCard
 	dragColumn
 	dragPreview
+	dragAssistant
 )
 
 type dragState struct {
@@ -43,7 +44,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Action == tea.MouseActionPress && tea.MouseEvent(msg).IsWheel():
 		h := l.hitTest(m, msg.X, msg.Y)
-		if h.kind == hitAssistant {
+		if h.kind == hitAssistant || h.kind == hitAssistantEdge {
 			return m.wheelAssistant(msg, l)
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
@@ -88,6 +89,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag = dragState{kind: dragColumn, col: h.col, colX: h.box.x}
 		case hitPreviewEdge:
 			m.drag = dragState{kind: dragPreview}
+		case hitAssistantEdge:
+			m.drag = dragState{kind: dragAssistant}
 		case hitPreview:
 			if m.mode != modeLive {
 				return m.startLive()
@@ -113,6 +116,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.boardWidth())
 		case dragPreview:
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
+		case dragAssistant:
+			m.prefs.AssistantWidth = m.clampAssistantWidth(m.width - msg.X)
 		}
 
 	case msg.Action == tea.MouseActionRelease:
@@ -130,7 +135,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.col = h.col
 			m.selected[target.ID] = t.ID
 			return m, m.moveCmd(t, target)
-		case dragColumn, dragPreview:
+		case dragColumn, dragPreview, dragAssistant:
 			m.savePrefs()
 		}
 	}

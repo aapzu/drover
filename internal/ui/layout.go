@@ -126,6 +126,7 @@ const (
 	hitPreview
 	hitPreviewEdge
 	hitAssistant
+	hitAssistantEdge
 )
 
 type hit struct {
@@ -137,6 +138,9 @@ type hit struct {
 
 func (l layout) hitTest(m Model, x, y int) hit {
 	if l.assistantW > 0 && x >= l.boardW && y >= l.bodyY && y < l.bodyY+l.bodyH {
+		if x == l.boardW {
+			return hit{kind: hitAssistantEdge}
+		}
 		return hit{kind: hitAssistant}
 	}
 	if l.previewH > 0 && y >= l.previewY && y < l.previewY+l.previewH {
