@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -157,6 +158,45 @@ func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
 	row := col.Automations.OnTurnEnd[0]
 	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
 		t.Fatalf("default turn-end rule: %+v", row)
+	}
+}
+
+func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
+	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
+	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
+	for _, tc := range []struct {
+		name, columns string
+		wantRows      int
+	}{
+		{"unset", executing + `}, ` + waitingForMe, 1},
+		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, 0},
+		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, 1},
+		{"no waiting-for-me", executing + `}`, 0},
+	} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[`+tc.columns+`]}`), 0o644)
+		board, _, err := Load(root)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		col, _, _ := board.Column("executing")
+		if got := len(col.Automations.OnTurnEnd); got != tc.wantRows {
+			t.Errorf("%s: turn-end rows = %d, want %d", tc.name, got, tc.wantRows)
+		}
+	}
+}
+
+func TestMigratedWaitingForYouMatchesDefault(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644)
+	board, _, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ := board.Column("executing")
+	want, _, _ := Default().Column("executing")
+	if !reflect.DeepEqual(got.Automations.OnTurnEnd, want.Automations.OnTurnEnd) {
+		t.Errorf("migrated turn-end rows = %+v, want %+v", got.Automations.OnTurnEnd, want.Automations.OnTurnEnd)
 	}
 }
 
