@@ -2804,3 +2804,62 @@ func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
 		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
 	}
 }
+
+func TestNewSessionMovedToPlanningRestartsInPlanMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.Remove(filepath.Join(root, "drover.json"))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	if err := e.Move(task.ID, "planning", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart in the worktree", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if launch := strings.Split(readFile(log), "---")[1]; !strings.Contains(launch, "--permission-mode\nplan") {
+		t.Errorf("the agent should restart in plan mode:\n%s", launch)
+	}
+	s := waitFor(t, e, "the agent to run", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	}).Sessions[store.MainSession]
+	if s.PermissionMode != "plan" || !tmux.Has(s.Tmux) {
+		t.Errorf("want a running agent in plan mode, got %+v", s)
+	}
+}
+
+func TestRespawnAfterLeavingSessionsKeepsItsSlot(t *testing.T) {
+	t.Setenv("FAKE_ROUTE", "PLAN")
+	t.Setenv("FAKE_STAY", "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := startWithBoard(t, `{"maxConcurrent":1,"columns":[
+	  {"id":"todo","name":"Sessions","role":"todo","permissionMode":"plan"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	promptScratch(t, e, typoPrompt, `{"hook_event_name":"Stop"}`)
+	waitFor(t, e, "the agent to be asked to move", func(t *store.Task) bool {
+		return t.ColumnID == "plan" && hasLog(t, "Asking the agent to move into the worktree")
+	})
+	task := waitFor(t, e, "the agent to be resumed in the worktree", func(t *store.Task) bool {
+		return hasLog(t, "Resumed agent")
+	})
+	if hasLog(task, "Agent queued") {
+		t.Errorf("the respawned agent queued itself behind its own slot")
+	}
+	if s := task.Sessions[store.MainSession]; s.PermissionMode != "plan" {
+		t.Errorf("the respawned agent should be in plan mode, got %q", s.PermissionMode)
+	}
+}
