@@ -305,7 +305,7 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 	board := &config.Board{
 		DefaultBaseBranch: "develop",
 		Columns: []config.Column{
-			{ID: "todo", Name: "Sessions", Role: "todo"},
+			{ID: "plan", Name: "Planning", AutoSpawn: true, PermissionMode: "plan"},
 			{ID: "exec", Name: "Executing", AutoSpawn: true, PermissionMode: "auto"},
 			{ID: "wait", Name: "Waiting"},
 			{ID: "done", Name: "Done", Role: "done"},
@@ -315,16 +315,20 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 	for _, want := range []string{
 		"my-app at /work/my-app",
 		"branch from develop",
-		"- Sessions (id todo): no agent; a card moved here loses its worktree",
+		"- Planning (id plan): an agent works on the card in plan mode",
 		"- Executing (id exec): an agent works on the card in auto mode",
 		"- Waiting (id wait): no agent runs here",
 		"- Done (id done): finished cards",
+		"`add` puts the card in the first column and starts no agent",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Index(got, "Sessions (id") > strings.Index(got, "Done (id") {
+	if strings.Contains(got, "To Do") {
+		t.Errorf("prompt still mentions the removed To Do column:\n%s", got)
+	}
+	if strings.Index(got, "Planning (id") > strings.Index(got, "Done (id") {
 		t.Error("columns are not in board order")
 	}
 }
@@ -332,7 +336,7 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(`{"columns":[{"id":"todo","name":"Backlog","role":"todo"},{"id":"qa","name":"QA lane","autoSpawn":true}]}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(`{"columns":[{"id":"backlog","name":"Backlog"},{"id":"qa","name":"QA lane","autoSpawn":true}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var deadline time.Time

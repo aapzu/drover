@@ -63,7 +63,6 @@ func BoardPrompt(exe string) string {
 	return "You are running as an agent on a drover kanban board. Your task is a card on that board, numbered in $DROVER_TASK_NUMBER.\n" +
 		"To move your card, for example when the user asks you to, run `" + cmd + " move $DROVER_TASK_NUMBER <column>`. Columns are ids or names; an unknown one is refused with the list of valid ones. " +
 		"A move can change your model or permission mode, which applies once your turn ends, and into a column that runs no agent it stops you. " +
-		"Moving to the To Do column, whatever it is named, also deletes your worktree even with uncommitted changes and resets the conversation, so only do that when asked. " +
 		"Moving to Done refuses while the worktree has uncommitted changes; tell the user instead of passing --force.\n" +
 		"`" + cmd + " list` shows every card and its column. Move a card only when asked, or when the board's own instructions say so."
 }
@@ -135,7 +134,6 @@ type Event struct {
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	PermissionMode       string `json:"permission_mode"`
-	Cwd                  string `json:"cwd"`
 	ToolInput            struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
@@ -446,48 +444,6 @@ func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, err
 		return false, fmt.Errorf("condition check failed: %w", err)
 	}
 	return strings.HasPrefix(strings.ToUpper(answer), "YES"), nil
-}
-
-// Route is how a prompt typed in a session still in the main checkout starts
-// its card.
-type Route int
-
-const (
-	// RoutePlan is the zero value and the fallback: a worktree, planned first.
-	RoutePlan Route = iota
-	// RouteDirect needs a worktree but no plan.
-	RouteDirect
-	// RouteStay changes no files, so the card stays in the main checkout.
-	RouteStay
-)
-
-// RouteTask asks AskHaiku whether task needs a worktree and a plan before any
-// work starts. An answer starting with neither PLAN, DIRECT nor STAY, and any
-// error, means RoutePlan. The prompt tells Haiku to avoid STAY when unsure.
-func RouteTask(ctx context.Context, dir, task string) (Route, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	prompt := "Decide how this coding task should start.\n" +
-		"Answer STAY when no file in the repository will change: a question, an explanation, " +
-		"reading or searching code, or checking something's status. " +
-		"Answer DIRECT for a small, specific change, a command to run (commit, rebase, run tests), " +
-		"or when the task says not to plan. Answer PLAN for ambiguous, multi-file or design-heavy work. " +
-		"When unsure whether files will change, don't answer STAY. " +
-		"Reply with exactly PLAN, DIRECT or STAY.\n\n<task>\n" + task + "\n</task>"
-	answer, err := AskHaiku(ctx, dir, prompt)
-	if err != nil {
-		return RoutePlan, fmt.Errorf("route check failed: %w", err)
-	}
-	answer = strings.ToUpper(answer)
-	switch {
-	case strings.HasPrefix(answer, "STAY"):
-		return RouteStay, nil
-	case strings.HasPrefix(answer, "DIRECT"):
-		return RouteDirect, nil
-	case strings.HasPrefix(answer, "PLAN"):
-		return RoutePlan, nil
-	}
-	return RoutePlan, fmt.Errorf("route check failed: unexpected answer %q", FirstLine(answer))
 }
 
 // Interrupted reports whether the transcript's last conversation entry is the

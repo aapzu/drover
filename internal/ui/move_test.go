@@ -167,6 +167,22 @@ func TestStartedAgentDoesNotAttachOverModal(t *testing.T) {
 	}
 }
 
+func TestStatusSeparatesNotStartedFromStopped(t *testing.T) {
+	m := testModel(120, 40, 2, 1)
+	m.snap.Board.Columns[0].AutoSpawn = true
+	card := m.snap.Tasks[0]
+	if got := m.status(card); !strings.Contains(got, "not started") {
+		t.Errorf("a card without a session in an agent column reads %q, want not started", got)
+	}
+	card.Sessions = map[string]*store.Session{store.MainSession: {Status: store.StatusSuspended}}
+	if got := m.status(card); !strings.Contains(got, "suspended") || strings.Contains(got, "not started") {
+		t.Errorf("a card with a stopped agent reads %q, want suspended", got)
+	}
+	if got := m.status(m.snap.Tasks[1]); got != "" {
+		t.Errorf("a card without a session in a plain column reads %q, want none", got)
+	}
+}
+
 func TestStatusPrefersEngineStep(t *testing.T) {
 	m := testModel(120, 40, 1, 1)
 	card := m.snap.Tasks[0]

@@ -291,8 +291,9 @@ func CurrentBranch(dir string) string {
 	return out
 }
 
+// DeleteBranch deletes branch if it is merged, so commits are never lost.
 func DeleteBranch(root, branch string) error {
-	_, err := run(root, "branch", "-D", branch)
+	_, err := run(root, "branch", "-d", branch)
 	return err
 }
 

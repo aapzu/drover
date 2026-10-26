@@ -245,7 +245,7 @@ func buildCards(board *config.Board, tasks []*store.Task) []card {
 			col, idx = config.Column{ID: t.ColumnID, Name: t.ColumnID}, len(board.Columns)
 		}
 		owner := store.Owner(tasks, t)
-		c := card{Number: t.Number, Title: t.Title, Prompt: t.Prompt, Column: col.Name, ColumnID: col.ID, Branch: owner.Branch, Worktree: owner.WorktreePath, Agent: agentState(owner), order: idx}
+		c := card{Number: t.Number, Title: t.Title, Prompt: t.Prompt, Column: col.Name, ColumnID: col.ID, Branch: owner.Branch, Worktree: owner.WorktreePath, Agent: agentState(owner, col), order: idx}
 		if t.Issue != nil {
 			c.Issue = t.Issue.Key
 		}
@@ -263,10 +263,14 @@ func buildCards(board *config.Board, tasks []*store.Task) []card {
 	return cards
 }
 
-// agentState says what the agent of an owner card is doing, or "" when it has none.
-func agentState(owner *store.Task) string {
+// agentState says what the agent of an owner card is doing: "not started" for a
+// card in an agent column that never had one, or "" when it has none.
+func agentState(owner *store.Task, col config.Column) string {
 	s := owner.AgentSession()
 	if s == nil {
+		if col.IsAgent() {
+			return "not started"
+		}
 		return ""
 	}
 	if s.Status != store.StatusRunning && s.Status != store.StatusExternal {
