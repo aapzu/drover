@@ -145,17 +145,16 @@ every column.
 ```
 
 With no `drover.json`, the board uses this default, with `prFlow` moving a card
-to Self-review when an agent is asked to open a PR, to In review once it is
-open, and to Verify in develop once it merges:
+to Waiting for me when an agent is asked to open a PR, to In review once it is
+open, and to Done once it merges:
 
 | Column | Kind |
 | --- | --- |
 | Sessions | To Do |
 | Planning | Agent, in `plan` mode; approved plans go to Executing |
 | Executing | Agent |
-| Self-review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
-| In review | Plain |
-| Verify in develop | Plain |
+| Waiting for me | Agent |
+| In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check.
@@ -165,7 +164,7 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
   you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
-  Waiting for me, In review, Verify in develop, Done); press `W` to write it out.
+  Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
   `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
@@ -357,11 +356,11 @@ board uses:
 
 ```json
 "prFlow": {
-  "requested": "self-review",
+  "requested": "waiting-for-me",
   "opened": "in-review",
   "changesRequested": "executing",
   "changesRequestedMessage": "PR #{{prNumber}} got review comments…",
-  "merged": "verify",
+  "merged": "done",
   "released": "done"
 }
 ```

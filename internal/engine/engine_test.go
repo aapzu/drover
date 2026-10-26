@@ -2606,16 +2606,16 @@ func TestTickArchivesStaleDoneCards(t *testing.T) {
 
 func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
 	for _, c := range []struct{ title, want string }{
-		{"ASKS_ME ready to merge?", "self-review"},
+		{"ASKS_ME ready to merge?", "waiting-for-me"},
 		{"Plain work", "exec"},
 	} {
 		t.Run(c.title, func(t *testing.T) {
 			e := startWithBoard(t, `{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,
-	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"self-review",
+	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"waiting-for-me",
 	      "condition":"The reply ends by asking me for a decision or input"}]}},
-	  {"id":"self-review","name":"Waiting for me","autoSpawn":true},
+	  {"id":"waiting-for-me","name":"Waiting for me","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`)
 
 			task := e.CreateTask(c.title, "")
@@ -2627,7 +2627,7 @@ func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
 				if s == nil || !s.Started || s.Activity != store.ActivityIdle {
 					return false
 				}
-				return t.ColumnID == "self-review" || hasLog(t, "condition not met")
+				return t.ColumnID == "waiting-for-me" || hasLog(t, "condition not met")
 			})
 			if got := e.Snapshot().Tasks[0].ColumnID; got != c.want {
 				t.Fatalf("card in %s, want %s", got, c.want)
@@ -2640,9 +2640,9 @@ func TestTurnEndMoveStillShipsPR(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
 	  {"id":"todo","name":"To Do","role":"todo"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,
-	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"self-review",
+	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"waiting-for-me",
 	      "condition":"The reply ends by asking me for a decision or input"}]}},
-	  {"id":"self-review","name":"Waiting for me","autoSpawn":true},
+	  {"id":"waiting-for-me","name":"Waiting for me","autoSpawn":true},
 	  {"id":"review","name":"In review"},
 	  {"id":"done","name":"Done","role":"done"}],
 	  "prFlow":{"opened":"review","changesRequested":"exec"}}`)
