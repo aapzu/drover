@@ -247,6 +247,9 @@ func (m Model) offBoard(t *store.Task, hidesArchived bool) bool {
 // offBoardIn counts the cards the board hides in a column.
 func (m Model) offBoardIn(colID string) int {
 	hides := m.hidesArchived(colID)
+	if !hides && m.prefs.ShowHidden {
+		return 0
+	}
 	n := 0
 	for _, t := range m.snap.Tasks {
 		if m.columnOf(t) == colID && m.offBoard(t, hides) {
