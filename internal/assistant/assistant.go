@@ -330,10 +330,12 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"Run `add` only after the user agrees to the card.\n" +
 		"`" + cmd + " list --json` shows every card: number, title, column, branch, worktree, issue, pull request and what its agent is doing. " +
 		"Run it before every answer that depends on the cards. The board changes while you talk, so never rely on an earlier run.\n" +
-		"A card's `pr` has the `url`, `number`, `state` (open, merged, closed or unknown), `reviewDecision`, `released` and `error` of its pull request as the board last polled it, about a minute ago. " +
+		"A card's `pr` has the `url`, `number`, `state` (open, merged, closed or unknown), `reviewDecision` (approved or changes requested), `released` (the merge reached the release branch), `reviewing` (a pull request you were asked to review, not one you opened) and `error` of its pull request. " +
+		"A card without `pr` has no pull request the board has seen. " +
+		"It is as the board last saw it: the board polls open pull requests about once a minute while it runs, and never polls a merged or closed one again, nor any card in a done column. " +
 		"It is the only source for whether a pull request is merged or closed: never answer that from git history or merge commits, never run `gh`, and never ask the user to. " +
 		"If a `state` is unknown, or an `error` is set, say the board doesn't know yet or may be out of date instead of guessing.\n" +
-		"When a card in " + reviewColumn(board) + " has a merged or closed pull request, say so and offer to move it to " + doneColumn(board) + ", and move it only after the user agrees.\n" +
+		moveOffer(board) +
 		"`" + cmd + " move <number> <column>` moves a card; columns are ids or names, and an unknown one is refused with the valid ones. " +
 		"`add <title> [-p prompt] [-c column]`, `edit <number> [--title t] [--prompt p]` and `rm <number>` change cards. " +
 		"A move into an agent column starts an agent, and into a column without one stops it.\n" +
@@ -350,24 +352,32 @@ func baseBranch(b *config.Board) string {
 	return ", and worktrees branch from " + b.DefaultBaseBranch + " by default"
 }
 
-// reviewColumn names the column PRs land in, "In review" when the board doesn't say.
-func reviewColumn(b *config.Board) string {
-	if b.PRFlow != nil {
-		if c, ok := b.Find(b.PRFlow.Opened); ok {
-			return c.Name
-		}
+// moveOffer is the prompt sentence about cards whose pull request has merged or
+// closed, or "" when the board has no PR-opened or done column to name. A merged
+// card goes where prFlow.merged says, since the board moves it there itself.
+func moveOffer(b *config.Board) string {
+	if b.PRFlow == nil {
+		return ""
 	}
-	return "In review"
-}
-
-// doneColumn names the board's done column.
-func doneColumn(b *config.Board) string {
+	opened, ok := b.Find(b.PRFlow.Opened)
+	if !ok {
+		return ""
+	}
+	var done config.Column
 	for _, c := range b.Columns {
 		if c.IsDone() {
-			return c.Name
+			done = c
+			break
 		}
 	}
-	return "Done"
+	if done.Name == "" {
+		return ""
+	}
+	merged, ok := b.Find(b.PRFlow.Merged)
+	if !ok || merged.ID == done.ID {
+		return "When a card in " + opened.Name + " has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to " + done.Name + ", and move it only after the user agrees.\n"
+	}
+	return "When a card in " + opened.Name + " has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to " + merged.Name + " and a closed one to " + done.Name + ", and move it only after the user agrees.\n"
 }
 
 // describeColumns lists one line per column: its name, id and what entering it does.

@@ -507,9 +507,10 @@ drover ask "which cards are waiting on review?"
   left out when empty. Cards that share one agent report the same three.
 - `list --json` gives a card's pull request as `pr`: its `url`, `number`,
   `state` (`open`, `merged`, `closed`, or `unknown` until gh has answered),
-  `reviewDecision` (`approved` or `changes requested`), `released`, and `error`
-  when the last lookup failed. It is the state the board saved at its last
-  poll, so it can be a minute old, or older after an error.
+  `reviewDecision` (`approved` or `changes requested`), `released`, `reviewing`
+  for a PR you were asked to review, and `error` when a lookup failed. It is the state the board last saved: it polls open
+  pull requests about once a minute while it runs, and never polls a merged or
+  closed one again, or a card in Done.
 
 ### Asking the board
 
@@ -517,9 +518,11 @@ drover ask "which cards are waiting on review?"
 interface as the board's assistant. It knows the repo, the board's columns, and
 every card's column, branch, worktree, agent state and pull request state, and
 can move, add, edit and delete cards when you tell it to, and answer questions
-about the code and its history. When a card in In review has a merged or closed
-pull request, it offers to move the card to Done and waits for you to agree. It
-runs the commands above, so changes go through the open board like any other.
+about the code and its history. When a card in the column your PRs wait in (In
+review by default) has a merged or closed pull request of its own, it offers to move the
+card on, to the merged column of your `prFlow` or to Done, and waits for you to
+agree. It runs the commands above, so changes go through the open board like
+any other.
 It takes no agent slot and isn't a card.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`

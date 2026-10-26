@@ -144,20 +144,23 @@ func columnNames(b *config.Board) string {
 }
 
 // cardPR is a card's pull request as the board last saw it. State is "unknown"
-// until gh has answered, and Error is why the last lookup failed, if it did.
+// until gh has answered, Reviewing marks a PR you were asked to review, and
+// Error is why the last lookup failed, if it did.
 type cardPR struct {
 	URL            string `json:"url"`
 	Number         int    `json:"number,omitempty"`
 	State          string `json:"state"`
 	ReviewDecision string `json:"reviewDecision,omitempty"`
 	Released       bool   `json:"released,omitempty"`
+	Reviewing      bool   `json:"reviewing,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
 func prInfo(p *store.PR) *cardPR {
-	c := &cardPR{URL: p.URL, Number: p.Number, State: strings.ToLower(p.State), Released: p.Released, Error: p.Error}
-	if c.State == "" {
-		c.State = "unknown"
+	c := &cardPR{URL: p.URL, Number: p.Number, State: "unknown", Released: p.Released, Reviewing: p.IsReview(), Error: errorLine(p.Error)}
+	switch p.State {
+	case "OPEN", "MERGED", "CLOSED":
+		c.State = strings.ToLower(p.State)
 	}
 	switch p.ReviewDecision {
 	case "APPROVED":
@@ -166,6 +169,15 @@ func prInfo(p *store.PR) *cardPR {
 		c.ReviewDecision = "changes requested"
 	}
 	return c
+}
+
+// errorLine is the first line of a gh error, cut to a length that fits in a list.
+func errorLine(msg string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
+	if r := []rune(line); len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return line
 }
 
 // card is one entry of list's output.
@@ -181,6 +193,14 @@ type card struct {
 	Worktree string  `json:"worktree,omitempty"`
 	Agent    string  `json:"agent,omitempty"`
 	order    int
+}
+
+// ref is the issue and PR link shown in list's table.
+func (c card) ref() string {
+	if c.PR == nil {
+		return c.Issue
+	}
+	return strings.TrimSpace(c.Issue + " " + c.PR.URL)
 }
 
 func cmdList(root string, args []string) error {
@@ -209,11 +229,7 @@ func cmdList(root string, args []string) error {
 		if title == "" {
 			title = "(untitled)"
 		}
-		ref := c.Issue
-		if c.PR != nil {
-			ref = strings.TrimSpace(ref + " " + c.PR.URL)
-		}
-		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, ref)
+		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, c.ref())
 	}
 	return w.Flush()
 }

@@ -216,7 +216,7 @@ func TestArgvOnlyAllowsTheBoardCLIAndReadOnlyRepoAccess(t *testing.T) {
 		"'" + exe + "' list --json", "never pass --force", "wait for the user to agree",
 		"read-only to you", "offer a card", "Run `add` only after the user agrees",
 		"A card's `pr` has", "never answer that from git history", "never run `gh`",
-		"say the board doesn't know yet or may be out of date instead of guessing", "offer to move it to Done, and move it only after the user agrees",
+		"may be out of date instead of guessing", "A card without `pr`",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q", want)
@@ -267,14 +267,34 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 	}
 }
 
-func TestPromptOffersMergedCardsTheBoardsDoneColumn(t *testing.T) {
-	board := &config.Board{
-		Columns: []config.Column{{ID: "wait", Name: "Waiting"}, {ID: "fin", Name: "Shipped", Role: "done"}},
-		PRFlow:  &config.PRFlow{Opened: "wait"},
+func TestPromptOffersCardsWithAFinishedPR(t *testing.T) {
+	const opener = "When a card in "
+	tests := map[string]struct {
+		board *config.Board
+		want  string
+	}{
+		"default board": {config.Default(), opener + "In review has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to Verify in develop and a closed one to Done, and move it only after the user agrees."},
+		"no merged column": {&config.Board{
+			Columns: []config.Column{{ID: "wait", Name: "Waiting"}, {ID: "fin", Name: "Shipped", Role: "done"}},
+			PRFlow:  &config.PRFlow{Opened: "wait"},
+		}, opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to Shipped, and move it only after the user agrees."},
+		"no done column": {&config.Board{
+			Columns: []config.Column{{ID: "wait", Name: "Waiting"}},
+			PRFlow:  &config.PRFlow{Opened: "wait"},
+		}, ""},
+		"no PR flow": {&config.Board{Columns: []config.Column{{ID: "fin", Name: "Done", Role: "done"}}}, ""},
 	}
-	want := "When a card in Waiting has a merged or closed pull request, say so and offer to move it to Shipped"
-	if got := systemPrompt("/bin/drover", "/work/my-app", board); !strings.Contains(got, want) {
-		t.Errorf("prompt lacks %q", want)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := systemPrompt("/bin/drover", "/work/my-app", tc.board)
+			if tc.want == "" {
+				if strings.Contains(got, opener) {
+					t.Errorf("prompt offers a move the board can't make:\n%s", got)
+				}
+			} else if !strings.Contains(got, tc.want) {
+				t.Errorf("prompt lacks %q", tc.want)
+			}
+		})
 	}
 }
 
