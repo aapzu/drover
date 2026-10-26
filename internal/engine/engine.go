@@ -1319,8 +1319,8 @@ func (e *Engine) limit() int { return e.board.Limit() }
 
 func (e *Engine) runningCount() int { return e.runningCountExcept(nil) }
 
-// runningCountExcept is runningCount without skip, which a respawn is about to
-// replace in its own slot. Called with mu held.
+// runningCountExcept is runningCount without skip, the session spawn is about
+// to start in its own slot. Called with mu held.
 func (e *Engine) runningCountExcept(skip *store.Session) int {
 	n := 0
 	for _, t := range e.state.Tasks {

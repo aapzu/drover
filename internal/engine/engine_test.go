@@ -2805,7 +2805,7 @@ func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
 	}
 }
 
-func TestNewSessionMovedToPlanningKeepsAnAgentRunning(t *testing.T) {
+func TestNewSessionMovedToPlanningRestartsInPlanMode(t *testing.T) {
 	root, log := setupProject(t)
 	os.Remove(filepath.Join(root, "drover.json"))
 	e, err := New(root)
@@ -2840,8 +2840,6 @@ func TestNewSessionMovedToPlanningKeepsAnAgentRunning(t *testing.T) {
 	}
 }
 
-// A respawn replaces the agent's own slot, so it must not queue itself when
-// every slot is taken.
 func TestRespawnAfterLeavingSessionsKeepsItsSlot(t *testing.T) {
 	t.Setenv("FAKE_ROUTE", "PLAN")
 	t.Setenv("FAKE_STAY", "1")
