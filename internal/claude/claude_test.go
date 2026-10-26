@@ -181,7 +181,7 @@ func TestBackgroundAgentAndDone(t *testing.T) {
 	}
 }
 
-func TestBackgroundsDone(t *testing.T) {
+func TestBackgroundsFinished(t *testing.T) {
 	cases := []struct {
 		name  string
 		tasks []BackgroundTask
@@ -194,8 +194,8 @@ func TestBackgroundsDone(t *testing.T) {
 		{"one running among completed", []BackgroundTask{{Status: "completed"}, {Status: "running"}}, false},
 	}
 	for _, c := range cases {
-		if got := (Event{BackgroundTasks: c.tasks}).BackgroundsDone(); got != c.want {
-			t.Errorf("%s: BackgroundsDone() = %v, want %v", c.name, got, c.want)
+		if got := (Event{BackgroundTasks: c.tasks}).BackgroundsFinished(); got != c.want {
+			t.Errorf("%s: BackgroundsFinished() = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

@@ -203,7 +203,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if s.Relocate != "" {
 				s.RespawnPending = true
 			}
-			if ev.BackgroundsDone() {
+			if ev.BackgroundsFinished() {
 				s.Background = nil
 			}
 			reply := ev.Reply()

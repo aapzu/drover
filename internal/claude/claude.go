@@ -148,9 +148,9 @@ type BackgroundTask struct {
 	Status string `json:"status"`
 }
 
-// BackgroundsDone reports whether a Stop payload lists its background agents
+// BackgroundsFinished reports whether a Stop payload lists its background agents
 // and none of them is still running.
-func (e Event) BackgroundsDone() bool {
+func (e Event) BackgroundsFinished() bool {
 	return e.BackgroundTasks != nil && !slices.ContainsFunc(e.BackgroundTasks, func(t BackgroundTask) bool {
 		return t.Status == "running"
 	})

@@ -14,9 +14,8 @@ import (
 // consumeLines writes hook event lines for a session and applies them.
 func consumeLines(t *testing.T, s *store.Session, lines ...string) {
 	t.Helper()
-	dir := t.TempDir()
-	s.Dir = dir
-	path := filepath.Join(dir, "events.jsonl")
+	s.Dir = t.TempDir()
+	path := filepath.Join(s.Dir, "events.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -27,19 +26,20 @@ func consumeLines(t *testing.T, s *store.Session, lines ...string) {
 	(&Engine{}).consumeEvents(task, store.MainSession, s)
 }
 
-func TestStopClearsBackgroundAgentsThatFinished(t *testing.T) {
-	s := &store.Session{Background: []string{"toolu_1"}}
-	consumeLines(t, s, `{"hook_event_name":"Stop","background_tasks":[]}`)
-	if len(s.Background) != 0 {
-		t.Errorf("background %v after Stop lists no running agents, want none", s.Background)
-	}
-}
-
-func TestStopKeepsBackgroundAgentsStillRunning(t *testing.T) {
-	s := &store.Session{Background: []string{"toolu_1"}}
-	consumeLines(t, s, `{"hook_event_name":"Stop","background_tasks":[{"id":"a1","status":"running"}]}`)
-	if !slices.Equal(s.Background, []string{"toolu_1"}) {
-		t.Errorf("background %v after Stop with a running agent, want [toolu_1]", s.Background)
+func TestStopClearsBackgroundOnlyWhenNoneRunning(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		stop string
+		want []string
+	}{
+		{"no tasks listed", `{"hook_event_name":"Stop","background_tasks":[]}`, nil},
+		{"agent still running", `{"hook_event_name":"Stop","background_tasks":[{"id":"a1","status":"running"}]}`, []string{"toolu_1"}},
+	} {
+		s := &store.Session{Background: []string{"toolu_1"}}
+		consumeLines(t, s, c.stop)
+		if !slices.Equal(s.Background, c.want) {
+			t.Errorf("%s: background %v, want %v", c.name, s.Background, c.want)
+		}
 	}
 }
 
