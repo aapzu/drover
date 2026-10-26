@@ -157,7 +157,7 @@ open, and to Done once it merges:
 | In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
 
-When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check.
+When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. Custom boards need the `onTurnEnd` automation on their Executing column.
 
 ## How it works
 
