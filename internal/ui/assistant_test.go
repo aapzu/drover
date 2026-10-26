@@ -112,7 +112,7 @@ func TestAssistantKeyOpensAndFocusesThePanelBesideTheBoard(t *testing.T) {
 	if l.assistantW < minAssistantWidth || l.boardW+l.assistantW != m.width || sum(func() []int { _, w := m.columnWindow(); return w }()) != l.boardW {
 		t.Errorf("board %d + panel %d of %d", l.boardW, l.assistantW, m.width)
 	}
-	if h := l.hitTest(m, l.boardW, l.bodyY+1); h.kind != hitAssistant {
+	if h := l.hitTest(m, l.boardW, l.bodyY+1); h.kind != hitAssistantEdge {
 		t.Errorf("hit = %v", h.kind)
 	}
 	if h := l.hitTest(m, l.boardW-1, l.bodyY+1); h.kind == hitAssistant {
@@ -181,6 +181,57 @@ func TestClickingThePanelFocusesIt(t *testing.T) {
 	m, _ = update(m, tea.MouseMsg{X: 2, Y: l.bodyY + columnHeaderHeight + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if m.mode != modeBoard {
 		t.Errorf("clicking a card should give the board its keys back, mode = %v", m.mode)
+	}
+}
+
+func TestDraggingThePanelEdgeResizesAndSavesIt(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	l := m.layout()
+	press := tea.MouseMsg{X: l.boardW, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+	m, _ = update(m, press)
+	m, _ = update(m, tea.MouseMsg{X: 70, Y: l.bodyY + 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	m, _ = update(m, tea.MouseMsg{X: 70, Y: l.bodyY + 3, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	if w := m.layout().assistantW; w != m.width-70 {
+		t.Errorf("panel width = %d, want %d", w, m.width-70)
+	}
+	if got := loadPrefs(m.eng.Root).AssistantWidth; got != m.width-70 {
+		t.Errorf("saved width = %d, want %d", got, m.width-70)
+	}
+
+	edge := m.layout().boardW
+	m, _ = update(m, tea.MouseMsg{X: edge, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	m, _ = update(m, tea.MouseMsg{X: 0, Y: l.bodyY + 3, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	if w := m.layout().assistantW; w != m.width-minBoardWidth {
+		t.Errorf("dragged past the board's minimum: panel width = %d, want %d", w, m.width-minBoardWidth)
+	}
+}
+
+func TestSavedPanelWidthIsAppliedOnStart(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	if err := (prefs{AssistantWidth: 50}).save(m.eng.Root); err != nil {
+		t.Fatal(err)
+	}
+	m.prefs = loadPrefs(m.eng.Root)
+	m = open(t, m)
+	if w := m.layout().assistantW; w != 50 {
+		t.Errorf("panel width = %d, want 50", w)
+	}
+}
+
+func TestZeroResetsThePanelWidth(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.prefs.AssistantWidth = 50
+	m.savePrefs()
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("0")})
+	if w := m.layout().assistantW; w != m.width*2/5 {
+		t.Errorf("panel width = %d, want the default %d", w, m.width*2/5)
+	}
+	if got := loadPrefs(m.eng.Root).AssistantWidth; got != 0 {
+		t.Errorf("saved width = %d, want 0", got)
 	}
 }
 
