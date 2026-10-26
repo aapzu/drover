@@ -307,11 +307,13 @@ func (e *Engine) migrateTodo() {
 		e.mu.Unlock()
 		if stale {
 			moved++
+			drop := false
 			if drives {
-				e.stopSessions(owner, "", store.StatusSuspended)
+				_, leftRunning := e.stopSessions(owner, "", store.StatusSuspended)
+				drop = !leftRunning
 			}
 			e.with(func() {
-				if drives {
+				if drop {
 					e.dropUnstarted(t)
 				}
 				t.AddLog(fmt.Sprintf("Moved to %s: the To Do column was removed", first.Name))
@@ -336,13 +338,17 @@ func (e *Engine) dropUnstarted(t *store.Task) {
 }
 
 // talkedTo reports whether s got a prompt, counting the one whose hook event
-// the board has not read yet. Called with mu held.
+// the board has not read yet. An unreadable event log counts as talked to, so
+// nothing is thrown away on a guess. Called with mu held.
 func (e *Engine) talkedTo(t *store.Task, key string) bool {
 	s := t.Sessions[key]
 	if s.Started {
 		return true
 	}
-	events, _, _ := claude.ReadEvents(filepath.Join(e.sessionDir(t, key), "events.jsonl"), s.EventsOffset)
+	events, _, err := claude.ReadEvents(filepath.Join(e.sessionDir(t, key), "events.jsonl"), s.EventsOffset)
+	if err != nil {
+		return true
+	}
 	return slices.ContainsFunc(events, func(ev claude.Event) bool { return ev.Name == "UserPromptSubmit" })
 }
 
@@ -398,13 +404,24 @@ func (e *Engine) NewSession() (*store.Task, error) {
 }
 
 // discardCard deletes a card that was never used, with its worktree and its
-// branch, and tells you when the branch stays. The caller holds the group lock.
+// branch, and tells you when the branch stays. A worktree whose setup failed
+// before it was recorded on the card is removed too. The caller holds the
+// group lock.
 func (e *Engine) discardCard(t, owner *store.Task) error {
 	e.mu.Lock()
-	branch := t.Branch
+	branch, unrecorded := t.Branch, ""
+	if t.WorktreePath == "" && e.isRepo {
+		folder := filepath.Join(e.board.WorktreesPath(e.Root), fmt.Sprintf("%s%d", worktreeFolderPrefix, t.Number))
+		if _, err := os.Stat(filepath.Join(folder, ".git")); err == nil {
+			unrecorded, branch = folder, gitx.BranchName(t.Title, t.ID)
+		}
+	}
 	e.mu.Unlock()
 	if err := e.deleteCard(t, owner); err != nil {
 		return err
+	}
+	if unrecorded != "" {
+		gitx.RemoveWorktree(e.Root, unrecorded)
 	}
 	if branch != "" {
 		if err := gitx.DeleteBranch(e.Root, branch); err != nil {

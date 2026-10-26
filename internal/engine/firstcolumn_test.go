@@ -335,3 +335,133 @@ func TestDiscardSilentKeepsASessionWhoseFirstPromptIsUnread(t *testing.T) {
 		t.Error("a session that was already typed into was discarded")
 	}
 }
+
+func TestFailedNewSessionLeavesNothingBehind(t *testing.T) {
+	e := startWithBoard(t, `{"initScript":"exit 1","columns":[
+	  {"id":"planning","name":"Planning","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	if _, err := e.NewSession(); err == nil || !strings.Contains(err.Error(), "starting session") {
+		t.Fatalf("NewSession with a failing init script = %v", err)
+	}
+	if n := len(e.Snapshot().Tasks); n != 0 {
+		t.Errorf("a failed session left %d cards", n)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(e.Root, ".drover", "worktrees")); len(entries) != 0 {
+		t.Errorf("the failed session's worktree is still there: %v", entries)
+	}
+	if branches, _ := exec.Command("git", "-C", e.Root, "branch", "--list", "task-*").Output(); len(branches) != 0 {
+		t.Errorf("the failed session's branch is still there: %s", branches)
+	}
+}
+
+func TestLegacyTodoMigrationLeavesASharedAgentAlone(t *testing.T) {
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(legacyBoard), 0o644)
+
+	liveName := "repo-1-shared"
+	if err := tmux.NewSession(liveName, root, []string{"sleep", "60"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tmux.Kill(liveName) })
+	session := &store.Session{Key: store.MainSession, AgentSessionID: uuid.NewString(), Tmux: liveName, Status: store.StatusRunning, Started: true}
+	owner := &store.Task{ID: uuid.NewString(), Number: 1, Title: "Owner", ColumnID: "todo", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Sessions: map[string]*store.Session{store.MainSession: session}}
+	member := &store.Task{ID: uuid.NewString(), Number: 2, Title: "Member", ColumnID: "exec", GroupID: owner.ID, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	owner.ActiveCard = member.ID
+	other := &store.Task{ID: uuid.NewString(), Number: 3, Title: "Other member", ColumnID: "todo", GroupID: owner.ID, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	state := &store.State{NextNumber: 4, Tasks: []*store.Task{owner, member, other}}
+	if err := state.Save(root); err != nil {
+		t.Fatal(err)
+	}
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byNumber := map[int]*store.Task{}
+	for _, task := range e.Snapshot().Tasks {
+		byNumber[task.Number] = task
+	}
+	for _, n := range []int{1, 3} {
+		if got := byNumber[n].ColumnID; got != "planning" {
+			t.Errorf("#%d is in %q, want planning", n, got)
+		}
+	}
+	if byNumber[2].ColumnID != "exec" {
+		t.Errorf("the driving card moved to %q", byNumber[2].ColumnID)
+	}
+	if s := byNumber[1].Sessions[store.MainSession]; s == nil || s.Status != store.StatusRunning || !tmux.Has(liveName) {
+		t.Errorf("the agent another card drives was stopped: %+v", s)
+	}
+}
+
+func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"Backlog"},
+	  {"id":"planning","name":"Planning","autoSpawn":true}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := e.CreateTask("Waiting", "")
+	if task.ColumnID != "todo" {
+		t.Fatalf("the card starts in %q, want the plain first column", task.ColumnID)
+	}
+
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"Backlog","role":"todo"},
+	  {"id":"planning","name":"Planning","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e.reloadBoard()
+
+	got := e.Snapshot().Tasks[0]
+	if got.ColumnID != "planning" || !hasLog(got, "the To Do column was removed") {
+		t.Errorf("after the reload the card is in %q with log %+v", got.ColumnID, got.Log)
+	}
+	e.reloadBoard()
+	if n := strings.Count(logText(e.Snapshot().Tasks[0]), "the To Do column was removed"); n != 1 {
+		t.Errorf("migrated %d times", n)
+	}
+}
+
+func TestRespawnAtTheLimitKeepsItsOwnSlot(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("SLOW work", "")
+	if err := e.Start(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning turn to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityThinking
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the respawn in Executing's mode", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.PermissionMode == "acceptEdits" && !s.RespawnPending && s.Status == store.StatusRunning
+	})
+	if hasLog(got, "Agent queued") {
+		t.Errorf("the respawned agent queued behind its own slot: %+v", got.Log)
+	}
+}
+
+func logText(t *store.Task) string {
+	var b strings.Builder
+	for _, l := range t.Log {
+		b.WriteString(l.Text + "\n")
+	}
+	return b.String()
+}
