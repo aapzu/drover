@@ -216,7 +216,7 @@ func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
 	hides := m.hidesArchived(colID)
 	for _, t := range m.snap.Tasks {
-		if m.columnOf(t) == colID && !(hides && t.Archived) {
+		if m.columnOf(t) == colID && !m.offBoard(t, hides) {
 			out = append(out, t)
 		}
 	}
@@ -238,14 +238,18 @@ func (m Model) hidesArchived(colID string) bool {
 	return col.IsDone() && !m.prefs.ShowArchived
 }
 
-// archivedIn counts the archived cards the board hides in a column.
-func (m Model) archivedIn(colID string) int {
-	if !m.hidesArchived(colID) {
-		return 0
-	}
+// offBoard is whether the board hides a card: an archived one when its column
+// hides archived cards, or a hidden one unless hidden cards are shown.
+func (m Model) offBoard(t *store.Task, hidesArchived bool) bool {
+	return t.Archived && hidesArchived || t.Hidden && !m.prefs.ShowHidden
+}
+
+// offBoardIn counts the cards the board hides in a column.
+func (m Model) offBoardIn(colID string) int {
+	hides := m.hidesArchived(colID)
 	n := 0
 	for _, t := range m.snap.Tasks {
-		if t.Archived && m.columnOf(t) == colID {
+		if m.columnOf(t) == colID && m.offBoard(t, hides) {
 			n++
 		}
 	}
@@ -779,6 +783,20 @@ func archiveCard(eng *engine.Engine, busy map[string]op, id string, number int, 
 	})
 }
 
+func hideCard(eng *engine.Engine, busy map[string]op, id string, number int, hide bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "hiding"}, func() actionDoneMsg {
+		err := eng.HideTask(id, hide)
+		msg := actionDoneMsg{err: err}
+		switch {
+		case err == nil && hide:
+			msg.done = fmt.Sprintf("Hid #%d. B shows hidden cards.", number)
+		case err == nil:
+			msg.done = fmt.Sprintf("Unhid #%d", number)
+		}
+		return msg
+	})
+}
+
 func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cols := m.columns()
 	t := m.current()
@@ -1046,6 +1064,14 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return snapMsg(eng.Snapshot())
 			}
 		}
+	case "b":
+		if t == nil {
+			break
+		}
+		return m, hideCard(m.eng, m.busy, t.ID, t.Number, !t.Hidden)
+	case "B":
+		m.prefs.ShowHidden = !m.prefs.ShowHidden
+		m.savePrefs()
 	case "v":
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()

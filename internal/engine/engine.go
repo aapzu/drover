@@ -509,6 +509,24 @@ func (e *Engine) deleteCard(t, owner *store.Task) error {
 	return nil
 }
 
+// HideTask hides a card from the board in any column, or shows it again.
+func (e *Engine) HideTask(id string, hidden bool) error {
+	t, _, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	e.with(func() {
+		t.Hidden = hidden
+		if hidden {
+			t.AddLog("Hidden")
+		} else {
+			t.AddLog("Unhidden")
+		}
+	})
+	return nil
+}
+
 // ArchiveTask hides a card in Done from the board, or shows it again.
 // Archiving removes the worktree once every card sharing it is archived; a
 // dirty one is kept and ErrDirty returned unless force is set.
@@ -541,8 +559,8 @@ func (e *Engine) ArchiveTask(id string, archived, force bool) error {
 	return nil
 }
 
-// ArchiveColumn archives every card in a Done column and returns how many
-// were. Worktrees with uncommitted changes are kept.
+// ArchiveColumn archives every visible card in a Done column and returns how
+// many were. Hidden cards are left alone. Worktrees with uncommitted changes are kept.
 func (e *Engine) ArchiveColumn(colID string) int {
 	n := 0
 	var owners []string
@@ -551,7 +569,7 @@ func (e *Engine) ArchiveColumn(colID string) int {
 			return
 		}
 		for _, t := range e.state.Tasks {
-			if t.ColumnID == colID && !t.Archived {
+			if t.ColumnID == colID && !t.Archived && !t.Hidden {
 				t.Archived = true
 				t.AddLog("Archived")
 				owners = append(owners, e.owner(t).ID)
