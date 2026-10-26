@@ -165,16 +165,17 @@ func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
 	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
 	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
 	for _, tc := range []struct {
-		name, columns string
-		wantRows      int
+		name, columns, wantName string
+		wantRows                int
 	}{
-		{"unset", executing + `}, ` + waitingForMe, 1},
-		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, 0},
-		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, 1},
-		{"no waiting-for-me", executing + `}`, 0},
+		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", 0},
+		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "Apply", 1},
+		{"no waiting-for-me", executing + `}`, "", 0},
 	} {
 		root := t.TempDir()
-		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[`+tc.columns+`]}`), 0o644)
+		if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[`+tc.columns+`]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		board, _, err := Load(root)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
@@ -183,12 +184,17 @@ func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
 		if got := len(col.Automations.OnTurnEnd); got != tc.wantRows {
 			t.Errorf("%s: turn-end rows = %d, want %d", tc.name, got, tc.wantRows)
 		}
+		if tc.wantRows > 0 && col.Automations.OnTurnEnd[0].Name != tc.wantName {
+			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, col.Automations.OnTurnEnd[0].Name, tc.wantName)
+		}
 	}
 }
 
 func TestMigratedWaitingForYouMatchesDefault(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644)
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	board, _, err := Load(root)
 	if err != nil {
 		t.Fatal(err)
