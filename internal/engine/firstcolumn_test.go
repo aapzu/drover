@@ -201,7 +201,6 @@ func TestNotStartedCardHoldsNoSlotAndQueuesWhenStarted(t *testing.T) {
 	})
 }
 
-// legacyBoard is a drover.json from before the To Do column was removed.
 const legacyBoard = `{"columns":[
   {"id":"todo","name":"Sessions","role":"todo"},
   {"id":"planning","name":"Planning","autoSpawn":true,"permissionMode":"plan"},

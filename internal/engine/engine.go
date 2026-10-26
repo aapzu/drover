@@ -286,9 +286,7 @@ func (e *Engine) reloadBoard() {
 }
 
 // migrateTodo moves the cards still in a removed To Do column to the first
-// column. A card that drives its session has that session suspended, which
-// ends a scratch agent that ran in the main checkout, and loses a session that
-// never got a message. Its conversation is resumed from the first column.
+// column. Its conversation is resumed from the first column.
 func (e *Engine) migrateTodo() {
 	e.mu.Lock()
 	legacy := e.board.LegacyTodo
@@ -603,7 +601,7 @@ func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
 
 // moveLocked moves one card. The caller holds its group's lock. A card that
 // shares its session with other cards only stops the agent once no card in the
-// group needs it. A move never removes the worktree; archiving does.
+// group needs it.
 func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	t := e.find(id)
