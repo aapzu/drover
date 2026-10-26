@@ -167,6 +167,17 @@ func TestCtrlQOnTheBoardHidesAnUnfocusedPanel(t *testing.T) {
 func TestReopeningAVisiblePanelDoesNotRestartClaude(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, cmd := update(m, key(askKey))
+	runCmds(cmd)
+	if m.mode != modeAssistant || f.starts != 0 || f.restarts != 0 {
+		t.Errorf("mode %v, starts %d, restarts %d; reopening a running panel must not start claude", m.mode, f.starts, f.restarts)
+	}
+}
+
+func TestReopeningAHiddenPanelDoesNotRestartClaude(t *testing.T) {
+	f := fakePanel(t)
+	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	m, cmd := update(m, key(askKey))
 	runCmds(cmd)
