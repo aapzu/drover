@@ -21,7 +21,17 @@
       "id": "executing",
       "name": "Executing",
       "color": "#3b82f6",
-      "autoSpawn": true
+      "autoSpawn": true,
+      "automations": {
+        "onTurnEnd": [
+          {
+            "name": "Waiting for me",
+            "type": "move_to_column",
+            "targetColumn": "self-review",
+            "condition": "The reply ends by asking me for a decision or input"
+          }
+        ]
+      }
     },
     {
       "id": "self-review",
