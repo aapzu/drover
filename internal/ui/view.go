@@ -187,8 +187,12 @@ func columnSummary(c config.Column) string {
 	case !c.AutoSpawn:
 		return "agent paused"
 	}
+	model := c.ModelOverride
+	if model == config.DefaultAgentModel {
+		model = ""
+	}
 	parts := []string{}
-	for _, p := range []string{c.PermissionMode, c.ModelOverride, c.EffortOverride} {
+	for _, p := range []string{c.PermissionMode, model, c.EffortOverride} {
 		if p != "" {
 			parts = append(parts, p)
 		}

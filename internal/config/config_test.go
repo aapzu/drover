@@ -271,6 +271,32 @@ func TestTodoColumnModel(t *testing.T) {
 	}
 }
 
+func TestDefaultModelFillsColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name, board, want string
+	}{
+		{"unset", ``, DefaultAgentModel},
+		{"board default", `,"defaultModel":"sonnet"`, "sonnet"},
+	} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[
+		  {"id":"todo","name":"To Do","role":"todo"},
+		  {"id":"planning","name":"Planning","autoSpawn":true},
+		  {"id":"executing","name":"Executing","autoSpawn":true,"modelOverride":"opus"}
+		]`+tc.board+`}`), 0o644)
+		board, _, err := Load(root)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := board.Columns[1].ModelOverride; got != tc.want {
+			t.Errorf("%s: planning model = %q, want %q", tc.name, got, tc.want)
+		}
+		if got := board.Columns[2].ModelOverride; got != "opus" {
+			t.Errorf("%s: executing model = %q, want its own override opus", tc.name, got)
+		}
+	}
+}
+
 func TestLocalOverridesPersonalSettings(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"maxConcurrent":4,"notifications":{"turnDone":false},

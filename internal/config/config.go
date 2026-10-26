@@ -19,6 +19,7 @@ const (
 	DefaultWorktreesDir  = ".drover/worktrees"
 	DefaultMaxConcurrent = 8
 	DefaultTodoModel     = "haiku"
+	DefaultAgentModel    = "default"
 )
 
 // maxArchiveDays keeps a day count inside what a Duration can hold.
@@ -27,6 +28,7 @@ const maxArchiveDays = 100 * 365
 type Board struct {
 	DefaultBaseBranch     string        `json:"defaultBaseBranch,omitempty"`
 	DefaultPermissionMode string        `json:"defaultPermissionMode,omitempty"`
+	DefaultModel          string        `json:"defaultModel,omitempty"`
 	WorktreesDir          string        `json:"worktreesDir,omitempty"`
 	ArchiveDoneAfter      string        `json:"archiveDoneAfter,omitempty"`
 	CopyFiles             []string      `json:"copyFiles,omitempty"`
@@ -146,12 +148,26 @@ func Load(root string) (board *Board, found bool, err error) {
 		return nil, found, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
 	}
 	board.defaultTodoModel()
+	board.defaultModel()
 	return board, found, nil
 }
 
 func (b *Board) defaultTodoModel() {
 	if col := &b.Columns[b.todoIndex()]; col.ModelOverride == "" {
 		col.ModelOverride = DefaultTodoModel
+	}
+}
+
+// defaultModel gives every column without a modelOverride the board's
+// defaultModel.
+func (b *Board) defaultModel() {
+	if b.DefaultModel == "" {
+		b.DefaultModel = DefaultAgentModel
+	}
+	for i := range b.Columns {
+		if col := &b.Columns[i]; col.ModelOverride == "" {
+			col.ModelOverride = b.DefaultModel
+		}
 	}
 }
 
