@@ -137,6 +137,41 @@ func TestCardsReportTheOwnersBranchAndAgent(t *testing.T) {
 	}
 }
 
+func TestCardsReportThePRState(t *testing.T) {
+	board := &config.Board{Columns: []config.Column{{ID: "review", Name: "In review"}}}
+	tests := map[string]struct {
+		pr   *store.PR
+		want []string
+		not  []string
+	}{
+		"open":      {&store.PR{URL: "https://x/pr/1", Number: 1, State: "OPEN"}, []string{`"url":"https://x/pr/1"`, `"number":1`, `"state":"open"`}, []string{`"reviewDecision"`, `"released"`}},
+		"merged":    {&store.PR{URL: "https://x/pr/1", State: "MERGED", Released: true}, []string{`"state":"merged"`, `"released":true`}, nil},
+		"closed":    {&store.PR{URL: "https://x/pr/1", State: "CLOSED"}, []string{`"state":"closed"`}, nil},
+		"unknown":   {&store.PR{URL: "https://x/pr/1"}, []string{`"state":"unknown"`}, nil},
+		"approved":  {&store.PR{URL: "https://x/pr/1", State: "OPEN", ReviewDecision: "APPROVED"}, []string{`"reviewDecision":"approved"`}, nil},
+		"changes":   {&store.PR{URL: "https://x/pr/1", State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}, []string{`"reviewDecision":"changes requested"`}, nil},
+		"undecided": {&store.PR{URL: "https://x/pr/1", State: "OPEN", ReviewDecision: "REVIEW_REQUIRED"}, nil, []string{`"reviewDecision"`}},
+		"gh failed": {&store.PR{URL: "https://x/pr/1", State: "MERGED", Error: "gh: boom"}, []string{`"state":"merged"`, `"error":"gh: boom"`}, nil},
+		"no PR":     {nil, nil, []string{`"pr"`}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cards := buildCards(board, []*store.Task{{ID: "a", Number: 1, ColumnID: "review", PR: tc.pr}})
+			data, _ := json.Marshal(cards[0])
+			for _, s := range tc.want {
+				if !strings.Contains(string(data), s) {
+					t.Errorf("json lacks %s: %s", s, data)
+				}
+			}
+			for _, s := range tc.not {
+				if strings.Contains(string(data), s) {
+					t.Errorf("json has %s: %s", s, data)
+				}
+			}
+		})
+	}
+}
+
 func fakeAsk(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string

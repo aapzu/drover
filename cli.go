@@ -143,18 +143,43 @@ func columnNames(b *config.Board) string {
 	return strings.Join(names, ", ")
 }
 
+// cardPR is a card's pull request as the board last saw it. State is "unknown"
+// until gh has answered, and Error is why the last lookup failed, if it did.
+type cardPR struct {
+	URL            string `json:"url"`
+	Number         int    `json:"number,omitempty"`
+	State          string `json:"state"`
+	ReviewDecision string `json:"reviewDecision,omitempty"`
+	Released       bool   `json:"released,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+func prInfo(p *store.PR) *cardPR {
+	c := &cardPR{URL: p.URL, Number: p.Number, State: strings.ToLower(p.State), Released: p.Released, Error: p.Error}
+	if c.State == "" {
+		c.State = "unknown"
+	}
+	switch p.ReviewDecision {
+	case "APPROVED":
+		c.ReviewDecision = "approved"
+	case "CHANGES_REQUESTED":
+		c.ReviewDecision = "changes requested"
+	}
+	return c
+}
+
 // card is one entry of list's output.
 type card struct {
-	Number   int    `json:"number"`
-	Title    string `json:"title"`
-	Prompt   string `json:"prompt,omitempty"`
-	Column   string `json:"column"`
-	ColumnID string `json:"columnId"`
-	Issue    string `json:"issue,omitempty"`
-	PR       string `json:"pr,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	Worktree string `json:"worktree,omitempty"`
-	Agent    string `json:"agent,omitempty"`
+	Number   int     `json:"number"`
+	Title    string  `json:"title"`
+	Prompt   string  `json:"prompt,omitempty"`
+	Column   string  `json:"column"`
+	ColumnID string  `json:"columnId"`
+	Issue    string  `json:"issue,omitempty"`
+	PR       *cardPR `json:"pr,omitempty"`
+	Branch   string  `json:"branch,omitempty"`
+	Worktree string  `json:"worktree,omitempty"`
+	Agent    string  `json:"agent,omitempty"`
 	order    int
 }
 
@@ -184,7 +209,11 @@ func cmdList(root string, args []string) error {
 		if title == "" {
 			title = "(untitled)"
 		}
-		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, strings.TrimSpace(c.Issue+" "+c.PR))
+		ref := c.Issue
+		if c.PR != nil {
+			ref = strings.TrimSpace(ref + " " + c.PR.URL)
+		}
+		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, ref)
 	}
 	return w.Flush()
 }
@@ -205,7 +234,7 @@ func buildCards(board *config.Board, tasks []*store.Task) []card {
 			c.Issue = t.Issue.Key
 		}
 		if t.PR != nil {
-			c.PR = t.PR.URL
+			c.PR = prInfo(t.PR)
 		}
 		cards = append(cards, c)
 	}

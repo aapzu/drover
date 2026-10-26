@@ -215,6 +215,8 @@ func TestArgvOnlyAllowsTheBoardCLIAndReadOnlyRepoAccess(t *testing.T) {
 	for _, want := range []string{
 		"'" + exe + "' list --json", "never pass --force", "wait for the user to agree",
 		"read-only to you", "offer a card", "Run `add` only after the user agrees",
+		"A card's `pr` has", "never answer that from git history", "never run `gh`",
+		"say the board doesn't know yet or may be out of date instead of guessing", "offer to move it to Done, and move it only after the user agrees",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q", want)
@@ -262,6 +264,17 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 	}
 	if SessionID(root) != "" {
 		t.Error("a corrupt session file should start a new conversation")
+	}
+}
+
+func TestPromptOffersMergedCardsTheBoardsDoneColumn(t *testing.T) {
+	board := &config.Board{
+		Columns: []config.Column{{ID: "wait", Name: "Waiting"}, {ID: "fin", Name: "Shipped", Role: "done"}},
+		PRFlow:  &config.PRFlow{Opened: "wait"},
+	}
+	want := "When a card in Waiting has a merged or closed pull request, say so and offer to move it to Shipped"
+	if got := systemPrompt("/bin/drover", "/work/my-app", board); !strings.Contains(got, want) {
+		t.Errorf("prompt lacks %q", want)
 	}
 }
 

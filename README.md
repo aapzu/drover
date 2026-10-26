@@ -505,15 +505,22 @@ drover ask "which cards are waiting on review?"
 - `list --json` also gives each card's `branch`, `worktree` and `agent` state
   (`working`, `idle`, `needs you`, `starting`, `queued`, `suspended`, `exited`),
   left out when empty. Cards that share one agent report the same three.
+- `list --json` gives a card's pull request as `pr`: its `url`, `number`,
+  `state` (`open`, `merged`, `closed`, or `unknown` until gh has answered),
+  `reviewDecision` (`approved` or `changes requested`), `released`, and `error`
+  when the last lookup failed. It is the state the board saved at its last
+  poll, so it can be a minute old, or older after an error.
 
 ### Asking the board
 
 `:` opens a side panel next to the board that runs the real Claude Code
 interface as the board's assistant. It knows the repo, the board's columns, and
-every card's column, branch, worktree and agent state, and can move, add, edit
-and delete cards when you tell it to, and answer questions about the code and
-its history. It runs the commands above, so changes go through the open board
-like any other. It takes no agent slot and isn't a card.
+every card's column, branch, worktree, agent state and pull request state, and
+can move, add, edit and delete cards when you tell it to, and answer questions
+about the code and its history. When a card in In review has a merged or closed
+pull request, it offers to move the card to Done and waits for you to agree. It
+runs the commands above, so changes go through the open board like any other.
+It takes no agent slot and isn't a card.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.

@@ -330,6 +330,10 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"Run `add` only after the user agrees to the card.\n" +
 		"`" + cmd + " list --json` shows every card: number, title, column, branch, worktree, issue, pull request and what its agent is doing. " +
 		"Run it before every answer that depends on the cards. The board changes while you talk, so never rely on an earlier run.\n" +
+		"A card's `pr` has the `url`, `number`, `state` (open, merged, closed or unknown), `reviewDecision`, `released` and `error` of its pull request as the board last polled it, about a minute ago. " +
+		"It is the only source for whether a pull request is merged or closed: never answer that from git history or merge commits, never run `gh`, and never ask the user to. " +
+		"If a `state` is unknown, or an `error` is set, say the board doesn't know yet or may be out of date instead of guessing.\n" +
+		"When a card in " + reviewColumn(board) + " has a merged or closed pull request, say so and offer to move it to " + doneColumn(board) + ", and move it only after the user agrees.\n" +
 		"`" + cmd + " move <number> <column>` moves a card; columns are ids or names, and an unknown one is refused with the valid ones. " +
 		"`add <title> [-p prompt] [-c column]`, `edit <number> [--title t] [--prompt p]` and `rm <number>` change cards. " +
 		"A move into an agent column starts an agent, and into a column without one stops it.\n" +
@@ -344,6 +348,26 @@ func baseBranch(b *config.Board) string {
 		return ""
 	}
 	return ", and worktrees branch from " + b.DefaultBaseBranch + " by default"
+}
+
+// reviewColumn names the column PRs land in, "In review" when the board doesn't say.
+func reviewColumn(b *config.Board) string {
+	if b.PRFlow != nil {
+		if c, ok := b.Find(b.PRFlow.Opened); ok {
+			return c.Name
+		}
+	}
+	return "In review"
+}
+
+// doneColumn names the board's done column.
+func doneColumn(b *config.Board) string {
+	for _, c := range b.Columns {
+		if c.IsDone() {
+			return c.Name
+		}
+	}
+	return "Done"
 }
 
 // describeColumns lists one line per column: its name, id and what entering it does.
