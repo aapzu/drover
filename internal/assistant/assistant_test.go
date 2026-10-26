@@ -273,7 +273,10 @@ func TestPromptOffersCardsWithAFinishedPR(t *testing.T) {
 		board *config.Board
 		want  string
 	}{
-		"default board": {config.Default(), opener + "In review has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to Verify in develop and a closed one to Done, and move it only after the user agrees."},
+		"merged column": {&config.Board{
+			Columns: []config.Column{{ID: "wait", Name: "Waiting"}, {ID: "verify", Name: "Verify"}, {ID: "fin", Name: "Shipped", Role: "done"}},
+			PRFlow:  &config.PRFlow{Opened: "wait", Merged: "verify"},
+		}, opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to Verify and a closed one to Shipped, and move it only after the user agrees."},
 		"no merged column": {&config.Board{
 			Columns: []config.Column{{ID: "wait", Name: "Waiting"}, {ID: "fin", Name: "Shipped", Role: "done"}},
 			PRFlow:  &config.PRFlow{Opened: "wait"},
