@@ -121,7 +121,7 @@ Each column takes these fields:
 | `autoSpawn` | Makes an agent column. |
 | `keepAgent` | On a plain column: keeps a running agent when a card moves in, instead of suspending it. Not allowed with `autoSpawn`, To Do or Done. |
 | `permissionMode` | Passed as `claude --permission-mode`. Without it, the board's `defaultPermissionMode`, or Claude Code's own default. |
-| `modelOverride` | Passed as `claude --model`. |
+| `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
 | `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
 | `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |

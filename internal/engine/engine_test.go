@@ -1849,6 +1849,38 @@ func TestNewSessionMovesIntoWorktree(t *testing.T) {
 	})
 }
 
+func TestMoveToColumnWithoutModelResetsModel(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Reset model", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle && s.Started
+	})
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to restart", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || !strings.Contains(l, "--model\ndefault") || strings.Contains(l, "--model\nopus") {
+		t.Errorf("restart should resume on the default model:\n%s", l)
+	}
+}
+
 func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
