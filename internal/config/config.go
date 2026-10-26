@@ -165,8 +165,8 @@ func (b *Board) defaultModel() {
 		b.DefaultModel = DefaultAgentModel
 	}
 	for i := range b.Columns {
-		if col := &b.Columns[i]; col.ModelOverride == "" {
-			col.ModelOverride = b.DefaultModel
+		if b.Columns[i].ModelOverride == "" {
+			b.Columns[i].ModelOverride = b.DefaultModel
 		}
 	}
 }
