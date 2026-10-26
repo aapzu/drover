@@ -170,7 +170,7 @@ func (b *Board) defaultWaitingForYou() {
 	b.Columns[i].Automations.OnTurnEnd = []Automation{waitingForYou()}
 }
 
-// waitingForYou is the turn-end row that moves an Executing card to Waiting for me.
+// waitingForYou is the turn-end row that moves an Executing card to the self-review column.
 func waitingForYou() Automation {
 	return Automation{
 		Name: "Waiting for me", Type: "move_to_column", TargetColumn: "waiting-for-me",
