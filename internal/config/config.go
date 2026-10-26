@@ -366,22 +366,21 @@ func Default() *Board {
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{{
-				Name: "Waiting for me", Type: "move_to_column", TargetColumn: "self-review",
+				Name: "Waiting for me", Type: "move_to_column", TargetColumn: "waiting-for-me",
 				Condition: "The reply ends by asking me for a decision or input",
 			}}}},
-			{ID: "self-review", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
+			{ID: "waiting-for-me", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
-			{ID: "verify", Name: "Verify in develop", Color: "#ec4899"},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},
 		PRFlow: &PRFlow{
-			Requested:        "self-review",
+			Requested:        "waiting-for-me",
 			Opened:           "in-review",
 			ChangesRequested: "executing",
 			ChangesRequestedMessage: "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` " +
 				"and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",
-			Merged:   "verify",
+			Merged:   "done",
 			Released: "done",
 		},
 	}
