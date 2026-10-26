@@ -410,6 +410,7 @@ func (e *Engine) NewSession() (*store.Task, error) {
 func (e *Engine) discardCard(t, owner *store.Task) error {
 	e.mu.Lock()
 	branch, unrecorded := t.Branch, ""
+	base, defaultBase := t.BaseBranch, e.board.DefaultBaseBranch
 	if t.WorktreePath == "" && e.isRepo {
 		folder := filepath.Join(e.board.WorktreesPath(e.Root), fmt.Sprintf("%s%d", worktreeFolderPrefix, t.Number))
 		if _, err := os.Stat(filepath.Join(folder, ".git")); err == nil {
@@ -424,7 +425,11 @@ func (e *Engine) discardCard(t, owner *store.Task) error {
 		gitx.RemoveWorktree(e.Root, unrecorded)
 	}
 	if branch != "" {
-		if err := gitx.DeleteBranch(e.Root, branch); err != nil {
+		resolved, err := gitx.ResolveBase(e.Root, base, defaultBase)
+		if err == nil {
+			err = gitx.DeleteUnusedBranch(e.Root, branch, resolved)
+		}
+		if err != nil {
 			e.notify("couldn't delete the unused branch %s: %v", branch, err)
 		}
 	}
@@ -433,8 +438,8 @@ func (e *Engine) discardCard(t, owner *store.Task) error {
 
 // DiscardSilent deletes a new card whose agent never got a message, and stops
 // the agent, its worktree and its unused branch. A card that is titled, has a
-// prompt or an issue, has left the first column, or has a started conversation
-// is kept.
+// prompt or an issue, has left the first column, has a started conversation or
+// has uncommitted changes in its worktree is kept.
 func (e *Engine) DiscardSilent(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -444,8 +449,9 @@ func (e *Engine) DiscardSilent(id string) error {
 	e.mu.Lock()
 	s := t.Sessions[store.MainSession]
 	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && t.ColumnID == e.board.FirstColumn().ID && !e.talkedTo(t, store.MainSession)
+	path, copied := t.WorktreePath, e.board.CopyFiles
 	e.mu.Unlock()
-	if !silent {
+	if !silent || gitx.Dirty(path, copied...) {
 		return nil
 	}
 	return e.discardCard(t, owner)

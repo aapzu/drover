@@ -465,3 +465,41 @@ func logText(t *store.Task) string {
 	}
 	return b.String()
 }
+
+func TestDiscardSilentDeletesTheBranchWhateverTheMainCheckoutHas(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	if out, err := exec.Command("git", "-C", e.Root, "checkout", "-q", "-b", "elsewhere").CombinedOutput(); err != nil {
+		t.Fatalf("checkout: %s", out)
+	}
+	exec.Command("git", "-C", e.Root, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "other work").Run()
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := e.find(task.ID).Branch
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if branches, _ := exec.Command("git", "-C", e.Root, "branch", "--list", branch).Output(); len(branches) != 0 {
+		t.Errorf("the unused branch %s is still there: %s", branch, branches)
+	}
+}
+
+func TestDiscardSilentKeepsAWorktreeWithUncommittedChanges(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree := e.find(task.ID).WorktreePath
+	os.WriteFile(filepath.Join(worktree, "notes.txt"), []byte("kept"), 0o644)
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Snapshot().Tasks) != 1 {
+		t.Error("a card whose worktree has uncommitted changes was discarded")
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "notes.txt")); err != nil {
+		t.Errorf("the uncommitted file is gone: %v", err)
+	}
+}
