@@ -170,6 +170,7 @@ func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
 	}{
 		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", 0},
 		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "Apply", 1},
+		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "Waiting for me", 1},
 		{"no waiting-for-me", executing + `}`, "", 0},
 	} {
 		root := t.TempDir()
@@ -187,6 +188,24 @@ func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
 		if tc.wantRows > 0 && col.Automations.OnTurnEnd[0].Name != tc.wantName {
 			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, col.Automations.OnTurnEnd[0].Name, tc.wantName)
 		}
+	}
+}
+
+func TestLocalOverlayKeepsWaitingForYou(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, LocalFileName), []byte(`{"maxConcurrent":2}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	board, _, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, _, _ := board.Column("executing")
+	if len(col.Automations.OnTurnEnd) != 1 {
+		t.Errorf("turn-end rows = %+v, want the default row alongside a local overlay", col.Automations.OnTurnEnd)
 	}
 }
 
