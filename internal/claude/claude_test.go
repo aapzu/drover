@@ -181,6 +181,25 @@ func TestBackgroundAgentAndDone(t *testing.T) {
 	}
 }
 
+func TestBackgroundsDone(t *testing.T) {
+	cases := []struct {
+		name  string
+		tasks []BackgroundTask
+		want  bool
+	}{
+		{"field absent", nil, false},
+		{"no tasks listed", []BackgroundTask{}, true},
+		{"one running", []BackgroundTask{{Status: "running"}}, false},
+		{"one completed", []BackgroundTask{{Status: "completed"}}, true},
+		{"one running among completed", []BackgroundTask{{Status: "completed"}, {Status: "running"}}, false},
+	}
+	for _, c := range cases {
+		if got := (Event{BackgroundTasks: c.tasks}).BackgroundsDone(); got != c.want {
+			t.Errorf("%s: BackgroundsDone() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestAsksForPR(t *testing.T) {
 	for prompt, want := range map[string]bool{
 		"Looks good, open a PR":                      true,

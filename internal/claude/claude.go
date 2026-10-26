@@ -139,7 +139,21 @@ type Event struct {
 	ToolInput            struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
-	ToolResponse json.RawMessage `json:"tool_response"`
+	ToolResponse    json.RawMessage  `json:"tool_response"`
+	BackgroundTasks []BackgroundTask `json:"background_tasks"`
+}
+
+// BackgroundTask is an agent Claude Code lists in a Stop payload.
+type BackgroundTask struct {
+	Status string `json:"status"`
+}
+
+// BackgroundsDone reports whether a Stop payload lists its background agents
+// and none of them is still running.
+func (e Event) BackgroundsDone() bool {
+	return e.BackgroundTasks != nil && !slices.ContainsFunc(e.BackgroundTasks, func(t BackgroundTask) bool {
+		return t.Status == "running"
+	})
 }
 
 var (

@@ -127,9 +127,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if ev.Source == "startup" || ev.Source == "resume" {
 				s.Background = nil
 			}
-			if ev.TranscriptPath != "" {
-				s.TranscriptPath = ev.TranscriptPath
-			}
 			// /clear, /compact and forks continue under a new id; resume that one.
 			if ev.SessionID != "" && ev.SessionID != s.AgentSessionID {
 				s.AgentSessionID = ev.SessionID
@@ -206,6 +203,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if s.Relocate != "" {
 				s.RespawnPending = true
 			}
+			if ev.BackgroundsDone() {
+				s.Background = nil
+			}
 			reply := ev.Reply()
 			s.LastReply = reply
 			s.Summary = ""
@@ -225,6 +225,11 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				next = func() { e.respawnPending(taskID, key); then() }
 			}
 			out = append(out, func() { next(); e.alertTurnDone(taskID, key, reply) })
+		}
+		// Claude moves the transcript when the agent enters a worktree, so follow
+		// the path of the latest event.
+		if ev.TranscriptPath != "" {
+			s.TranscriptPath = ev.TranscriptPath
 		}
 	}
 	return out
