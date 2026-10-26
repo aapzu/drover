@@ -143,19 +143,64 @@ func columnNames(b *config.Board) string {
 	return strings.Join(names, ", ")
 }
 
+// cardPR is a card's pull request as the board last saw it. State is "unknown"
+// until gh has answered, Reviewing marks a PR you were asked to review, and
+// Error is why the last lookup failed, if it did.
+type cardPR struct {
+	URL            string `json:"url"`
+	Number         int    `json:"number,omitempty"`
+	State          string `json:"state"`
+	ReviewDecision string `json:"reviewDecision,omitempty"`
+	Released       bool   `json:"released,omitempty"`
+	Reviewing      bool   `json:"reviewing,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+func prInfo(p *store.PR) *cardPR {
+	c := &cardPR{URL: p.URL, Number: p.Number, State: "unknown", Released: p.Released, Reviewing: p.IsReview(), Error: errorLine(p.Error)}
+	switch p.State {
+	case "OPEN", "MERGED", "CLOSED":
+		c.State = strings.ToLower(p.State)
+	}
+	switch p.ReviewDecision {
+	case "APPROVED":
+		c.ReviewDecision = "approved"
+	case "CHANGES_REQUESTED":
+		c.ReviewDecision = "changes requested"
+	}
+	return c
+}
+
+// errorLine is the first line of a gh error, cut to a length that fits in a list.
+func errorLine(msg string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
+	if r := []rune(line); len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return line
+}
+
 // card is one entry of list's output.
 type card struct {
-	Number   int    `json:"number"`
-	Title    string `json:"title"`
-	Prompt   string `json:"prompt,omitempty"`
-	Column   string `json:"column"`
-	ColumnID string `json:"columnId"`
-	Issue    string `json:"issue,omitempty"`
-	PR       string `json:"pr,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	Worktree string `json:"worktree,omitempty"`
-	Agent    string `json:"agent,omitempty"`
+	Number   int     `json:"number"`
+	Title    string  `json:"title"`
+	Prompt   string  `json:"prompt,omitempty"`
+	Column   string  `json:"column"`
+	ColumnID string  `json:"columnId"`
+	Issue    string  `json:"issue,omitempty"`
+	PR       *cardPR `json:"pr,omitempty"`
+	Branch   string  `json:"branch,omitempty"`
+	Worktree string  `json:"worktree,omitempty"`
+	Agent    string  `json:"agent,omitempty"`
 	order    int
+}
+
+// ref is the issue and PR link shown in list's table.
+func (c card) ref() string {
+	if c.PR == nil {
+		return c.Issue
+	}
+	return strings.TrimSpace(c.Issue + " " + c.PR.URL)
 }
 
 func cmdList(root string, args []string) error {
@@ -184,7 +229,7 @@ func cmdList(root string, args []string) error {
 		if title == "" {
 			title = "(untitled)"
 		}
-		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, strings.TrimSpace(c.Issue+" "+c.PR))
+		fmt.Fprintf(w, "#%d\t%s\t%s\t%s\n", c.Number, c.Column, title, c.ref())
 	}
 	return w.Flush()
 }
@@ -205,7 +250,7 @@ func buildCards(board *config.Board, tasks []*store.Task) []card {
 			c.Issue = t.Issue.Key
 		}
 		if t.PR != nil {
-			c.PR = t.PR.URL
+			c.PR = prInfo(t.PR)
 		}
 		cards = append(cards, c)
 	}

@@ -145,17 +145,16 @@ every column.
 ```
 
 With no `drover.json`, the board uses this default, with `prFlow` moving a card
-to Self-review when an agent is asked to open a PR, to In review once it is
-open, and to Verify in develop once it merges:
+to Waiting for me when an agent is asked to open a PR, to In review once it is
+open, and to Done once it merges:
 
 | Column | Kind |
 | --- | --- |
 | Sessions | To Do |
 | Planning | Agent, in `plan` mode; approved plans go to Executing |
 | Executing | Agent |
-| Self-review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
-| In review | Plain |
-| Verify in develop | Plain |
+| Waiting for me | Agent |
+| In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check.
@@ -165,7 +164,7 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
   you and your teammates share one board. With
   no file it uses a built-in default (Sessions, Planning, Executing,
-  Waiting for me, In review, Verify in develop, Done); press `W` to write it out.
+  Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
   `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
@@ -357,11 +356,11 @@ board uses:
 
 ```json
 "prFlow": {
-  "requested": "self-review",
+  "requested": "waiting-for-me",
   "opened": "in-review",
   "changesRequested": "executing",
   "changesRequestedMessage": "PR #{{prNumber}} got review comments…",
-  "merged": "verify",
+  "merged": "done",
   "released": "done"
 }
 ```
@@ -505,15 +504,25 @@ drover ask "which cards are waiting on review?"
 - `list --json` also gives each card's `branch`, `worktree` and `agent` state
   (`working`, `idle`, `needs you`, `starting`, `queued`, `suspended`, `exited`),
   left out when empty. Cards that share one agent report the same three.
+- `list --json` gives a card's pull request as `pr`: its `url`, `number`,
+  `state` (`open`, `merged`, `closed`, or `unknown` until gh has answered),
+  `reviewDecision` (`approved` or `changes requested`), `released`, `reviewing`
+  for a PR you were asked to review, and `error` when a lookup failed. It is the state the board last saved: it polls open
+  pull requests about once a minute while it runs, and never polls a merged or
+  closed one again, or a card in Done.
 
 ### Asking the board
 
 `:` opens a side panel next to the board that runs the real Claude Code
 interface as the board's assistant. It knows the repo, the board's columns, and
-every card's column, branch, worktree and agent state, and can move, add, edit
-and delete cards when you tell it to, and answer questions about the code and
-its history. It runs the commands above, so changes go through the open board
-like any other. It takes no agent slot and isn't a card.
+every card's column, branch, worktree, agent state and pull request state, and
+can move, add, edit and delete cards when you tell it to, and answer questions
+about the code and its history. When a card in the column your PRs wait in (In
+review by default) has a merged or closed pull request of its own, it offers to move the
+card on, to the merged column of your `prFlow` or to Done, and waits for you to
+agree. It runs the commands above, so changes go through the open board like
+any other.
+It takes no agent slot and isn't a card.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.

@@ -681,6 +681,7 @@ func (m Model) renderHelp() string {
 		{"double-click", "attach"},
 		{"drag column edge", "resize the column"},
 		{"drag preview top", "resize the preview"},
+		{"drag assistant edge", "resize the assistant"},
 		{"click preview", "type into the agent"},
 		{"click assistant", "type into the assistant"},
 	}) + "\n\n" + section("Live mode", [][2]string{

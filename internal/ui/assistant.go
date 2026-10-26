@@ -98,10 +98,17 @@ func (m Model) StopAssistant() error {
 
 func (m Model) assistantFits() int {
 	w := max(minAssistantWidth, m.width*2/5)
+	if m.prefs.AssistantWidth > 0 {
+		w = m.clampAssistantWidth(m.prefs.AssistantWidth)
+	}
 	if m.width-w < minBoardWidth || m.bodyHeight() < minPreviewHeight {
 		return 0
 	}
 	return w
+}
+
+func (m Model) clampAssistantWidth(w int) int {
+	return clamp(w, minAssistantWidth, m.width-minBoardWidth)
 }
 
 func (m Model) assistantWidth() int {
@@ -291,6 +298,9 @@ func (m Model) renderAssistant(width, height int) string {
 
 	title, hint := " assistant ", "· "+askKey+" to type here "
 	style := panelStyle
+	if m.drag.kind == dragAssistant {
+		style = style.BorderForeground(accent)
+	}
 	if focused {
 		style = style.BorderForeground(accent)
 		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q back to board "

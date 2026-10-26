@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -133,6 +134,63 @@ func TestCardsReportTheOwnersBranchAndAgent(t *testing.T) {
 	for _, key := range []string{`"branch":"b/one"`, `"worktree":"/wt/1"`, `"agent":"working"`} {
 		if !strings.Contains(string(data), key) {
 			t.Errorf("json lacks %s: %s", key, data)
+		}
+	}
+}
+
+func TestCardsReportThePRState(t *testing.T) {
+	const url = "https://x/pr/1"
+	board := &config.Board{Columns: []config.Column{{ID: "review", Name: "In review"}}}
+	tests := map[string]struct {
+		pr   *store.PR
+		want *cardPR
+	}{
+		"open":        {&store.PR{URL: url, Number: 1, State: "OPEN"}, &cardPR{URL: url, Number: 1, State: "open"}},
+		"merged":      {&store.PR{URL: url, State: "MERGED", Released: true}, &cardPR{URL: url, State: "merged", Released: true}},
+		"closed":      {&store.PR{URL: url, State: "CLOSED"}, &cardPR{URL: url, State: "closed"}},
+		"other state": {&store.PR{URL: url, State: "DRAFT"}, &cardPR{URL: url, State: "unknown"}},
+		"not polled":  {&store.PR{URL: url}, &cardPR{URL: url, State: "unknown"}},
+		"approved":    {&store.PR{URL: url, State: "OPEN", ReviewDecision: "APPROVED"}, &cardPR{URL: url, State: "open", ReviewDecision: "approved"}},
+		"changes":     {&store.PR{URL: url, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}, &cardPR{URL: url, State: "open", ReviewDecision: "changes requested"}},
+		"undecided":   {&store.PR{URL: url, State: "OPEN", ReviewDecision: "REVIEW_REQUIRED"}, &cardPR{URL: url, State: "open"}},
+		"gh failed":   {&store.PR{URL: url, State: "MERGED", Error: "gh: boom"}, &cardPR{URL: url, State: "merged", Error: "gh: boom"}},
+		"reviewing":   {&store.PR{URL: url, State: "OPEN", Review: true}, &cardPR{URL: url, State: "open", Reviewing: true}},
+		"long error":  {&store.PR{URL: url, State: "OPEN", Error: "gh: boom\nstack trace"}, &cardPR{URL: url, State: "open", Error: "gh: boom"}},
+		"no PR":       {nil, nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cards := buildCards(board, []*store.Task{{ID: "a", Number: 1, ColumnID: "review", PR: tc.pr}})
+			if !reflect.DeepEqual(cards[0].PR, tc.want) {
+				t.Errorf("pr = %+v, want %+v", cards[0].PR, tc.want)
+			}
+			data, err := json.Marshal(cards[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == nil && strings.Contains(string(data), `"pr"`) {
+				t.Errorf("a card with no PR should omit pr: %s", data)
+			}
+			if tc.want != nil && tc.want.ReviewDecision == "" && strings.Contains(string(data), "reviewDecision") {
+				t.Errorf("an undecided PR should omit reviewDecision: %s", data)
+			}
+		})
+	}
+}
+
+func TestListRefJoinsTheIssueAndPR(t *testing.T) {
+	pr := &cardPR{URL: "https://x/pr/1"}
+	for name, tc := range map[string]struct {
+		card card
+		want string
+	}{
+		"both":       {card{Issue: "DX-1", PR: pr}, "DX-1 https://x/pr/1"},
+		"issue only": {card{Issue: "DX-1"}, "DX-1"},
+		"PR only":    {card{PR: pr}, "https://x/pr/1"},
+		"neither":    {card{}, ""},
+	} {
+		if got := tc.card.ref(); got != tc.want {
+			t.Errorf("%s: ref = %q, want %q", name, got, tc.want)
 		}
 	}
 }
