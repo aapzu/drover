@@ -169,10 +169,11 @@ func TestBackgroundAgentAndDone(t *testing.T) {
 	os.WriteFile(transcript, []byte(strings.Join([]string{
 		`{"type":"user","message":{"content":"hi"}}`,
 		`{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n</task-notification>"}`,
+		`{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>b1</task-id>\n</task-notification>"}`,
 		"",
 	}, "\n")), 0o644)
 	ids, offset, err := BackgroundDone(transcript, 0)
-	if err != nil || !slices.Equal(ids, []string{"toolu_1"}) {
+	if err != nil || !slices.Equal(ids, []string{"a1", "toolu_1", "b1"}) {
 		t.Fatalf("done %v, err %v", ids, err)
 	}
 	ids, _, _ = BackgroundDone(transcript, offset)
@@ -181,21 +182,24 @@ func TestBackgroundAgentAndDone(t *testing.T) {
 	}
 }
 
-func TestBackgroundsFinished(t *testing.T) {
+func TestRunningBackgrounds(t *testing.T) {
 	cases := []struct {
-		name  string
-		tasks []BackgroundTask
-		want  bool
+		name   string
+		tasks  []BackgroundTask
+		want   []string
+		listed bool
 	}{
-		{"field absent", nil, false},
-		{"no tasks listed", []BackgroundTask{}, true},
-		{"one running", []BackgroundTask{{Status: "running"}}, false},
-		{"one completed", []BackgroundTask{{Status: "completed"}}, true},
-		{"one running among completed", []BackgroundTask{{Status: "completed"}, {Status: "running"}}, false},
+		{"field absent", nil, nil, false},
+		{"no tasks listed", []BackgroundTask{}, nil, true},
+		{"one running", []BackgroundTask{{ID: "a", Status: "running"}}, []string{"a"}, true},
+		{"one completed", []BackgroundTask{{ID: "a", Status: "completed"}}, nil, true},
+		{"running without id", []BackgroundTask{{Status: "running"}}, nil, true},
+		{"one running among completed", []BackgroundTask{{ID: "a", Status: "completed"}, {ID: "b", Status: "running"}}, []string{"b"}, true},
 	}
 	for _, c := range cases {
-		if got := (Event{BackgroundTasks: c.tasks}).BackgroundsFinished(); got != c.want {
-			t.Errorf("%s: BackgroundsFinished() = %v, want %v", c.name, got, c.want)
+		got, listed := (Event{BackgroundTasks: c.tasks}).RunningBackgrounds()
+		if !slices.Equal(got, c.want) || listed != c.listed {
+			t.Errorf("%s: RunningBackgrounds() = %v, %v, want %v, %v", c.name, got, listed, c.want, c.listed)
 		}
 	}
 }

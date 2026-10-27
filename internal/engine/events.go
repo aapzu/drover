@@ -173,8 +173,8 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true
-			if ev.BackgroundsFinished() {
-				s.Background = nil
+			if ids, ok := ev.RunningBackgrounds(); ok {
+				s.Background = ids
 			}
 			reply := ev.Reply()
 			s.LastReply = reply
@@ -206,7 +206,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 }
 
 // backgroundScans returns follow-ups that read the transcripts of sessions with
-// background agents for the completion notices of those agents. Called with mu
+// background tasks for the completion notices of those tasks. Called with mu
 // held.
 func (e *Engine) backgroundScans() []func() {
 	var out []func()

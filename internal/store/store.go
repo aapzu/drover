@@ -120,7 +120,7 @@ type Session struct {
 	UpdatedAt      time.Time    `json:"updatedAt"`
 }
 
-// HasBackground reports whether the session's background agents are still running.
+// HasBackground reports whether the session's background tasks are still running.
 func (s *Session) HasBackground() bool { return len(s.Background) > 0 }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves

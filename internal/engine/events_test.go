@@ -26,14 +26,17 @@ func consumeLines(t *testing.T, s *store.Session, lines ...string) {
 	(&Engine{}).consumeEvents(task, store.MainSession, s)
 }
 
-func TestStopClearsBackgroundOnlyWhenNoneRunning(t *testing.T) {
+func TestStopTracksRunningBackgroundTasks(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		stop string
 		want []string
 	}{
 		{"no tasks listed", `{"hook_event_name":"Stop","background_tasks":[]}`, nil},
-		{"agent still running", `{"hook_event_name":"Stop","background_tasks":[{"id":"a1","status":"running"}]}`, []string{"toolu_1"}},
+		{"none running", `{"hook_event_name":"Stop","background_tasks":[{"id":"a1","status":"completed"}]}`, nil},
+		{"shell running", `{"hook_event_name":"Stop","background_tasks":[{"id":"b1","type":"shell","status":"running"},{"id":"a1","status":"completed"}]}`, []string{"b1"}},
+		{"agent still running", `{"hook_event_name":"Stop","background_tasks":[{"id":"a1","status":"running"}]}`, []string{"a1"}},
+		{"field absent", `{"hook_event_name":"Stop"}`, []string{"toolu_1"}},
 	} {
 		s := &store.Session{Background: []string{"toolu_1"}}
 		consumeLines(t, s, c.stop)

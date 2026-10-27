@@ -141,17 +141,25 @@ type Event struct {
 	BackgroundTasks []BackgroundTask `json:"background_tasks"`
 }
 
-// BackgroundTask is an agent Claude Code lists in a Stop payload.
+// BackgroundTask is an agent or shell Claude Code lists in a Stop payload.
 type BackgroundTask struct {
+	ID     string `json:"id"`
 	Status string `json:"status"`
 }
 
-// BackgroundsFinished reports whether a Stop payload lists its background agents
-// and none of them is still running.
-func (e Event) BackgroundsFinished() bool {
-	return e.BackgroundTasks != nil && !slices.ContainsFunc(e.BackgroundTasks, func(t BackgroundTask) bool {
-		return t.Status == "running"
-	})
+// RunningBackgrounds returns the ids of the background tasks a Stop payload
+// lists as running. It reports false when the payload omits the list.
+func (e Event) RunningBackgrounds() ([]string, bool) {
+	if e.BackgroundTasks == nil {
+		return nil, false
+	}
+	var ids []string
+	for _, t := range e.BackgroundTasks {
+		if t.Status == "running" && t.ID != "" {
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids, true
 }
 
 var (
@@ -329,10 +337,10 @@ func TranscriptPRs(path string, offset int64) ([]string, int64, error) {
 	return urls, offset, err
 }
 
-var taskNoticeID = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+var taskNoticeID = regexp.MustCompile(`<(?:tool-use-id|task-id)>([^<]+)</(?:tool-use-id|task-id)>`)
 
-// BackgroundDone returns the tool use ids of background agents whose completion
-// notice was written after offset, and the new offset.
+// BackgroundDone returns the tool use and task ids of background tasks whose
+// completion notice was written after offset, and the new offset.
 func BackgroundDone(path string, offset int64) ([]string, int64, error) {
 	var ids []string
 	offset, err := readLines(path, offset, func(line []byte) {

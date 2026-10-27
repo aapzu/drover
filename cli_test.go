@@ -89,6 +89,7 @@ func TestAgentState(t *testing.T) {
 		"no agent":         {&store.Task{ID: "a"}, ""},
 		"working":          {session(store.StatusRunning, store.ActivityThinking), "working"},
 		"idle":             {session(store.StatusRunning, store.ActivityIdle), "idle"},
+		"background":       {&store.Task{ID: "a", Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle, Background: []string{"b1"}}}}, "background"},
 		"permission":       {session(store.StatusRunning, store.ActivityPermission), "needs you"},
 		"suspended":        {session(store.StatusSuspended, store.ActivityIdle), "suspended"},
 		"queued":           {session(store.StatusQueued, store.ActivityStarting), "queued"},

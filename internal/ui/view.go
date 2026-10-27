@@ -305,7 +305,7 @@ func (m Model) status(t *store.Task) string {
 		return needsYou.Render("◆ needs you") + pending
 	case store.ActivityIdle:
 		if s.HasBackground() {
-			return thinking.Render("◌ background agents") + pending
+			return thinking.Render("◌ background tasks") + pending
 		}
 		return idle.Render("● idle") + pending
 	case store.ActivityStarting:

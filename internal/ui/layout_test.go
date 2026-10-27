@@ -273,6 +273,18 @@ func TestTmuxKey(t *testing.T) {
 	}
 }
 
+func TestIdleCardWithBackgroundTasksIsNotIdle(t *testing.T) {
+	m := testModel(120, 40, 2, 0)
+	m.snap.Board.Columns[0].AutoSpawn = true
+	task := &store.Task{ID: "t", Number: 1, Title: "Build", ColumnID: "c0",
+		Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle, Background: []string{"b1"}}}}
+	m.snap.Tasks = []*store.Task{task}
+	card := ansi.Strip(m.renderCard(task, 60, false, false))
+	if !strings.Contains(card, "◌ background tasks") || strings.Contains(card, "● idle") {
+		t.Errorf("card:\n%s", card)
+	}
+}
+
 func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	m := testModel(120, 40, 2, 0)
 	m.snap.Board.Columns[0].AutoSpawn = true
