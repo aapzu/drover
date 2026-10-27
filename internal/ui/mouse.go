@@ -42,7 +42,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 	l := m.layout()
 	switch {
-	case msg.Action == tea.MouseActionPress && tea.MouseEvent(msg).IsWheel():
+	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
 		h := l.hitTest(m, msg.X, msg.Y)
 		if h.kind == hitAssistant || h.kind == hitAssistantEdge {
 			return m.wheelAssistant(msg, l)
