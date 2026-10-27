@@ -86,7 +86,6 @@ func (e *Engine) startRef(review bool) string {
 // the owner's own card, which moves to the prFlow's opened column once the
 // agent's turn ends. Each further PR becomes its own card in the group, in
 // the opened column, else in the column of the card the session works for.
-// With splitByPR off, further PRs are logged on the owner and get no card.
 // With review set the PRs are ones you asked the agent to review. They are
 // marked as such and use the reviewFlow's started column instead. The owner's
 // card takes the first only while it is still in the first column, and a
