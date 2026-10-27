@@ -88,7 +88,12 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 
 	if sessKey == store.MainSession {
 		gc := groupContext{from: col, to: col, trigger: "turn_end", reply: reply}
+		skip := e.takeTurnEndRow(owner, sessKey)
 		for _, row := range col.Automations.OnTurnEnd {
+			if skip != "" && rowName(row) == skip {
+				e.logf(t, "Automation %q skipped: this turn answered its own message", rowName(row))
+				continue
+			}
 			if !e.shouldRun(t, row, gc) {
 				continue
 			}
@@ -123,6 +128,20 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 		return
 	}
 	e.flushPending(owner, sessKey)
+}
+
+// takeTurnEndRow returns the turn-end row whose message started the turn that
+// just ended, and forgets it.
+func (e *Engine) takeTurnEndRow(owner *store.Task, sessKey string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := owner.Sessions[sessKey]
+	if s == nil {
+		return ""
+	}
+	row := s.TurnEndRow
+	s.TurnEndRow = ""
+	return row
 }
 
 // truncatePrompt caps prompt at 4000 runes so the Haiku calls stay small.
@@ -195,7 +214,11 @@ func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) 
 		e.mu.Lock()
 		owner := e.owner(t)
 		e.mu.Unlock()
-		e.sendMessage(owner, store.MainSession, e.render(t, row.Message, gc, false))
+		p := store.Pending{Text: e.render(t, row.Message, gc, false)}
+		if gc.trigger == "turn_end" {
+			p.Row = rowName(row)
+		}
+		e.sendPending(owner, store.MainSession, p)
 	case "run_script":
 		err = e.runShellRow(t, row, row.Script, gc)
 	case "notify":

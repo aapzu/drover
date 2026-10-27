@@ -93,8 +93,9 @@ type Session struct {
 	ModeInherited bool `json:"modeInherited,omitempty"`
 	// Started is set once the agent has recorded a conversation, so a later
 	// spawn can resume it instead of starting over.
-	Started     bool `json:"started"`
-	TurnInVisit bool `json:"turnInVisit"`
+	Started     bool   `json:"started"`
+	TurnInVisit bool   `json:"turnInVisit"`
+	TurnEndRow  string `json:"turnEndRow,omitempty"`
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
 	RespawnPending     bool      `json:"respawnPending,omitempty"`
@@ -175,6 +176,8 @@ func (p *PR) IsReview() bool { return p != nil && p.Review }
 // Pending is a message waiting for the session to become idle.
 type Pending struct {
 	Text string `json:"text"`
+	// Row names the turn-end row that sent the message.
+	Row string `json:"row,omitempty"`
 }
 
 type LogEntry struct {

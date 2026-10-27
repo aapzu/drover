@@ -722,6 +722,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 			owner.Visit++
 			for _, s := range owner.Sessions {
 				s.TurnInVisit = false
+				s.TurnEndRow = ""
 			}
 		}
 		t.Archived = false
@@ -1607,6 +1608,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 	// Claim the turn before typing so a concurrent sender queues instead.
 	s.Activity = store.ActivityThinking
 	s.TurnInVisit = true
+	s.TurnEndRow = p.Row
 	s.UpdatedAt = time.Now()
 	e.mu.Unlock()
 
@@ -1617,6 +1619,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		if err != nil {
 			s.Activity = store.ActivityIdle
 			s.TurnInVisit = false
+			s.TurnEndRow = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
 	})
