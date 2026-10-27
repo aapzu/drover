@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -40,6 +41,16 @@ func TestStopClearsBackgroundOnlyWhenNoneRunning(t *testing.T) {
 		if !slices.Equal(s.Background, c.want) {
 			t.Errorf("%s: background %v, want %v", c.name, s.Background, c.want)
 		}
+	}
+}
+
+func TestRespawnWaitsForBackgroundAgents(t *testing.T) {
+	s := &store.Session{Status: store.StatusRunning, RespawnPending: true, Relocate: "/wt", Background: []string{"toolu_1"}}
+	task := &store.Task{ID: "t1", Sessions: map[string]*store.Session{store.MainSession: s}}
+	e := &Engine{state: &store.State{Tasks: []*store.Task{task}}, board: &config.Board{}}
+	e.respawnPending("t1", store.MainSession)
+	if !s.RespawnPending {
+		t.Error("respawn ran while a background agent was still running")
 	}
 }
 

@@ -518,6 +518,10 @@ func (e *Engine) respawnPending(taskID, key string) {
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
 		key == store.MainSession && (s.Relocate != "" || !col.KeepAgent && settingsDiffer(s, col, mode))
+	if due && s.HasBackground() {
+		e.mu.Unlock()
+		return
+	}
 	relocate := ""
 	if s != nil {
 		relocate = s.Relocate
