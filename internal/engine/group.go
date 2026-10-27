@@ -111,15 +111,6 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 		e.notify("#%d %s PR #%d", owner.Number, verb, n)
 		urls = urls[1:]
 	}
-	if !e.board.SplitByPR {
-		for _, url := range urls {
-			if !slices.Contains(owner.SeenPRs, url) {
-				owner.SeenPRs = append(owner.SeenPRs, url)
-				owner.AddLog(fmt.Sprintf(logText+", not split off: splitByPR is off", gh.Number(url)))
-			}
-		}
-		urls = nil
-	}
 	for _, url := range urls {
 		if slices.Contains(owner.SeenPRs, url) ||
 			slices.ContainsFunc(members, func(m *store.Task) bool { return m.PR != nil && m.PR.URL == url }) {
@@ -127,6 +118,10 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 		}
 		owner.SeenPRs = append(owner.SeenPRs, url)
 		now, n := time.Now(), gh.Number(url)
+		if !e.board.SplitByPR {
+			owner.AddLog(fmt.Sprintf(logText+", not split off: splitByPR is off", n))
+			continue
+		}
 		card := &store.Task{
 			ID:        uuid.NewString(),
 			Number:    e.state.NextNumber,
