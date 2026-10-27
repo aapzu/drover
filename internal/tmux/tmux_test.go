@@ -81,11 +81,13 @@ func TestResizeWaitsForDetach(t *testing.T) {
 	}
 
 	AttachCommand(name)
+	defer Detached(name)
+	before := size()
 	if err := Resize(name, 50, 12); err != nil {
 		t.Fatal(err)
 	}
-	if got := size(); got == "50x12" {
-		t.Fatalf("attached window was resized to %s", got)
+	if got := size(); got != before {
+		t.Fatalf("attached window was resized from %s to %s", before, got)
 	}
 
 	Detached(name)

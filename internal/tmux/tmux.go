@@ -217,8 +217,7 @@ func Paste(name, text string) error {
 	return err
 }
 
-// attachedMu guards attached: sessions with a terminal attached, which Resize
-// must leave alone or the window stays at the board's size.
+// attachedMu guards attached: sessions with a terminal attached.
 var (
 	attachedMu sync.Mutex
 	attached   = map[string]bool{}
@@ -242,7 +241,8 @@ func Resize(name string, width, height int) error {
 }
 
 // AttachCommand returns a command that attaches the terminal to the session;
-// DetachKey hands control back, and Detached must be called once it exits.
+// DetachKey hands control back. Resize skips the session from this call until
+// Detached runs, so call Detached once the command exits, even if it failed.
 func AttachCommand(name string) *exec.Cmd {
 	attachedMu.Lock()
 	defer attachedMu.Unlock()
@@ -252,7 +252,7 @@ func AttachCommand(name string) *exec.Cmd {
 	return command("attach-session", "-t", "="+name)
 }
 
-// Detached lets Resize pin the session again after its terminal has exited.
+// Detached lets Resize resize the session again once its terminal has exited.
 func Detached(name string) {
 	attachedMu.Lock()
 	defer attachedMu.Unlock()
