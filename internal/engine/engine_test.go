@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,7 +21,7 @@ import (
 
 const fakeClaude = `#!/bin/sh
 if [ "$1" = "-p" ]; then
-  case "$*" in *"exactly PLAN, DIRECT or STAY"*) [ "$FAKE_ROUTE" = FAIL ] && exit 1; sleep "${FAKE_ROUTE_DELAY:-0}"; echo "$FAKE_ROUTE";; *ALWAYS*) echo YES;; *ASKS_ME*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
+  case "$*" in *ALWAYS*) echo YES;; *ASKS_ME*) echo YES;; *"Write a title"*) printf '%s\n' "$FAKE_TITLE";; *) echo NO;; esac
   exit 0
 fi
 settings=""; sid=""; prompt=""
@@ -58,8 +59,6 @@ turn() {
     *ONEPR*)
       emit '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/1\\n"}}';;
     *PUSH*) cp "$FAKE_PUSH" "$FAKE_GH";;
-    *EnterWorktree*)
-      [ -z "$FAKE_STAY" ] && emit "{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"EnterWorktree\",\"cwd\":\"$(printf '%s' "$1" | sed -n 's/.*with path "\([^"]*\)".*/\1/p')\"}";;
     *FORK*)
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"fork\",\"session_id\":\"forked-$sid\"}"
       emit "{\"hook_event_name\":\"SessionStart\",\"source\":\"startup\",\"session_id\":\"blank-$sid\"}";;
@@ -84,7 +83,7 @@ done
 
 const testBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"planning","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
     {"id": "exec", "name": "Executing", "autoSpawn": true, "permissionMode": "acceptEdits", "modelOverride": "opus",
      "automations": {"onTurnEnd": [
        {"name": "On to review", "type": "move_to_column", "targetColumn": "Review"}
@@ -281,7 +280,7 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -327,7 +326,7 @@ func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 	root, log := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -384,7 +383,7 @@ func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review","autoSpawn":true},
@@ -457,7 +456,7 @@ func TestSettingsDiffer(t *testing.T) {
 func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"review","name":"Review","autoSpawn":true},
@@ -493,10 +492,10 @@ func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	}
 }
 
-func TestSendMessageAndMoveBackToTodo(t *testing.T) {
+func TestSendMessageAndMoveBackToTheFirstColumn(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	e, err := New(root)
@@ -535,22 +534,22 @@ func TestSendMessageAndMoveBackToTodo(t *testing.T) {
 	if got := e.Snapshot().Tasks[0]; got.Archived || got.WorktreePath == "" {
 		t.Fatalf("a refused archive changed the card: archived=%v worktree=%q", got.Archived, got.WorktreePath)
 	}
-	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
+	if err := e.Move(task.ID, "backlog", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	back := e.Snapshot().Tasks[0]
-	if back.WorktreePath != "" || len(back.Sessions) != 0 {
-		t.Errorf("To Do should reset the task: worktree=%q sessions=%d", back.WorktreePath, len(back.Sessions))
+	if back.WorktreePath == "" || back.Sessions[store.MainSession] == nil || !back.Sessions[store.MainSession].Started {
+		t.Errorf("moving back should keep the worktree and conversation: worktree=%q sessions=%v", back.WorktreePath, back.Sessions)
 	}
 	if tmux.Has(fmt.Sprintf("repo-1-%s", task.ID[:6])) {
-		t.Errorf("tmux session still running after move to To Do")
+		t.Errorf("tmux session still running in a column without an agent")
 	}
 }
 
 func TestWorktreesDirSetting(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"worktreesDir":".claude/worktrees"}`), 0o644)
@@ -590,11 +589,14 @@ func TestWorktreesDirSetting(t *testing.T) {
 		}
 	}
 
-	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ArchiveTask(task.ID, true, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(want); !os.IsNotExist(err) {
-		t.Errorf("worktree directory still exists after move to To Do")
+		t.Errorf("worktree directory still exists after archiving")
 	}
 }
 
@@ -608,7 +610,7 @@ func readFile(path string) string {
 func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits",
 	   "automations":{"onTurnEnd":[{"type":"move_to_column","targetColumn":"Done"}]}},
@@ -632,7 +634,7 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 			moves = append(moves, l.Text)
 		}
 	}
-	if want := []string{"Moved To Do → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
+	if want := []string{"Moved Backlog → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
 		t.Errorf("moves = %v, want %v", moves, want)
 	}
 }
@@ -640,7 +642,7 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 func TestPRRequestMovesCard(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"self","name":"Self-review","autoSpawn":true,
 	   "automations":{"onEnter":[{"type":"send_message","message":"/code-review"}],
@@ -675,7 +677,7 @@ func TestPRRequestMovesCard(t *testing.T) {
 func TestPromptInReviewStaysInReview(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"In review"},
 	  {"id":"done","name":"Done","role":"done"}],
@@ -714,7 +716,7 @@ func TestPromptInReviewStaysInReview(t *testing.T) {
 func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -779,7 +781,7 @@ func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 
 const prBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"backlog","name":"Backlog"},
     {"id": "exec", "name": "Executing", "autoSpawn": true,
      "automations": {"onTurnEnd": [{"name": "Ship", "type": "move_to_column", "targetColumn": "Review"}]}},
     {"id": "review", "name": "Review"},
@@ -793,6 +795,42 @@ case "$3" in
   *) echo '{"title":"PR one","headRefName":"one","state":"OPEN"}';;
 esac
 `
+
+func TestSplitByPROffKeepsOneCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"splitByPR":false}`), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Refactor auth", "PRS")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const second = "https://github.com/o/r/pull/2"
+	waitForAll(t, e, "owner shipped to review with its first PR and the second one seen", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "review" && tasks[0].PR != nil && slices.Contains(tasks[0].SeenPRs, second)
+	})
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR.Number != 1 {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v", len(tasks), tasks[0].PR)
+	}
+	logged := 0
+	for _, entry := range tasks[0].Log {
+		if strings.Contains(entry.Text, "splitByPR is off") {
+			logged++
+		}
+	}
+	if logged != 1 {
+		t.Errorf("dropped PR logged %d times, want once", logged)
+	}
+}
 
 func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	root, log := setupProject(t)
@@ -888,7 +926,7 @@ func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 
 const openedBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"backlog","name":"Backlog"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
     {"id": "exec2", "name": "Executing too", "autoSpawn": true},
     {"id": "review", "name": "In review"},
@@ -978,7 +1016,7 @@ func TestPendingPRMoveShipsWhenNoAgentIsRunning(t *testing.T) {
 
 func TestFirstPRStaysPutWithoutAnOpenedColumn(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`)
 	task := e.CreateTask("Auth", "ONEPR")
@@ -997,7 +1035,7 @@ func TestFirstPRStaysPutWithoutAnOpenedColumn(t *testing.T) {
 
 const flowBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"backlog","name":"Backlog"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
     {"id": "review", "name": "In review"},
     {"id": "verify", "name": "Verify"},
@@ -1178,7 +1216,7 @@ func (r *mergedRig) holdMerged(t *testing.T) *store.Task {
 
 const mergedBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"backlog","name":"Backlog"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
     {"id": "review", "name": "In review"},
     {"id": "parked", "name": "Parked"},
@@ -1229,7 +1267,7 @@ func TestMovingAMergedCardByHandStopsTheRetry(t *testing.T) {
 func TestMergedPRWithoutMergedColumnIsNotRetried(t *testing.T) {
 	r := newMergedRig(t, `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"backlog","name":"Backlog"},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
     {"id": "review", "name": "In review"}
   ],
@@ -1314,7 +1352,7 @@ func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) b
 func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -1402,7 +1440,7 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	e, err := New(root)
@@ -1543,51 +1581,6 @@ func TestClosingStopsBackgroundConversation(t *testing.T) {
 	}
 }
 
-func TestDiscardSilentDropsOnlyUntouchedNewSessions(t *testing.T) {
-	e := newEngineWithClaudeDir(t)
-	var elsewhere string
-	for _, c := range e.board.Columns {
-		if !c.IsTodo() {
-			elsewhere = c.ID
-			break
-		}
-	}
-	newCard := func(title string, scratch bool) *store.Task {
-		task := e.CreateTask(title, "")
-		e.with(func() {
-			task.Sessions = map[string]*store.Session{store.MainSession: {Key: store.MainSession, Scratch: scratch}}
-		})
-		return task
-	}
-	silent := newCard("", true)
-	titled := newCard("Titled", true)
-	moved := newCard("", true)
-	e.with(func() { moved.ColumnID = elsewhere })
-	notScratch := newCard("", false)
-	withWorktree := newCard("", true)
-	e.with(func() { withWorktree.WorktreePath = "/elsewhere" })
-	slashOnly := newCard("", true)
-	e.with(func() { slashOnly.Sessions[store.MainSession].Started = true })
-
-	for _, task := range []*store.Task{silent, titled, moved, notScratch, withWorktree, slashOnly} {
-		if err := e.DiscardSilent(task.ID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	found := map[string]bool{}
-	for _, x := range e.Snapshot().Tasks {
-		found[x.ID] = true
-	}
-	if found[silent.ID] {
-		t.Error("a new session left without a message should be dropped")
-	}
-	for name, task := range map[string]*store.Task{"titled": titled, "moved out of To Do": moved, "not a scratch session": notScratch, "with a worktree": withWorktree, "started": slashOnly} {
-		if !found[task.ID] {
-			t.Errorf("a %s card should be kept", name)
-		}
-	}
-}
-
 func TestClosingLeavesTerminalConversationAndSaysSo(t *testing.T) {
 	e := newEngineWithClaudeDir(t)
 	exited := liveConversation(t, "in-terminal", "interactive")
@@ -1676,9 +1669,11 @@ func TestTakeOverOnlyStopsRegisteredAgents(t *testing.T) {
 		return task
 	}
 
-	exited := liveConversation(t, "in-todo", "interactive")
-	if err := e.TakeOver(external("in-todo", 0).ID); err == nil {
-		t.Error("take over of a To Do card should fail")
+	exited := liveConversation(t, "in-done", "interactive")
+	inDone := external("in-done", 0)
+	e.with(func() { inDone.ColumnID = "done" })
+	if err := e.TakeOver(inDone.ID); err == nil {
+		t.Error("take over of a Done card should fail")
 	}
 	select {
 	case <-exited:
@@ -1701,158 +1696,10 @@ func TestTakeOverOnlyStopsRegisteredAgents(t *testing.T) {
 	}
 }
 
-func TestNewSessionMovesAfterFirstTurn(t *testing.T) {
-	root, log := setupProject(t)
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	if _, err := e.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	sid := ready.Sessions[store.MainSession].AgentSessionID
-	transcript := claude.TranscriptPath(sid, root)
-	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Close()
-
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"/help"}` + "\n")
-	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Help shown."}` + "\n")
-	waitFor(t, e, "slash command turn to end", func(t *store.Task) bool {
-		return t.Sessions[store.MainSession].LastReply == "Help shown."
-	})
-	time.Sleep(500 * time.Millisecond)
-	if got := e.Snapshot().Tasks[0]; got.ColumnID != "todo" {
-		t.Fatalf("a slash command turn moved the card to %s", got.ColumnID)
-	}
-
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
-	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"Looking into it."}` + "\n")
-
-	waitFor(t, e, "card to move into Executing with a worktree", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.ColumnID == "exec" && t.WorktreePath != "" && s.Status == store.StatusRunning && !s.Scratch
-	})
-	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
-		return strings.Contains(readFile(log), "--resume\n"+sid)
-	})
-	launches := strings.Split(readFile(log), "---")
-	if !strings.Contains(launches[0], "--model\nhaiku") {
-		t.Errorf("a new session should start on haiku:\n%s", launches[0])
-	}
-	if strings.Contains(launches[1], "haiku") {
-		t.Errorf("leaving To Do should resume on the next column's model:\n%s", launches[1])
-	}
-}
-
-func TestNewSessionMovesWhileAgentWorks(t *testing.T) {
-	root, _ := setupProject(t)
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	if _, err := e.NewSession(); err != nil {
-		t.Fatal(err)
-	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Close()
-
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug"}` + "\n")
-	waitFor(t, e, "card to move before the turn ends", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.ColumnID == "exec" && t.WorktreePath != "" && !s.Scratch
-	})
-	waitNotBusy(t, e)
-}
-
-func TestNewSessionMovesIntoWorktree(t *testing.T) {
-	root, log := setupProject(t)
-	config := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", config)
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	task, err := e.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	if ready.WorktreePath != "" || ready.ColumnID != "todo" || !ready.Sessions[store.MainSession].Scratch {
-		t.Fatalf("scratch session should run in To Do without a worktree: %+v", ready)
-	}
-	sid := ready.Sessions[store.MainSession].AgentSessionID
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"Fix the login bug\nIt fails on Safari"}` + "\n")
-	events.WriteString(`{"hook_event_name":"Stop","last_assistant_message":"On it."}` + "\n")
-	events.Close()
-	waitFor(t, e, "title from the first prompt", func(t *store.Task) bool {
-		return t.Title == "Fix the login bug" && t.Sessions[store.MainSession].Activity == store.ActivityIdle
-	})
-
-	transcript := claude.TranscriptPath(sid, root)
-	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	moved := waitFor(t, e, "agent resumed in a worktree", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.WorktreePath != "" && s.Status == store.StatusRunning && !s.Scratch
-	})
-	if !strings.HasPrefix(moved.Branch, "fix-the-login-bug-") {
-		t.Errorf("branch = %s, want it named after the first prompt", moved.Branch)
-	}
-	if _, err := os.Stat(claude.TranscriptPath(sid, moved.WorktreePath)); err != nil {
-		t.Errorf("transcript not moved into the worktree's project: %v", err)
-	}
-	waitFor(t, e, "agent to resume the scratch conversation", func(*store.Task) bool {
-		return strings.Contains(readFile(log), "--resume\n"+sid)
-	})
-}
-
 func TestMoveToColumnWithoutModelResetsModel(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
@@ -1884,7 +1731,7 @@ func TestMoveToColumnWithoutModelResetsModel(t *testing.T) {
 func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","modelOverride":"opus"},
 	  {"id":"review","name":"Review","autoSpawn":true,"permissionMode":"plan","modelOverride":"sonnet"},
@@ -1938,134 +1785,6 @@ func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	}
 }
 
-func TestRunningSessionEntersWorktree(t *testing.T) {
-	for _, stays := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stays=%v", stays), func(t *testing.T) {
-			root, log := setupProject(t)
-			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-			if stays {
-				t.Setenv("FAKE_STAY", "1")
-			}
-			os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
-			  {"id":"todo","name":"To Do","role":"todo"},
-			  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"haiku"},
-			  {"id":"opus","name":"Opus","autoSpawn":true,"modelOverride":"opus"},
-			  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
-			e, err := New(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			runEngine(t, e)
-
-			task, err := e.NewSession()
-			if err != nil {
-				t.Fatal(err)
-			}
-			waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-				s := t.Sessions[store.MainSession]
-				return s != nil && s.Activity == store.ActivityIdle
-			})
-			if err := e.Send(task.ID, "hello"); err != nil {
-				t.Fatal(err)
-			}
-			ready := waitFor(t, e, "first turn to end", func(t *store.Task) bool {
-				s := t.Sessions[store.MainSession]
-				return s.Activity == store.ActivityIdle && s.Started
-			})
-			sid := ready.Sessions[store.MainSession].AgentSessionID
-			transcript := claude.TranscriptPath(sid, root)
-			os.MkdirAll(filepath.Dir(transcript), 0o755)
-			os.WriteFile(transcript, []byte("{}\n"), 0o644)
-			if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
-				t.Fatal(err)
-			}
-			if !stays {
-				moved := waitFor(t, e, "the agent to enter the worktree", func(t *store.Task) bool {
-					s := t.Sessions[store.MainSession]
-					return s.Relocate == "" && s.Activity == store.ActivityIdle && t.WorktreePath != ""
-				})
-				if s := moved.Sessions[store.MainSession]; s.Scratch || s.Status != store.StatusRunning {
-					t.Errorf("scratch=%v status=%s", s.Scratch, s.Status)
-				}
-				if n := strings.Count(readFile(log), "---"); n != 1 {
-					t.Errorf("want the agent kept running, got %d launches", n)
-				}
-				if err := e.Move(task.ID, "opus", MoveOptions{}); err != nil {
-					t.Fatal(err)
-				}
-				waitForAll(t, e, "the agent to restart with the new model", func([]*store.Task) bool {
-					return strings.Count(readFile(log), "---") >= 2
-				})
-				if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume\n"+sid) {
-					t.Errorf("restart should resume the conversation:\n%s", l)
-				}
-				if _, err := os.Stat(claude.TranscriptPath(sid, moved.WorktreePath)); err != nil {
-					t.Errorf("transcript not carried into the worktree's project: %v", err)
-				}
-				return
-			}
-			waitForAll(t, e, "the agent to restart in the worktree", func([]*store.Task) bool {
-				return strings.Count(readFile(log), "---") >= 2
-			})
-			if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume\n"+sid) {
-				t.Errorf("restart should resume the conversation:\n%s", l)
-			}
-		})
-	}
-}
-
-func TestQueuedRelocation(t *testing.T) {
-	for _, there := range []bool{true, false} {
-		t.Run(fmt.Sprintf("already there=%v", there), func(t *testing.T) {
-			root, log := setupProject(t)
-			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-			e, err := New(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			runEngine(t, e)
-
-			if _, err := e.NewSession(); err != nil {
-				t.Fatal(err)
-			}
-			ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
-				s := t.Sessions[store.MainSession]
-				return s != nil && s.Activity == store.ActivityIdle
-			})
-			worktree := t.TempDir()
-			e.with(func() {
-				s := e.find(ready.ID).Sessions[store.MainSession]
-				s.Activity = store.ActivityThinking
-				s.Pending = []store.Pending{{Relocate: worktree, Text: "Call the EnterWorktree tool with path " + worktree}}
-			})
-			cwd := root
-			if there {
-				cwd = worktree
-			}
-			events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer events.Close()
-			events.WriteString(`{"hook_event_name":"Stop","cwd":"` + cwd + `"}` + "\n")
-			waitFor(t, e, "the turn to end", func(t *store.Task) bool {
-				s := t.Sessions[store.MainSession]
-				return s.Activity == store.ActivityIdle && len(s.Pending) == 0 || s.Relocate != ""
-			})
-			if there {
-				time.Sleep(time.Second)
-				if strings.Contains(readFile(log), "EnterWorktree") {
-					t.Errorf("the agent was asked to move into a worktree it was already in:\n%s", readFile(log))
-				}
-				return
-			}
-			waitForAll(t, e, "the agent to be asked to move", func([]*store.Task) bool {
-				return strings.Contains(readFile(log), "typed:Call the EnterWorktree")
-			})
-		})
-	}
-}
-
 func TestInterruptedTurnGoesIdle(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -2078,11 +1797,11 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 	if _, err := e.NewSession(); err != nil {
 		t.Fatal(err)
 	}
-	ready := waitFor(t, e, "scratch session to start", func(t *store.Task) bool {
+	ready := waitFor(t, e, "the new session to start", func(t *store.Task) bool {
 		s := t.Sessions[store.MainSession]
 		return s != nil && s.Activity == store.ActivityIdle
 	})
-	transcript := claude.TranscriptPath(ready.Sessions[store.MainSession].AgentSessionID, root)
+	transcript := claude.TranscriptPath(ready.Sessions[store.MainSession].AgentSessionID, ready.WorktreePath)
 	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -2130,7 +1849,7 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 
 const reviewBoard = `{
   "columns": [
-    {"id": "todo", "name": "To Do", "role": "todo"},
+    {"id":"planning","name":"Planning","autoSpawn":true},
     {"id": "exec", "name": "Executing", "autoSpawn": true},
     {"id": "reviewing", "name": "Reviewing", "autoSpawn": true},
     {"id": "waiting", "name": "Waiting on author"},
@@ -2195,7 +1914,7 @@ func (r *reviewRig) fail(what string, on bool) {
 	}
 }
 
-// ask starts a session in To Do and asks it to review PR 7.
+// ask starts a session in the first column and asks it to review PR 7.
 func (r *reviewRig) ask(t *testing.T) {
 	t.Helper()
 	task, err := r.e.NewSession()
@@ -2302,7 +2021,7 @@ func TestReviewOfYourOwnPRIsForgotten(t *testing.T) {
 		return false
 	})
 	time.Sleep(600 * time.Millisecond)
-	if c := r.e.Snapshot().Tasks[0]; c.PR != nil || c.PRMovePending || c.ColumnID != "todo" {
+	if c := r.e.Snapshot().Tasks[0]; c.PR != nil || c.PRMovePending || c.ColumnID != "planning" {
 		t.Fatalf("own PR kept as a review: %+v, pending %v, column %s", c.PR, c.PRMovePending, c.ColumnID)
 	}
 }
@@ -2322,7 +2041,7 @@ func TestReviewCardWaitsForGhToConfirmThePR(t *testing.T) {
 	r.fail("login", false)
 	time.Sleep(600 * time.Millisecond)
 	c := r.e.Snapshot().Tasks[0]
-	if c.ColumnID != "todo" || !c.PRMovePending || c.PR.State != "" {
+	if c.ColumnID != "planning" || !c.PRMovePending || c.PR.State != "" {
 		t.Fatalf("card moved before gh confirmed the PR: column %s, pending %v, %+v", c.ColumnID, c.PRMovePending, c.PR)
 	}
 	r.fail("view", false)
@@ -2403,6 +2122,29 @@ func TestReviewInAWorkingSessionGetsItsOwnCard(t *testing.T) {
 	}
 }
 
+func TestSplitByPROffGivesAReviewInAWorkingSessionNoCard(t *testing.T) {
+	r := newReviewRig(t, "them", strings.Replace(reviewBoard, "{", `{"splitByPR": false,`, 1))
+	task := r.e.CreateTask("Auth", "REVIEWME")
+	if err := r.e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const reviewed = "https://github.com/o/r/pull/7"
+	waitForAll(t, r.e, "the reviewed PR to be seen", func(tasks []*store.Task) bool {
+		return slices.Contains(tasks[0].SeenPRs, reviewed)
+	})
+	tasks := r.e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR != nil || tasks[0].ColumnID != "exec" {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v, column %s", len(tasks), tasks[0].PR, tasks[0].ColumnID)
+	}
+	logged := false
+	for _, entry := range tasks[0].Log {
+		logged = logged || strings.Contains(entry.Text, "Reviewing PR #7, not split off")
+	}
+	if !logged {
+		t.Errorf("the dropped review was not logged: %+v", tasks[0].Log)
+	}
+}
+
 func TestLeavingDoneClearsArchived(t *testing.T) {
 	root, _ := setupProject(t)
 	e, err := New(root)
@@ -2416,7 +2158,7 @@ func TestLeavingDoneClearsArchived(t *testing.T) {
 	if err := e.ArchiveTask(task.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Move(task.ID, "todo", MoveOptions{}); err != nil {
+	if err := e.Move(task.ID, "planning", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if e.Snapshot().Tasks[0].Archived {
@@ -2643,7 +2385,7 @@ func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
 	} {
 		t.Run(c.title, func(t *testing.T) {
 			e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,
 	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"waiting-for-me",
 	      "condition":"The reply ends by asking me for a decision or input"}]}},
@@ -2670,7 +2412,7 @@ func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
 
 func TestTurnEndMoveStillShipsPR(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,
 	    "automations":{"onTurnEnd":[{"name":"Waiting for me","type":"move_to_column","targetColumn":"waiting-for-me",
 	      "condition":"The reply ends by asking me for a decision or input"}]}},
@@ -2694,7 +2436,7 @@ func TestTurnEndMoveStillShipsPR(t *testing.T) {
 func TestKeepAgentLeavesPendingRespawnAlone(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"In review","keepAgent":true},
@@ -2735,7 +2477,7 @@ func TestKeepAgentLeavesPendingRespawnAlone(t *testing.T) {
 
 func TestKeepAgentColumnLeavesAgentRunning(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"In review","keepAgent":true},
 	  {"id":"park","name":"Parked"},
@@ -2757,7 +2499,7 @@ func TestKeepAgentColumnLeavesAgentRunning(t *testing.T) {
 
 func TestSlotEvictionSparesKeptAgent(t *testing.T) {
 	e := startWithBoard(t, `{"maxConcurrent":1,"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"watch","name":"In review","keepAgent":true},
 	  {"id":"review","name":"Review"},
@@ -2788,110 +2530,55 @@ func TestSlotEvictionSparesKeptAgent(t *testing.T) {
 	}
 }
 
-func TestNewSessionLaunchesInSessionsPlanMode(t *testing.T) {
-	root, log := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
+func TestHideTaskSurvivesMove(t *testing.T) {
+	root, _ := setupProject(t)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runEngine(t, e)
-
-	if _, err := e.NewSession(); err != nil {
+	task := e.CreateTask("Open", "")
+	if err := e.HideTask(task.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	waitForAll(t, e, "the session to launch", func([]*store.Task) bool {
-		return strings.Count(readFile(log), "---") >= 1
-	})
-	if launch := strings.Split(readFile(log), "---")[0]; !strings.Contains(launch, "--permission-mode\nplan") {
-		t.Errorf("a new session should launch in its column's plan mode:\n%s", launch)
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Snapshot().Tasks[0].Hidden {
+		t.Error("moving a card unhid it")
+	}
+	if err := e.HideTask(task.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if e.Snapshot().Tasks[0].Hidden {
+		t.Error("card is still hidden")
+	}
+	if err := e.HideTask("nope", true); err == nil {
+		t.Error("hid an unknown card")
 	}
 }
 
-func TestSessionMovedOutOfSessionsLeavesPlanMode(t *testing.T) {
-	root, log := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
+func TestArchiveColumnSkipsHiddenCards(t *testing.T) {
+	root, _ := setupProject(t)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	runEngine(t, e)
-
-	task, err := e.NewSession()
-	if err != nil {
+	shown := e.CreateTask("Shown", "")
+	hidden := e.CreateTask("Hidden", "")
+	for _, task := range []*store.Task{shown, hidden} {
+		if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.HideTask(hidden.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
-		t.Fatal(err)
+	if n := e.ArchiveColumn("done"); n != 1 {
+		t.Errorf("ArchiveColumn = %d, want only the visible card", n)
 	}
-	waitForAll(t, e, "the agent to restart in the work column", func([]*store.Task) bool {
-		return strings.Count(readFile(log), "---") >= 2
-	})
-	launches := strings.Split(readFile(log), "---")
-	if strings.Contains(launches[1], "--permission-mode") {
-		t.Errorf("leaving Sessions should drop the plan mode:\n%s", launches[1])
-	}
-}
-
-func TestNewSessionMovedToPlanningRestartsInPlanMode(t *testing.T) {
-	root, log := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	task, err := e.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, e, "the session to go idle", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Activity == store.ActivityIdle
-	})
-	if err := e.Move(task.ID, "planning", MoveOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	waitForAll(t, e, "the agent to restart in the worktree", func([]*store.Task) bool {
-		return strings.Count(readFile(log), "---") >= 2
-	})
-	if launch := strings.Split(readFile(log), "---")[1]; !strings.Contains(launch, "--permission-mode\nplan") {
-		t.Errorf("the agent should restart in plan mode:\n%s", launch)
-	}
-	s := waitFor(t, e, "the agent to run", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s != nil && s.Status == store.StatusRunning
-	}).Sessions[store.MainSession]
-	if s.PermissionMode != "plan" || !tmux.Has(s.Tmux) {
-		t.Errorf("want a running agent in plan mode, got %+v", s)
-	}
-}
-
-func TestRespawnAfterLeavingSessionsKeepsItsSlot(t *testing.T) {
-	t.Setenv("FAKE_ROUTE", "PLAN")
-	t.Setenv("FAKE_STAY", "1")
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	e := startWithBoard(t, `{"maxConcurrent":1,"columns":[
-	  {"id":"todo","name":"Sessions","role":"todo","permissionMode":"plan"},
-	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`)
-	promptScratch(t, e, typoPrompt, `{"hook_event_name":"Stop"}`)
-	waitFor(t, e, "the agent to be asked to move", func(t *store.Task) bool {
-		return t.ColumnID == "plan" && hasLog(t, "Asking the agent to move into the worktree")
-	})
-	task := waitFor(t, e, "the agent to be resumed in the worktree", func(t *store.Task) bool {
-		return hasLog(t, "Resumed agent")
-	})
-	if hasLog(task, "Agent queued") {
-		t.Errorf("the respawned agent queued itself behind its own slot")
-	}
-	if s := task.Sessions[store.MainSession]; s.PermissionMode != "plan" {
-		t.Errorf("the respawned agent should be in plan mode, got %q", s.PermissionMode)
+	for _, task := range e.Snapshot().Tasks {
+		if want := task.ID == shown.ID; task.Archived != want {
+			t.Errorf("#%d archived = %v, want %v", task.Number, task.Archived, want)
+		}
 	}
 }

@@ -13,7 +13,7 @@ import (
 
 func worktreeBoard(extra string) string {
 	return `{` + extra + `"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"done","name":"Done","role":"done"}]}`
 }
@@ -126,7 +126,7 @@ func TestUpdateFromBaseNeedsAnIdleWorktree(t *testing.T) {
 	e := startWithBoard(t, worktreeBoard(""))
 	waiting := e.CreateTask("Not started", "")
 	if _, err := e.UpdateFromBase(waiting.ID); err == nil || !strings.Contains(err.Error(), "no worktree") {
-		t.Errorf("UpdateFromBase in To Do = %v", err)
+		t.Errorf("UpdateFromBase on a not-started card = %v", err)
 	}
 	busy := e.CreateTask("SLOW work", "")
 	if err := e.Move(busy.ID, "exec", MoveOptions{}); err != nil {

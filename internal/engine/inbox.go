@@ -138,13 +138,13 @@ func (e *Engine) inboxAdd(r inbox.Request) (inbox.Result, error) {
 		task = e.CreateTask(title, deref(r.Prompt))
 	}
 	res := inbox.Result{Number: task.Number, Title: task.Title}
-	todo := e.todoColumn()
-	res.Column = todo.Name
-	if col.ID == "" || col.ID == todo.ID {
+	first := e.firstColumn()
+	res.Column = first.Name
+	if col.ID == "" || col.ID == first.ID {
 		return res, nil
 	}
 	if err := e.Move(task.ID, col.ID, MoveOptions{}); err != nil {
-		return res, fmt.Errorf("added #%d to %s, but moving it to %s failed: %w", res.Number, todo.Name, col.Name, err)
+		return res, fmt.Errorf("added #%d to %s, but moving it to %s failed: %w", res.Number, first.Name, col.Name, err)
 	}
 	res.Column = col.Name
 	return res, nil
@@ -205,10 +205,10 @@ func (e *Engine) inboxRemove(r inbox.Request) (inbox.Result, error) {
 	return res, e.DeleteTask(id)
 }
 
-func (e *Engine) todoColumn() config.Column {
+func (e *Engine) firstColumn() config.Column {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.board.TodoColumn()
+	return e.board.FirstColumn()
 }
 
 func deref(s *string) string {

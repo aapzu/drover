@@ -38,6 +38,7 @@ const (
 	modeFilter
 	modePalette
 	modeAssistant
+	modeConfig
 )
 
 type tickMsg time.Time
@@ -131,6 +132,13 @@ type Model struct {
 
 	paletteInput textinput.Model
 	paletteSel   int
+
+	configSel     int
+	configEditing bool
+	configLayer   config.Layer
+	configInput   textinput.Model
+	configSrc     []string
+
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
 	moveSel   int
@@ -175,6 +183,7 @@ func New(eng *engine.Engine) Model {
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
+		configInput:  textinput.New(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
@@ -216,7 +225,7 @@ func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
 	hides := m.hidesArchived(colID)
 	for _, t := range m.snap.Tasks {
-		if m.columnOf(t) == colID && !(hides && t.Archived) {
+		if m.columnOf(t) == colID && !m.offBoard(t, hides) {
 			out = append(out, t)
 		}
 	}
@@ -238,14 +247,21 @@ func (m Model) hidesArchived(colID string) bool {
 	return col.IsDone() && !m.prefs.ShowArchived
 }
 
-// archivedIn counts the archived cards the board hides in a column.
-func (m Model) archivedIn(colID string) int {
-	if !m.hidesArchived(colID) {
+// offBoard is whether the board hides a card: an archived one when its column
+// hides archived cards, or a hidden one unless hidden cards are shown.
+func (m Model) offBoard(t *store.Task, hidesArchived bool) bool {
+	return t.Archived && hidesArchived || t.Hidden && !m.prefs.ShowHidden
+}
+
+// offBoardIn counts the cards the board hides in a column.
+func (m Model) offBoardIn(colID string) int {
+	hides := m.hidesArchived(colID)
+	if !hides && m.prefs.ShowHidden {
 		return 0
 	}
 	n := 0
 	for _, t := range m.snap.Tasks {
-		if t.Archived && m.columnOf(t) == colID {
+		if m.columnOf(t) == colID && m.offBoard(t, hides) {
 			n++
 		}
 	}
@@ -559,6 +575,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case modeDetail:
 			return m.updateDetail(msg)
+		case modeConfig:
+			return m.updateConfig(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -627,7 +645,7 @@ func (m Model) capturePreview() tea.Cmd {
 	w, h := l.boardW-2, l.previewH-2
 	scrollback := scrollbackFor(m.previewScroll, h)
 	return func() tea.Msg {
-		msg := previewMsg{taskID: id}
+		msg := previewMsg{taskID: id, at: time.Now()}
 		if ok {
 			if l.previewH > 0 {
 				tmux.Resize(name, w, h)
@@ -636,7 +654,6 @@ func (m Model) capturePreview() tea.Cmd {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 			}
 		}
-		msg.at = time.Now()
 		return msg
 	}
 }
@@ -720,6 +737,7 @@ func (m *Model) attach(id string) (tea.Cmd, bool) {
 	m.attached = id
 	m.syncFocus()
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+		tmux.Detached(name)
 		return attachDoneMsg{id: id, agent: true, paneGone: !tmux.Has(name), err: err}
 	}), true
 }
@@ -774,6 +792,20 @@ func archiveCard(eng *engine.Engine, busy map[string]op, id string, number int, 
 		case errors.Is(err, engine.ErrDirty):
 			msg.confirmText = fmt.Sprintf("#%d's worktree has uncommitted changes. Archive and delete the worktree anyway? (y/N)", number)
 			msg.confirm = func() tea.Cmd { return archiveCard(eng, busy, id, number, archive, true) }
+		}
+		return msg
+	})
+}
+
+func hideCard(eng *engine.Engine, busy map[string]op, id string, number int, hide bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "hiding"}, func() actionDoneMsg {
+		err := eng.HideTask(id, hide)
+		msg := actionDoneMsg{err: err}
+		switch {
+		case err == nil && hide:
+			msg.done = fmt.Sprintf("Hid #%d. B shows hidden cards.", number)
+		case err == nil:
+			msg.done = fmt.Sprintf("Unhid #%d", number)
 		}
 		return msg
 	})
@@ -943,6 +975,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			id := t.ID
 			return m, tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+				tmux.Detached(name)
 				return attachDoneMsg{id: id, err: err}
 			})
 		}
@@ -1029,7 +1062,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		n := 0
 		for _, task := range m.tasksForColumn(m.col) {
-			if !task.Archived {
+			if !task.Archived && !task.Hidden {
 				n++
 			}
 		}
@@ -1046,12 +1079,24 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return snapMsg(eng.Snapshot())
 			}
 		}
+	case "b":
+		if t == nil {
+			break
+		}
+		return m, hideCard(m.eng, m.busy, t.ID, t.Number, !t.Hidden)
+	case "B":
+		m.prefs.ShowHidden = !m.prefs.ShowHidden
+		m.savePrefs()
 	case "v":
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings
 		m.savePrefs()
+	case "o":
+		m.mode = modeConfig
+		m.configSel = 0
+		m.configSrc = configSources(m.eng.Root)
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

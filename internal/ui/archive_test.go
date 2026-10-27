@@ -23,8 +23,8 @@ func TestArchivedCardsAreHiddenUntilShown(t *testing.T) {
 	if got := m.tasksIn("c1"); len(got) != 1 {
 		t.Errorf("column lists %d cards, want the 1 unarchived", len(got))
 	}
-	if got := m.archivedIn("c1"); got != 2 {
-		t.Errorf("archivedIn = %d, want 2", got)
+	if got := m.offBoardIn("c1"); got != 2 {
+		t.Errorf("offBoardIn = %d, want 2", got)
 	}
 	if out := m.renderColumn(colBox{index: 1, width: 40, slots: 5}, 20, false); !strings.Contains(out, " 1 +2") {
 		t.Errorf("header doesn't show the hidden count:\n%s", out)
@@ -34,8 +34,8 @@ func TestArchivedCardsAreHiddenUntilShown(t *testing.T) {
 	if got := m.tasksIn("c1"); len(got) != 3 {
 		t.Errorf("column lists %d cards with archived shown, want 3", len(got))
 	}
-	if got := m.archivedIn("c1"); got != 0 {
-		t.Errorf("archivedIn = %d while archived cards are shown, want 0", got)
+	if got := m.offBoardIn("c1"); got != 0 {
+		t.Errorf("offBoardIn = %d while archived cards are shown, want 0", got)
 	}
 	if out := m.renderColumn(colBox{index: 1, width: 40, slots: 5}, 20, false); strings.Contains(out, "+2") {
 		t.Errorf("header still shows a hidden count:\n%s", out)
@@ -82,5 +82,95 @@ func TestArchiveKeys(t *testing.T) {
 	next, _ = m.updateBoard(key("v"))
 	if !next.(Model).prefs.ShowArchived {
 		t.Error("v didn't show archived cards")
+	}
+}
+
+func TestHiddenCardsAreHiddenUntilShown(t *testing.T) {
+	m := archiveModel(t)
+	m.snap.Tasks[0].Hidden = true
+
+	col := m.columns()[0].ID
+	if got := m.tasksIn(col); len(got) != 2 {
+		t.Errorf("column lists %d cards, want the 2 visible", len(got))
+	}
+	if got := m.offBoardIn(col); got != 1 {
+		t.Errorf("offBoardIn = %d, want 1", got)
+	}
+	if out := m.renderColumn(colBox{index: 0, width: 40, slots: 5}, 20, false); !strings.Contains(out, " 2 +1") {
+		t.Errorf("header doesn't show the hidden count:\n%s", out)
+	}
+
+	next, _ := m.updateBoard(key("B"))
+	m = next.(Model)
+	if got := m.tasksIn(col); len(got) != 3 {
+		t.Errorf("column lists %d cards with hidden shown, want 3", len(got))
+	}
+	if got := m.offBoardIn(col); got != 0 {
+		t.Errorf("offBoardIn = %d while hidden cards are shown, want 0", got)
+	}
+}
+
+func TestOffBoardCombinations(t *testing.T) {
+	for _, c := range []struct {
+		archived, hidden, showArchived, showHidden, want bool
+	}{
+		{archived: true, want: true},
+		{archived: true, showArchived: true},
+		{hidden: true, want: true},
+		{hidden: true, showHidden: true},
+		{hidden: true, showArchived: true, want: true},
+		{archived: true, hidden: true, showArchived: true, want: true},
+		{archived: true, hidden: true, showHidden: true, want: true},
+		{archived: true, hidden: true, showArchived: true, showHidden: true},
+	} {
+		m := archiveModel(t)
+		m.prefs.ShowHidden = c.showHidden
+		task := m.snap.Tasks[0]
+		task.Archived, task.Hidden = c.archived, c.hidden
+		if got := m.offBoard(task, !c.showArchived); got != c.want {
+			t.Errorf("%+v: offBoard = %v", c, got)
+		}
+	}
+}
+
+func TestArchiveAllIgnoresHiddenCards(t *testing.T) {
+	m := archiveModel(t)
+	m.col = 1
+	m.prefs.ShowHidden = true
+	m.snap.Tasks[3].Archived, m.snap.Tasks[4].Archived = false, false
+	m.snap.Tasks[4].Hidden = true
+
+	next, _ := m.updateBoard(key("C"))
+	if got := next.(Model).confirmText; !strings.Contains(got, "all 2 cards") {
+		t.Errorf("C with one hidden card: text = %q", got)
+	}
+
+	m.snap.Tasks[3].Hidden = true
+	m.snap.Tasks[5].Hidden = true
+	next, _ = m.updateBoard(key("C"))
+	if got := next.(Model); got.mode == modeConfirm || !strings.Contains(got.flash, "Nothing to archive") {
+		t.Errorf("C with only hidden cards: mode=%v flash=%q", got.mode, got.flash)
+	}
+}
+
+func TestHideKeys(t *testing.T) {
+	m := archiveModel(t)
+
+	if _, cmd := m.updateBoard(key("b")); cmd == nil {
+		t.Error("b on a card didn't start hiding it")
+	}
+
+	next, _ := m.updateBoard(key("B"))
+	if !next.(Model).prefs.ShowHidden {
+		t.Error("B didn't show hidden cards")
+	}
+	next, _ = next.(Model).updateBoard(key("B"))
+	if next.(Model).prefs.ShowHidden {
+		t.Error("second B didn't hide them again")
+	}
+
+	m.snap.Tasks = nil
+	if _, cmd := m.updateBoard(key("b")); cmd != nil {
+		t.Error("b with no card selected did something")
 	}
 }
