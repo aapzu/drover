@@ -33,6 +33,8 @@ type configOption struct {
 var configOptions = []configOption{
 	{name: "Auto-name cards", path: []string{"autoName"}, kind: optToggle,
 		get: func(b *config.Board) any { return b.AutoName }},
+	{name: "Split PRs into cards", path: []string{"splitByPR"}, kind: optToggle,
+		get: func(b *config.Board) any { return b.SplitByPR }},
 	{name: "Max concurrent agents", path: []string{"maxConcurrent"}, kind: optNumber, min: 1,
 		get: func(b *config.Board) any { return b.Limit() }},
 	{name: "Idle timeout (minutes)", path: []string{"idleTimeoutMinutes"}, kind: optNumber,

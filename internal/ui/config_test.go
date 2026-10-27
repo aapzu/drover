@@ -74,6 +74,23 @@ func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
 	}
 }
 
+func TestConfigSplitByPRToggleSavesToTheLocalFile(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	if !m.snap.Board.SplitByPR {
+		t.Fatal("splitByPR is not on by default")
+	}
+	m = selectOption(t, m, "Split PRs into cards")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.SplitByPR {
+		t.Error("toggle didn't change the running board")
+	}
+	if !config.Sets(root, config.Local, []string{"splitByPR"}) {
+		t.Error("toggle wasn't saved to drover.local.json")
+	}
+}
+
 func TestConfigNumberRejectsText(t *testing.T) {
 	root := t.TempDir()
 	m := configModel(t, root)
