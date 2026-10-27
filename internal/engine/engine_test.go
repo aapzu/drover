@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -812,11 +813,22 @@ func TestSplitByPROffKeepsOneCard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitForAll(t, e, "owner shipped to review with its first PR", func(tasks []*store.Task) bool {
-		return tasks[0].ColumnID == "review" && tasks[0].PR != nil
+	const second = "https://github.com/o/r/pull/2"
+	waitForAll(t, e, "owner shipped to review with its first PR and the second one seen", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "review" && tasks[0].PR != nil && slices.Contains(tasks[0].SeenPRs, second)
 	})
-	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].PR.Number != 1 {
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR.Number != 1 {
 		t.Fatalf("splitByPR off: %d cards, owner PR %+v", len(tasks), tasks[0].PR)
+	}
+	logged := 0
+	for _, entry := range tasks[0].Log {
+		if strings.Contains(entry.Text, "splitByPR is off") {
+			logged++
+		}
+	}
+	if logged != 1 {
+		t.Errorf("dropped PR logged %d times, want once", logged)
 	}
 }
 
