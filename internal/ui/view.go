@@ -154,6 +154,9 @@ func (m Model) renderFooter() string {
 	}
 	if m.configEditing {
 		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
+		if configOptions[m.configSel].shared {
+			hints[modeConfig] = "enter save  esc cancel"
+		}
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }

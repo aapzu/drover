@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -25,13 +26,14 @@ type configOption struct {
 	path   []string
 	kind   optKind
 	shared bool
+	min    int
 	get    func(*config.Board) any
 }
 
 var configOptions = []configOption{
 	{name: "Auto-name cards", path: []string{"autoName"}, kind: optToggle,
 		get: func(b *config.Board) any { return b.AutoName }},
-	{name: "Max concurrent agents", path: []string{"maxConcurrent"}, kind: optNumber,
+	{name: "Max concurrent agents", path: []string{"maxConcurrent"}, kind: optNumber, min: 1,
 		get: func(b *config.Board) any { return b.Limit() }},
 	{name: "Idle timeout (minutes)", path: []string{"idleTimeoutMinutes"}, kind: optNumber,
 		get: func(b *config.Board) any { return b.IdleTimeoutMinutes }},
@@ -103,7 +105,7 @@ func sourceLayer(root string, opt configOption) (config.Layer, bool) {
 	return 0, false
 }
 
-// configSource names the file a value comes from.
+// configSource labels where opt's value comes from: local, shared or default.
 func configSource(root string, opt configOption) string {
 	layer, ok := sourceLayer(root, opt)
 	switch {
@@ -173,7 +175,8 @@ func (m Model) updateConfigInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// commitConfig saves the typed value; an empty prompt removes the override.
+// commitConfig saves the typed value. An empty prompt removes the key from the
+// chosen layer, or says it isn't set there.
 func (m Model) commitConfig(opt configOption) Model {
 	text := strings.TrimSpace(m.configInput.Value())
 	switch {
@@ -185,8 +188,8 @@ func (m Model) commitConfig(opt configOption) Model {
 		return m.saveConfig(m.configLayer, opt, nil)
 	case opt.kind == optNumber:
 		n, err := strconv.Atoi(text)
-		if err != nil {
-			m.setFlash(opt.name + " needs a whole number")
+		if err != nil || n < opt.min {
+			m.setFlash(fmt.Sprintf("%s needs a whole number of at least %d", opt.name, opt.min))
 			return m
 		}
 		return m.saveConfig(m.configLayer, opt, n)
@@ -206,13 +209,18 @@ func (m Model) resetConfig() Model {
 }
 
 // saveConfig writes value to the layer, or removes the key when value is nil,
-// then shows the new board straight away.
+// then reloads the board and the source labels.
 func (m Model) saveConfig(layer config.Layer, opt configOption, value any) Model {
 	var err error
+	done := "Saved %s to %s"
 	if value == nil {
 		err = config.Unset(m.eng.Root, layer, opt.path)
+		done = "Reset %s in %s"
 	} else {
 		err = config.Set(m.eng.Root, layer, opt.path, value)
+	}
+	if errors.Is(err, config.ErrNoSharedFile) {
+		err = fmt.Errorf("%w; close settings and press W to write the default board", err)
 	}
 	if err != nil {
 		m.setFlash("Error: " + err.Error())
@@ -220,12 +228,23 @@ func (m Model) saveConfig(layer config.Layer, opt configOption, value any) Model
 	}
 	m.eng.ReloadBoard()
 	m.snap.Board = m.eng.Board()
-	if value == nil {
-		m.setFlash(fmt.Sprintf("Reset %s in %s", opt.name, layer.FileName()))
-	} else {
-		m.setFlash(fmt.Sprintf("Saved %s to %s", opt.name, layer.FileName()))
+	m.configSrc = configSources(m.eng.Root)
+	msg := fmt.Sprintf(done, opt.name, layer.FileName())
+	if src, ok := sourceLayer(m.eng.Root, opt); value != nil && ok && src != layer {
+		msg += fmt.Sprintf(" (overridden by %s)", src.FileName())
 	}
+	m.setFlash(msg)
 	return m
+}
+
+// configSources labels where each option's value comes from. It runs when the
+// view opens and after each save, so rendering doesn't read the files.
+func configSources(root string) []string {
+	sources := make([]string, len(configOptions))
+	for i, opt := range configOptions {
+		sources[i] = configSource(root, opt)
+	}
+	return sources
 }
 
 func (m Model) renderConfig() string {
@@ -240,7 +259,7 @@ func (m Model) renderConfig() string {
 		if selected {
 			prefix, name = "▸ ", bold.Render(name)
 		}
-		value, note := fmt.Sprintf("%-12s", configValue(opt, m.snap.Board)), dim.Render(configSource(m.eng.Root, opt))
+		value, note := fmt.Sprintf("%-12s", configValue(opt, m.snap.Board)), dim.Render(m.configSrc[i])
 		if selected && m.configEditing {
 			value = m.configInput.View()
 			note = dim.Render("→ " + m.configLayer.FileName())

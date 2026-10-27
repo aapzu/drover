@@ -137,6 +137,7 @@ type Model struct {
 	configEditing bool
 	configLayer   config.Layer
 	configInput   textinput.Model
+	configSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
@@ -1096,6 +1097,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o":
 		m.mode = modeConfig
 		m.configSel = 0
+		m.configSrc = configSources(m.eng.Root)
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,10 @@ const (
 	Local
 )
 
+// ErrNoSharedFile means drover.json has not been written yet, so there is
+// nothing for a Shared edit to change.
+var ErrNoSharedFile = errors.New(FileName + " does not exist yet")
+
 func (l Layer) FileName() string {
 	if l == Local {
 		return LocalFileName
@@ -32,11 +37,13 @@ func (l Layer) FileName() string {
 // loads, the file is restored, or removed if it did not exist, and the error
 // is returned.
 func Set(root string, layer Layer, path []string, value any) error {
-	raw, err := json.Marshal(value)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(value); err != nil {
 		return err
 	}
-	return edit(root, layer, path, raw)
+	return edit(root, layer, path, bytes.TrimSpace(buf.Bytes()))
 }
 
 // Unset removes path from the layer's file, so the value falls back to the
@@ -51,24 +58,28 @@ func Sets(root string, layer Layer, path []string) bool {
 	if err != nil {
 		return false
 	}
+	return sets(data, path)
+}
+
+func sets(data []byte, path []string) bool {
 	members, err := parseObject(data)
-	for i, key := range path {
-		if err != nil {
-			return false
-		}
-		j := slices.IndexFunc(members, func(m member) bool { return m.key == key })
-		if j < 0 {
-			return false
-		}
-		if i == len(path)-1 {
-			return true
-		}
-		members, err = parseObject(members[j].val)
+	if err != nil || len(path) == 0 {
+		return false
 	}
-	return false
+	i := findMember(members, path[0])
+	if i < 0 {
+		return false
+	}
+	return len(path) == 1 || sets(members[i].val, path[1:])
 }
 
 func edit(root string, layer Layer, path []string, value json.RawMessage) error {
+	if layer != Shared && layer != Local {
+		return fmt.Errorf("unknown layer %d", layer)
+	}
+	if len(path) == 0 {
+		return errors.New("empty path")
+	}
 	file := filepath.Join(root, layer.FileName())
 	old, err := os.ReadFile(file)
 	missing := errors.Is(err, os.ErrNotExist)
@@ -76,7 +87,7 @@ func edit(root string, layer Layer, path []string, value json.RawMessage) error 
 		return err
 	}
 	if missing && layer == Shared {
-		return fmt.Errorf("%s does not exist yet; press W to write the default board", FileName)
+		return ErrNoSharedFile
 	}
 	if missing && value == nil {
 		return nil
@@ -97,15 +108,28 @@ func edit(root string, layer Layer, path []string, value json.RawMessage) error 
 		return err
 	}
 	if _, _, err := Load(root); err != nil {
+		var undo error
 		if missing {
-			return errors.Join(err, os.Remove(file))
+			undo = os.Remove(file)
+		} else {
+			undo = writeFile(file, old)
 		}
-		return errors.Join(err, writeFile(file, old))
+		if undo != nil {
+			return fmt.Errorf("%w (and restoring %s failed: %v)", err, layer.FileName(), undo)
+		}
+		return err
 	}
 	return nil
 }
 
 func writeFile(path string, data []byte) error {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
 	if err != nil {
 		return err
@@ -118,7 +142,7 @@ func writeFile(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
@@ -136,7 +160,11 @@ func parseObject(data []byte) ([]member, error) {
 		return nil, nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok != json.Delim('{') {
 		return nil, errors.New("not a JSON object")
 	}
 	var members []member
@@ -154,6 +182,12 @@ func parseObject(data []byte) ([]member, error) {
 			return nil, err
 		}
 		members = append(members, member{key, val})
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("unexpected data after the JSON object")
 	}
 	return members, nil
 }
@@ -177,7 +211,8 @@ func encodeObject(members []member) (json.RawMessage, error) {
 	return buf.Bytes(), nil
 }
 
-// formatFile writes the members the way the rest of drover writes JSON.
+// formatFile writes the members with a two-space indent and a trailing
+// newline, like Board.Save.
 func formatFile(members []member) ([]byte, error) {
 	obj, err := encodeObject(members)
 	if err != nil {
@@ -194,13 +229,10 @@ func formatFile(members []member) ([]byte, error) {
 // setMember sets the value at path, creating parent objects as needed. A nil
 // value removes the key, and a parent left empty by that goes too.
 func setMember(members []member, path []string, value json.RawMessage) ([]member, error) {
-	i := slices.IndexFunc(members, func(m member) bool { return m.key == path[0] })
+	i := findMember(members, path[0])
 	if len(path) == 1 {
 		if value == nil {
-			if i >= 0 {
-				members = slices.Delete(members, i, i+1)
-			}
-			return members, nil
+			return removeMember(members, i), nil
 		}
 		return upsert(members, i, path[0], value), nil
 	}
@@ -216,16 +248,24 @@ func setMember(members []member, path []string, value json.RawMessage) ([]member
 		return nil, err
 	}
 	if value == nil && len(child) == 0 {
-		if i >= 0 {
-			members = slices.Delete(members, i, i+1)
-		}
-		return members, nil
+		return removeMember(members, i), nil
 	}
 	obj, err := encodeObject(child)
 	if err != nil {
 		return nil, err
 	}
 	return upsert(members, i, path[0], obj), nil
+}
+
+func findMember(members []member, key string) int {
+	return slices.IndexFunc(members, func(m member) bool { return m.key == key })
+}
+
+func removeMember(members []member, i int) []member {
+	if i < 0 {
+		return members
+	}
+	return slices.Delete(members, i, i+1)
 }
 
 func upsert(members []member, i int, key string, val json.RawMessage) []member {

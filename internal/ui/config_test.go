@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,9 +20,13 @@ func configModel(t *testing.T, root string) Model {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eng, err := engine.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := testModel(120, 40, 1, 0)
 	m.snap.Board = board
-	m.eng = &engine.Engine{Root: root}
+	m.eng = eng
 	m.configInput = textinput.New()
 	return m
 }
@@ -183,10 +190,248 @@ func TestConfigResetRemovesTheLocalOverride(t *testing.T) {
 	}
 }
 
+func TestConfigSharedEditWithoutDroverJSONSaysHowToCreateIt(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Archive Done after")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("30d")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.flash, "press W") {
+		t.Errorf("flash=%q", m.flash)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.FileName)); !os.IsNotExist(err) {
+		t.Errorf("drover.json was created: %v", err)
+	}
+}
+
+func TestConfigOptionsMatchTheBoard(t *testing.T) {
+	board := config.Default()
+	board.DefaultBaseBranch, board.DefaultPermissionMode, board.DefaultModel = "main", "auto", "opus"
+	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
+	board.MaxConcurrent, board.IdleTimeoutMinutes = 4, 5
+	data, err := json.Marshal(board)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	sharedSeen := false
+	for _, opt := range configOptions {
+		var typed bool
+		switch got := opt.get(board); opt.kind {
+		case optToggle:
+			_, typed = got.(bool)
+		case optNumber:
+			_, typed = got.(int)
+		case optText:
+			_, typed = got.(string)
+		}
+		if !typed {
+			t.Errorf("%s: getter type doesn't match its kind", opt.name)
+		}
+
+		var node any = doc
+		for _, key := range opt.path {
+			obj, ok := node.(map[string]any)
+			if !ok {
+				t.Fatalf("%s: %v does not resolve in the board JSON", opt.name, opt.path)
+			}
+			if node, ok = obj[key]; !ok {
+				t.Fatalf("%s: %v does not resolve in the board JSON", opt.name, opt.path)
+			}
+		}
+
+		if opt.shared {
+			sharedSeen = true
+		} else if sharedSeen {
+			t.Errorf("%s: shared options must come last, renderConfig groups them by position", opt.name)
+		}
+	}
+}
+
+func TestConfigFooterHidesTabForSharedOnlyOptions(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m.mode = modeConfig
+	m.configEditing = true
+
+	m = selectOption(t, m, "Auto-name cards")
+	if !strings.Contains(m.renderFooter(), "tab") {
+		t.Errorf("footer=%q, want a tab hint for a local-capable option", m.renderFooter())
+	}
+	m = selectOption(t, m, "Archive Done after")
+	if strings.Contains(m.renderFooter(), "tab") {
+		t.Errorf("footer=%q, tab does nothing for a shared-only option", m.renderFooter())
+	}
+}
+
+func TestConfigResetWithBothLayersRemovesLocalFirst(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Default().Save(root); err != nil {
+		t.Fatal(err)
+	}
+	path := []string{"worktreesDir"}
+	if err := config.Set(root, config.Shared, path, ".shared-wt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Set(root, config.Local, path, ".local-wt"); err != nil {
+		t.Fatal(err)
+	}
+	m := configModel(t, root)
+	m = selectOption(t, m, "Worktrees directory")
+	m.configSrc = configSources(root)
+
+	m = pressConfig(t, m, key("x"))
+	if config.Sets(root, config.Local, path) || !config.Sets(root, config.Shared, path) {
+		t.Fatal("the first x should remove only the local key")
+	}
+	if m.snap.Board.WorktreesDir != ".shared-wt" || m.configSrc[m.configSel] != "shared" {
+		t.Errorf("worktreesDir=%q label=%q", m.snap.Board.WorktreesDir, m.configSrc[m.configSel])
+	}
+
+	m = pressConfig(t, m, key("x"))
+	if config.Sets(root, config.Shared, path) || m.configSrc[m.configSel] != "default" {
+		t.Errorf("the second x should remove the shared key: label=%q", m.configSrc[m.configSel])
+	}
+}
+
+func TestConfigResetOnADefaultRowChangesNothing(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Auto-name cards")
+
+	m = pressConfig(t, m, key("x"))
+	if !strings.Contains(m.flash, "already the default") {
+		t.Errorf("flash=%q", m.flash)
+	}
+	if _, err := os.Stat(filepath.Join(root, config.LocalFileName)); !os.IsNotExist(err) {
+		t.Errorf("reset created drover.local.json: %v", err)
+	}
+}
+
+func TestConfigEmptyPromptRemovesTheKeyFromTheChosenLayer(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Set(root, config.Local, []string{"defaultBaseBranch"}, "develop"); err != nil {
+		t.Fatal(err)
+	}
+	m := configModel(t, root)
+	m = selectOption(t, m, "Default base branch")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("")
+	m = pressConfig(t, m, keyPress("enter"))
+	if config.Sets(root, config.Local, []string{"defaultBaseBranch"}) {
+		t.Error("an empty prompt didn't remove the local key")
+	}
+	if !strings.Contains(m.flash, "Reset") {
+		t.Errorf("flash=%q", m.flash)
+	}
+}
+
+func TestConfigEmptyPromptWhereNothingIsSetSaysSo(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Default().Save(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Set(root, config.Shared, []string{"defaultBaseBranch"}, "main"); err != nil {
+		t.Fatal(err)
+	}
+	m := configModel(t, root)
+	m = selectOption(t, m, "Default base branch")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("  ")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.flash, "is not set in drover.local.json") {
+		t.Errorf("flash=%q", m.flash)
+	}
+	if !config.Sets(root, config.Shared, []string{"defaultBaseBranch"}) {
+		t.Error("an empty local prompt removed the shared value")
+	}
+}
+
+func TestConfigListKeysAreTextInsideThePrompt(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = selectOption(t, m, "Default base branch")
+	m.mode = modeConfig
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("")
+	for _, r := range "qxoj" {
+		m = pressConfig(t, m, key(string(r)))
+	}
+	if m.mode != modeConfig || !m.configEditing || m.configInput.Value() != "qxoj" {
+		t.Errorf("mode=%v editing=%v value=%q", m.mode, m.configEditing, m.configInput.Value())
+	}
+}
+
+func TestConfigRejectedTextValueShowsTheErrorAndKeepsTheFile(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Default().Save(root); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(root, config.FileName))
+	m := configModel(t, root)
+	m = selectOption(t, m, "Archive Done after")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("soon")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.HasPrefix(m.flash, "Error:") {
+		t.Errorf("flash=%q", m.flash)
+	}
+	after, _ := os.ReadFile(filepath.Join(root, config.FileName))
+	if string(before) != string(after) {
+		t.Errorf("drover.json changed after a rejected value:\n%s", after)
+	}
+}
+
+func TestConfigMaxConcurrentNeedsAtLeastOne(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Max concurrent agents")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m.configInput.SetValue("0")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.flash, "at least 1") {
+		t.Errorf("flash=%q", m.flash)
+	}
+	if config.Sets(root, config.Local, []string{"maxConcurrent"}) {
+		t.Error("0 was saved as the concurrency limit")
+	}
+}
+
+func TestConfigWarnsWhenTheLocalFileOverridesASharedSave(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Default().Save(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Set(root, config.Local, []string{"worktreesDir"}, ".local-wt"); err != nil {
+		t.Fatal(err)
+	}
+	m := configModel(t, root)
+	m = selectOption(t, m, "Worktrees directory")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	m.configInput.SetValue(".shared-wt")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.flash, "overridden by drover.local.json") {
+		t.Errorf("flash=%q", m.flash)
+	}
+}
+
 func TestConfigFooterAndRows(t *testing.T) {
 	m := configModel(t, t.TempDir())
 	m.width, m.height = 120, 40
-	m.mode = modeConfig
+	next, _ := m.updateBoard(key("o"))
+	m = next.(Model)
 	if !strings.Contains(m.renderFooter(), "x reset") {
 		t.Errorf("footer=%q", m.renderFooter())
 	}

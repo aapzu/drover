@@ -271,6 +271,8 @@ func (e *Engine) Board() *config.Board {
 // the TUI runs.
 func (e *Engine) reloadBoard() { e.reload(true) }
 
+// reload loads the board if the files changed. notice controls the "Reloaded"
+// message; load errors are always reported.
 func (e *Engine) reload(notice bool) {
 	stamp := config.Stamp(e.Root)
 	e.mu.Lock()

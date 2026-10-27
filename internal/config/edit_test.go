@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,6 +139,83 @@ func TestUnsetWithoutLocalFileIsNoOp(t *testing.T) {
 	}
 }
 
+func TestSetsIsFalseForUnusableFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		path          []string
+	}{
+		{"truncated", `{"autoName":`, []string{"autoName"}},
+		{"trailing data", `{"autoName":false} x`, []string{"autoName"}},
+		{"array root", `[]`, []string{"autoName"}},
+		{"empty", ``, []string{"autoName"}},
+		{"scalar parent", `{"notifications":5}`, []string{"notifications", "turnDone"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, LocalFileName), []byte(tc.content), 0o644)
+			if Sets(dir, Local, tc.path) {
+				t.Errorf("Sets is true for %q", tc.content)
+			}
+		})
+	}
+}
+
+func TestTrailingDataIsRejectedAndUntouched(t *testing.T) {
+	dir := t.TempDir()
+	const broken = `{"autoName":false} junk`
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(broken), 0o644)
+	if err := Set(dir, Local, []string{"maxConcurrent"}, 4); err == nil {
+		t.Fatal("expected an error for data after the object")
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
+	if string(data) != broken {
+		t.Errorf("file was rewritten:\n%s", data)
+	}
+}
+
+func TestSetWritesAmpersandsReadably(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	if err := Set(dir, Shared, []string{"initScript"}, "make && make test"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	if !strings.Contains(string(data), `"make && make test"`) {
+		t.Errorf("value was HTML-escaped:\n%s", data)
+	}
+}
+
+func TestSetKeepsTheFileMode(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	file := filepath.Join(dir, LocalFileName)
+	os.WriteFile(file, []byte(`{}`), 0o600)
+	if err := Set(dir, Local, []string{"autoName"}, false); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(file)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("mode=%v err=%v, want 0600", info.Mode().Perm(), err)
+	}
+}
+
+func TestEditRejectsAnUnknownLayerAndAnEmptyPath(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	if err := Set(dir, Layer(7), []string{"autoName"}, false); err == nil {
+		t.Error("expected an error for an unknown layer")
+	}
+	if err := Set(dir, Local, nil, false); err == nil {
+		t.Error("expected an error for an empty path")
+	}
+	if Sets(dir, Local, nil) {
+		t.Error("an empty path can't be set")
+	}
+	if _, err := os.Stat(filepath.Join(dir, LocalFileName)); !os.IsNotExist(err) {
+		t.Errorf("a rejected edit created drover.local.json: %v", err)
+	}
+}
+
 func TestTruncatedFileIsRejectedAndUntouched(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"autoName":false`), 0o644)
@@ -152,8 +230,8 @@ func TestTruncatedFileIsRejectedAndUntouched(t *testing.T) {
 
 func TestSharedEditNeedsADrover(t *testing.T) {
 	dir := t.TempDir()
-	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); err == nil {
-		t.Fatal("expected an error without drover.json")
+	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); !errors.Is(err, ErrNoSharedFile) {
+		t.Fatalf("err=%v, want ErrNoSharedFile", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
 		t.Errorf("drover.json was created: %v", err)
