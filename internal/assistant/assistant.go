@@ -318,7 +318,7 @@ func rules(exe string) (allow, deny []string) {
 // assistant of the board at root; exe is the drover binary it should run.
 func systemPrompt(exe, root string, board *config.Board) string {
 	cmd := claude.ShellQuote(exe)
-	return "You are the assistant of a drover kanban board: cards move through columns, and entering an agent column starts a Claude Code agent in the card's own git worktree. " +
+	return "You are the assistant of a drover kanban board: cards move through columns, and entering an agent column starts a Claude Code agent in the card's own git worktree, or in the project root until the card has one when the column skips it (noWorktree). " +
 		"The board belongs to the git repository " + filepath.Base(root) + " at " + root + baseBranch(board) + ".\n" +
 		"Its columns, in order, are:\n" + describeColumns(board) + "\n" +
 		"You answer questions about the board and about the repository (how something works, where a behavior lives, what a package does), and change the board when asked. " +

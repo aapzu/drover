@@ -79,6 +79,7 @@ type Session struct {
 	// Dir holds the session's settings and events. It is fixed at spawn so
 	// the session keeps it when another task takes over the group.
 	Dir            string        `json:"dir,omitempty"`
+	Cwd            string        `json:"cwd,omitempty"`
 	AgentSessionID string        `json:"agentSessionId"`
 	Tmux           string        `json:"tmux"`
 	Status         SessionStatus `json:"status"`
@@ -122,6 +123,10 @@ type Session struct {
 
 // HasBackground reports whether the session's background agents are still running.
 func (s *Session) HasBackground() bool { return len(s.Background) > 0 }
+
+// MovedFrom reports whether the agent was launched somewhere other than dir.
+// Sessions saved before Cwd was recorded never count as moved.
+func (s *Session) MovedFrom(dir string) bool { return s.Cwd != "" && s.Cwd != dir }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves
 // the choice to Claude Code.

@@ -896,17 +896,28 @@ func (e *Engine) sessionDir(t *store.Task, key string) string {
 	return filepath.Join(store.Dir(e.Root), "sessions", t.ID, key)
 }
 
-// ensureWorktree returns the owner t's worktree, creating it if needed.
-// busyID is the card that shows the progress.
-func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
+// dirOf is where t's agent runs: its worktree, or the project root before it
+// has one. The caller holds e.mu.
+func (e *Engine) dirOf(t *store.Task) string {
+	if t.WorktreePath != "" {
+		return t.WorktreePath
+	}
+	return e.Root
+}
+
+// ensureWorktree returns the directory the agent for col runs in: the owner t's
+// worktree, created if needed, or the project root for a column that skips the
+// worktree until the card has one. busyID is the card that shows the progress.
+func (e *Engine) ensureWorktree(t *store.Task, col config.Column, busyID string) (string, error) {
 	e.mu.Lock()
 	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
 	title, id, number := t.Title, t.ID, t.Number
 	defaultBase := e.board.DefaultBaseBranch
 	copyFiles, initScript := e.board.CopyFiles, e.board.InitScript
-	imported := false
+	imported, rootBound := false, true
 	for _, s := range t.Sessions {
 		imported = imported || s.Imported
+		rootBound = rootBound && (!s.Started || s.Cwd == e.Root)
 	}
 	e.mu.Unlock()
 	// An imported conversation can only be resumed from its own directory.
@@ -916,7 +927,7 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 		}
 		return path, nil
 	}
-	if !e.isRepo {
+	if !e.isRepo || (path == "" && col.NoWorktree && rootBound) {
 		return e.Root, nil
 	}
 	if path != "" {
@@ -975,7 +986,8 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) {
 }
 
 // carryTranscript moves a conversation still recorded under the main checkout,
-// such as one from before the To Do column was removed, next to worktree so
+// such as one from a noWorktree column or from before the To Do column was
+// removed, next to worktree so
 // `claude --resume` finds it there.
 func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
 	e.mu.Lock()
@@ -987,8 +999,12 @@ func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
 	e.moveConversation(t, claude.TranscriptPath(id, e.Root), worktree)
 }
 
-// settingsDiffer reports whether s runs with other settings than col wants.
-func settingsDiffer(s *store.Session, col config.Column, mode string) bool {
+// settingsDiffer reports whether s runs with other settings than col wants, or
+// in another directory than worktree.
+func settingsDiffer(s *store.Session, col config.Column, mode, worktree string) bool {
+	if s.MovedFrom(worktree) {
+		return true
+	}
 	modeDiffers := s.PermissionMode != mode
 	if mode == "" {
 		modeDiffers = !s.ModeInherited
@@ -999,12 +1015,13 @@ func settingsDiffer(s *store.Session, col config.Column, mode string) bool {
 // switchSettings moves a live, idle agent to col's settings, in place when it
 // can and by resuming it in a new process otherwise.
 func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, worktree string) error {
-	if e.retune(t, key, col) {
+	e.mu.Lock()
+	s := t.Sessions[key]
+	name, moved := s.Tmux, s.MovedFrom(worktree)
+	e.mu.Unlock()
+	if !moved && e.retune(t, key, col) {
 		return nil
 	}
-	e.mu.Lock()
-	name := t.Sessions[key].Tmux
-	e.mu.Unlock()
 	tmux.Stop(name)
 	return e.spawn(t, col, key, worktree, false, "", false)
 }
@@ -1238,7 +1255,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	e.mu.Lock()
 	t := e.owner(card)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, card.ID)
+	worktree, err := e.ensureWorktree(t, col, card.ID)
 	if err != nil {
 		e.logf(card, "Worktree failed: %v", err)
 		e.notify("#%d: %v", card.Number, err)
@@ -1254,7 +1271,11 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	queued := sess != nil && sess.Status == store.StatusQueued
 	started := sess != nil && sess.Started
 	mode := e.board.PermissionMode(col)
-	changed := live && settingsDiffer(sess, col, mode)
+	stale := ""
+	if live && sess.MovedFrom(worktree) && !e.talkedTo(t, key) {
+		stale, live = sess.Tmux, false
+	}
+	changed := live && settingsDiffer(sess, col, mode, worktree)
 	busy := changed && sess.Activity != store.ActivityIdle && sess.Activity != store.ActivityStarting
 	interrupt := busy && mode == "plan" && sess.PermissionMode != "plan" && !sess.RespawnPending
 	name := ""
@@ -1263,6 +1284,9 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		sess.RespawnPending = true
 	}
 	e.mu.Unlock()
+	if stale != "" {
+		tmux.Stop(stale)
+	}
 	if busy {
 		if interrupt {
 			unlock := e.lockTyping(name)
@@ -1507,6 +1531,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	e.mu.Lock()
 	s := t.Sessions[key]
 	name := s.Tmux
+	s.Cwd = worktree
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),

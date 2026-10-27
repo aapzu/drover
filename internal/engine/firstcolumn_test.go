@@ -42,8 +42,14 @@ func TestNewCardsLandInTheFirstColumnWithoutAnAgent(t *testing.T) {
 	}
 }
 
-func TestNewSessionStartsItsAgentInAWorktree(t *testing.T) {
+const planningWithoutWorktree = `{"columns":[
+  {"id":"planning","name":"Planning","autoSpawn":true,"permissionMode":"plan","noWorktree":true},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+func TestNewSessionStartsItsAgentInTheProjectRoot(t *testing.T) {
 	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -57,15 +63,68 @@ func TestNewSessionStartsItsAgentInAWorktree(t *testing.T) {
 		s := t.Sessions[store.MainSession]
 		return s != nil && s.Status == store.StatusRunning
 	})
-	if got.ColumnID != "planning" || got.WorktreePath == "" || got.WorktreePath == root {
-		t.Errorf("new session: column %q, worktree %q; want Planning in its own worktree", got.ColumnID, got.WorktreePath)
+	if got.ColumnID != "planning" || got.WorktreePath != "" {
+		t.Errorf("new session: column %q, worktree %q; want Planning without a worktree", got.ColumnID, got.WorktreePath)
 	}
-	if s := got.Sessions[store.MainSession]; s.PermissionMode != "plan" || !tmux.Has(s.Tmux) {
-		t.Errorf("want a running agent in plan mode, got %+v", s)
+	if s := got.Sessions[store.MainSession]; s.PermissionMode != "plan" || s.Cwd != root || !tmux.Has(s.Tmux) {
+		t.Errorf("want a running agent in plan mode in %s, got %+v", root, s)
 	}
 	waitForAll(t, e, "the agent to launch in plan mode", func([]*store.Task) bool {
 		return strings.Contains(readFile(log), "--permission-mode\nplan")
 	})
+}
+
+func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the agent to run in the worktree", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.WorktreePath != "" && s != nil && s.Status == store.StatusRunning && s.Cwd == t.WorktreePath
+	})
+	if got.WorktreePath == root {
+		t.Errorf("worktree is the project root %s", root)
+	}
+}
+
+func TestDiscardSilentDropsASessionThatNeverGotAWorktree(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.Snapshot().Tasks); n != 0 {
+		t.Errorf("the untouched session left %d cards", n)
+	}
+	if entries, _ := os.ReadDir(e.worktreesDir()); len(entries) != 0 {
+		t.Errorf("a worktree was created: %v", entries)
+	}
 }
 
 func TestNewSessionNeedsAnAgentInTheFirstColumn(t *testing.T) {

@@ -345,13 +345,35 @@ func (e *Engine) planExit(taskID string, visit int) {
 	}
 	// The agent keeps working in the same turn after leaving plan mode, now
 	// with the target's permissions, so that turn belongs to the new visit.
+	var name, worktree string
 	e.with(func() {
 		if s := t.Sessions[store.MainSession]; s != nil && s.Status == store.StatusRunning {
 			s.TurnInVisit = true
 			s.SetMode(e.board.PermissionMode(target))
 			s.RespawnPending = false
+			if worktree = e.dirOf(t); s.MovedFrom(worktree) {
+				name = s.Tmux
+			} else {
+				worktree = ""
+			}
 		}
 	})
+	if name == "" {
+		return
+	}
+	// The agent is already implementing the plan in the project root, so
+	// restart it in the new worktree instead of waiting for the turn to end.
+	unlockTyping := e.lockTyping(name)
+	err := tmux.SendKey(name, "Escape")
+	unlockTyping()
+	if err != nil {
+		e.logf(t, "Couldn't interrupt the agent to move it into its worktree: %v", err)
+	}
+	if err := e.switchSettings(t, store.MainSession, target, worktree); err != nil {
+		e.logf(t, "Moving the agent into its worktree failed: %v", err)
+		return
+	}
+	e.sendMessage(t, store.MainSession, "The plan is approved. Continue implementing it here in the new worktree.")
 }
 
 // shipTask runs shipOpenedPR under the task lock, if a move is pending.
@@ -481,14 +503,14 @@ func (e *Engine) respawnPending(taskID, key string) {
 		col = e.sessionColumn(t)
 	}
 	mode := e.board.PermissionMode(col)
+	worktree := e.Root
+	if t != nil {
+		worktree = e.dirOf(t)
+	}
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode)
+		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode, worktree)
 	if s != nil {
 		s.RespawnPending = false
-	}
-	worktree := ""
-	if t != nil {
-		worktree = t.WorktreePath
 	}
 	e.mu.Unlock()
 	if !due {
@@ -565,7 +587,7 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	s.Model, s.Effort = launch.Model, launch.Effort
 	s.SetMode(launch.PermissionMode)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, t.ID)
+	worktree, err := e.ensureWorktree(t, col, t.ID)
 	if err != nil {
 		e.with(func() {
 			s.Status = store.StatusExited
@@ -574,6 +596,9 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 		})
 		e.notify("#%d: %v", t.Number, err)
 		return
+	}
+	if launch.Resume && worktree != e.Root {
+		e.carryTranscript(t, key, worktree)
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)

@@ -88,7 +88,7 @@ Every column is one of three kinds:
 
 | Kind | Set with | Agent | Enter automations | Worktree |
 | --- | --- | --- | --- | --- |
-| **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing |
+| **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing, unless `noWorktree` |
 | **Plain** | neither | none; a running agent is suspended, unless `keepAgent` is set | `send_message` is skipped, `run_script` and `notify` run | kept |
 | **Done** | `"role": "done"` | suspended | none | kept until the card is archived |
 
@@ -129,6 +129,7 @@ Each column takes these fields:
 | `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
 | `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
+| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card to a column without it creates the worktree and resumes the conversation there. |
 | `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |
 
 A model or effort change respawns the agent with `--resume`. A permission
@@ -139,7 +140,7 @@ every column.
 ```json
 {
   "columns": [
-    { "id": "planning", "name": "Planning", "autoSpawn": true, "permissionMode": "plan", "planExitTarget": "Executing" },
+    { "id": "planning", "name": "Planning", "autoSpawn": true, "permissionMode": "plan", "planExitTarget": "Executing", "noWorktree": true },
     { "id": "executing", "name": "Executing", "autoSpawn": true },
     { "id": "in-review", "name": "In review",
       "automations": { "onEnter": [ { "name": "Ping", "type": "notify", "body": "PR #{{prNumber}} is in review" } ] } },
@@ -180,14 +181,17 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   removes the card's worktree; a worktree shared by several cards goes once all
   of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
-- **New cards.** `n` adds a card to the first column and starts its agent in
-  the card's own worktree, on that column's settings (the default board uses
-  Planning in `plan` mode). Your first message becomes the card's title, which
-  Claude Haiku then shortens to a few words unless `autoName` is `false`. The
-  branch is named from the card, so a card started with `n` gets `task-<id8>`.
-  Leaving the session without typing anything deletes the card, its worktree
-  and that unused branch.
-- **Worktree per task.** Entering an agent column creates
+- **New cards.** `n` adds a card to the first column and starts its agent on
+  that column's settings (the default board uses Planning in `plan` mode), in
+  the project root when the column sets `noWorktree`, as Planning does by
+  default, and otherwise in the card's own worktree. Your first message becomes
+  the card's title, which Claude Haiku then shortens to a few words unless
+  `autoName` is `false`. The
+  branch is named from the card when its worktree is created, so a card that
+  still has no title then gets `task-<id8>`. Leaving the session without typing
+  anything deletes the card, and its worktree and that unused branch if it has
+  any.
+- **Worktree per task.** Entering an agent column without `noWorktree` creates
   `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
   Moving a card never removes it: Done suspends the agent and keeps the
   worktree, and archiving the card removes it, asking first if there are
