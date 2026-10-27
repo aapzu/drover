@@ -997,6 +997,7 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) {
 		e.logf(t, "Moved the conversation into the worktree")
 	case err != nil:
 		e.logf(t, "Moving the conversation into the worktree failed: %v", err)
+		e.notify("#%d: moving the conversation into the worktree failed, so the agent can't resume: %v", t.Number, err)
 	default:
 		e.logf(t, "No conversation found at %s", path)
 	}
