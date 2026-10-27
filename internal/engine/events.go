@@ -361,8 +361,6 @@ func (e *Engine) planExit(taskID string, visit int) {
 	if name == "" {
 		return
 	}
-	// The agent is already implementing the plan in the project root, so
-	// restart it in the new worktree instead of waiting for the turn to end.
 	unlockTyping := e.lockTyping(name)
 	err := tmux.SendKey(name, "Escape")
 	unlockTyping()

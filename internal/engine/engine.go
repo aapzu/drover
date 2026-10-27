@@ -897,7 +897,7 @@ func (e *Engine) sessionDir(t *store.Task, key string) string {
 }
 
 // dirOf is where t's agent runs: its worktree, or the project root before it
-// has one. The caller holds e.mu.
+// has one.
 func (e *Engine) dirOf(t *store.Task) string {
 	if t.WorktreePath != "" {
 		return t.WorktreePath

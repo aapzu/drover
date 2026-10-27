@@ -125,7 +125,6 @@ type Session struct {
 func (s *Session) HasBackground() bool { return len(s.Background) > 0 }
 
 // MovedFrom reports whether the agent was launched somewhere other than dir.
-// Sessions saved before Cwd was recorded never count as moved.
 func (s *Session) MovedFrom(dir string) bool { return s.Cwd != "" && s.Cwd != dir }
 
 // SetMode records the mode drover launched or switched the agent to; "" leaves
