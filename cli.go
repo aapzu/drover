@@ -281,9 +281,12 @@ func agentState(owner *store.Task, col config.Column) string {
 		return "working"
 	case store.ActivityPermission:
 		return "needs you"
-	default:
-		return string(s.Activity)
+	case store.ActivityIdle:
+		if s.HasBackground() {
+			return "background"
+		}
 	}
+	return string(s.Activity)
 }
 
 func cmdAdd(root string, args []string) error {
