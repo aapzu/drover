@@ -71,6 +71,7 @@ type Task struct {
 	UpdatedAt     time.Time           `json:"updatedAt"`
 	// Archived cards stay in Done but are hidden from the board.
 	Archived bool `json:"archived,omitempty"`
+	Hidden   bool `json:"hidden,omitempty"`
 }
 
 type Session struct {

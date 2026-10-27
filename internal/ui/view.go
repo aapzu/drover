@@ -139,7 +139,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
+		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  b hide  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
 		modePalette:   "↑↓ select  enter run  esc cancel",
 		modeLive:      "LIVE: ctrl+q back to board",
 		modeAssistant: "ASSISTANT: ctrl+q hide panel",
@@ -217,7 +217,7 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	inner := width - 2
 	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Underline(selected)
 	count := fmt.Sprintf(" %d", len(tasks))
-	if hidden := m.archivedIn(col.ID); hidden > 0 {
+	if hidden := m.offBoardIn(col.ID); hidden > 0 {
 		count += fmt.Sprintf(" +%d", hidden)
 	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
@@ -342,7 +342,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	}
 	if dragged {
 		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
-	} else if t.Archived {
+	} else if t.Archived || t.Hidden {
 		style = style.Faint(true)
 	}
 	group := groupMarker(g, t, sibling)
@@ -662,6 +662,8 @@ func (m Model) renderHelp() string {
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
+		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
+		{"B", "show or hide hidden cards"},
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
