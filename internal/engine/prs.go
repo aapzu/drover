@@ -361,6 +361,9 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		card.AddLog(fmt.Sprintf("Changes requested on PR #%d", pr.Number))
 		e.notify("#%d: changes requested on PR #%d", card.Number, pr.Number)
 		if e.inColumn(card, flow.Opened) {
+			if flow.Proposes() {
+				card.AddLog("Asking the agent to propose fixes before changing anything")
+			}
 			return prMove{to: e.flowColumn(flow.ChangesRequested), message: flow.ChangesMessage(),
 				onMoved: func() {
 					pr.FixFrom = ""

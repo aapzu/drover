@@ -1146,6 +1146,9 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 		data, _ := os.ReadFile(log)
 		return strings.Contains(string(data), "Don't change anything")
 	})
+	if !hasLog(e.Snapshot().Tasks[0], "propose fixes") {
+		t.Error("the card's log doesn't say the agent was asked to propose")
+	}
 	pr("bbb", review)
 	time.Sleep(600 * time.Millisecond)
 	if c := e.Snapshot().Tasks[0]; c.ColumnID != "exec" {
