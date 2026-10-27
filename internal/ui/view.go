@@ -138,8 +138,10 @@ func (m Model) renderFooter() string {
 	if m.flash != "" {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
+	if m.mode == modeBoard {
+		return m.boardFooter()
+	}
 	hints := map[mode]string{
-		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
 		modePalette:   "↑↓ select  enter run  esc cancel",
 		modeLive:      "LIVE: ctrl+q back to board",
 		modeAssistant: "ASSISTANT: ctrl+q hide panel",
@@ -150,6 +152,35 @@ func (m Model) renderFooter() string {
 		modeHelp:      "any key closes",
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
+}
+
+// boardFooter describes the selected card and its agent's settings, with the
+// two keys that lead to every other command.
+func (m Model) boardFooter() string {
+	right := dim.Render("ctrl+k commands · ? help") + " "
+	var parts []string
+	if t := m.current(); t != nil {
+		parts = append(parts, bold.Render(fmt.Sprintf("#%d", t.Number)))
+		if s := m.sessionFor(t); s != nil {
+			perm := s.PermissionMode
+			if s.ModeInherited {
+				perm = ""
+			}
+			for _, p := range []string{s.Model, s.Effort, perm} {
+				if p != "" {
+					parts = append(parts, muted.Render(p))
+				}
+			}
+		}
+		if ref := m.cardRef(t); ref != "" {
+			parts = append(parts, ref)
+		}
+	}
+	left := " " + strings.Join(parts, dim.Render(" · "))
+	room := max(0, m.width-lipgloss.Width(right)-1)
+	left = ansi.Truncate(left, room, "…")
+	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func (m Model) renderMain(l layout) string {
