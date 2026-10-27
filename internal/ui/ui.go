@@ -38,6 +38,7 @@ const (
 	modeFilter
 	modePalette
 	modeAssistant
+	modeConfig
 )
 
 type tickMsg time.Time
@@ -131,6 +132,13 @@ type Model struct {
 
 	paletteInput textinput.Model
 	paletteSel   int
+
+	configSel     int
+	configEditing bool
+	configLayer   config.Layer
+	configInput   textinput.Model
+	configSrc     []string
+
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
 	moveSel   int
@@ -175,6 +183,7 @@ func New(eng *engine.Engine) Model {
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
+		configInput:  textinput.New(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
@@ -566,6 +575,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case modeDetail:
 			return m.updateDetail(msg)
+		case modeConfig:
+			return m.updateConfig(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -634,7 +645,7 @@ func (m Model) capturePreview() tea.Cmd {
 	w, h := l.boardW-2, l.previewH-2
 	scrollback := scrollbackFor(m.previewScroll, h)
 	return func() tea.Msg {
-		msg := previewMsg{taskID: id}
+		msg := previewMsg{taskID: id, at: time.Now()}
 		if ok {
 			if l.previewH > 0 {
 				tmux.Resize(name, w, h)
@@ -643,7 +654,6 @@ func (m Model) capturePreview() tea.Cmd {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 			}
 		}
-		msg.at = time.Now()
 		return msg
 	}
 }
@@ -727,6 +737,7 @@ func (m *Model) attach(id string) (tea.Cmd, bool) {
 	m.attached = id
 	m.syncFocus()
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+		tmux.Detached(name)
 		return attachDoneMsg{id: id, agent: true, paneGone: !tmux.Has(name), err: err}
 	}), true
 }
@@ -964,6 +975,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			id := t.ID
 			return m, tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+				tmux.Detached(name)
 				return attachDoneMsg{id: id, err: err}
 			})
 		}
@@ -1081,6 +1093,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings
 		m.savePrefs()
+	case "o":
+		m.mode = modeConfig
+		m.configSel = 0
+		m.configSrc = configSources(m.eng.Root)
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

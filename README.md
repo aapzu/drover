@@ -170,7 +170,7 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   no file it uses a built-in default (Planning, Executing,
   Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
-  `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
+  `worktreesDir`, `splitByPR` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
@@ -181,6 +181,11 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   removes the card's worktree; a worktree shared by several cards goes once all
   of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
+- **Settings view.** `o` changes the settings in both files. Each row shows
+  where its value comes from: `local`, `shared` (`drover.json`) or `default`.
+  Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
+  allow either, and `x` removes the override. Columns and flows stay in
+  `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
@@ -327,9 +332,9 @@ The column's automations, trimmed to the review and PR steps:
 
 The first pull request an agent opens (`gh pr create` or `gh stack`) stays on
 the session's own card, which moves to the `prFlow` opened column once the
-agent's turn ends. Every further PR gets its own card, so one session can ship
-several. The cards are marked `⧉ 1/3`, `⧉ 2/3` and so on, and the marker has
-the same color on every card of the group.
+agent's turn ends. Every further PR gets its own card (unless `splitByPR` is
+off), so one session can ship several. The cards are marked `⧉ 1/3`, `⧉ 2/3`
+and so on, and the marker has the same color on every card of the group.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
   and the preview all reach the same agent from any of them.
@@ -339,6 +344,11 @@ the same color on every card of the group.
 - The agent stops once no card in the group is in an agent column. The
   worktree goes once every card is archived.
 - Deleting a card removes only that card while others remain.
+- **`splitByPR`** (default `true`): `false` in `drover.json` or
+  `drover.local.json` stops further PRs, opened or sent for review, from getting
+  cards. Only the first stays on the session's own card; the rest are noted in
+  its log and not tracked. A review you ask for in a session that has moved on
+  from the first column gets no card at all. Existing split cards stay.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
 - `gh pr view` refreshes every open PR's card once a minute. Cards

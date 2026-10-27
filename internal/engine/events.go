@@ -525,6 +525,10 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
 		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode, worktree)
+	if due && waitsForBackground(s, mode) {
+		e.mu.Unlock()
+		return
+	}
 	if s != nil {
 		s.RespawnPending = false
 	}
@@ -535,6 +539,12 @@ func (e *Engine) respawnPending(taskID, key string) {
 	if err := e.switchSettings(t, key, col, worktree); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
 	}
+}
+
+// waitsForBackground reports whether a due switch to mode must wait for s's
+// background agents, which a restart would kill.
+func waitsForBackground(s *store.Session, mode string) bool {
+	return s.HasBackground() && (mode != "plan" || s.PermissionMode == "plan")
 }
 
 // dequeue starts queued sessions while there are free slots. Called with mu held.

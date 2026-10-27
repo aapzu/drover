@@ -258,9 +258,23 @@ func (e *Engine) ownsWorktree(path string) bool {
 	return err == nil
 }
 
+// ReloadBoard picks up a settings change straight away rather than on the next tick.
+func (e *Engine) ReloadBoard() { e.reload(false) }
+
+// Board is the board as last loaded from drover.json and drover.local.json.
+func (e *Engine) Board() *config.Board {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.board
+}
+
 // reloadBoard picks up edits to drover.json and drover.local.json made while
 // the TUI runs.
-func (e *Engine) reloadBoard() {
+func (e *Engine) reloadBoard() { e.reload(true) }
+
+// reload loads the board if the files changed. notice controls the "Reloaded"
+// message; load errors are always reported.
+func (e *Engine) reload(notice bool) {
 	stamp := config.Stamp(e.Root)
 	e.mu.Lock()
 	unchanged := stamp == e.boardStamp
@@ -283,7 +297,9 @@ func (e *Engine) reloadBoard() {
 		gitx.EnsureExcluded(e.Root, board.WorktreesPath(e.Root))
 	}
 	e.migrateTodo()
-	e.notify("Reloaded drover.json")
+	if notice {
+		e.notify("Reloaded drover.json")
+	}
 }
 
 // migrateTodo moves the cards still in a removed To Do column to the first

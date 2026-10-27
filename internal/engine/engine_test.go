@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -867,6 +868,42 @@ case "$3" in
   *) echo '{"title":"PR one","headRefName":"one","state":"OPEN"}';;
 esac
 `
+
+func TestSplitByPROffKeepsOneCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"splitByPR":false}`), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Refactor auth", "PRS")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	const second = "https://github.com/o/r/pull/2"
+	waitForAll(t, e, "owner shipped to review with its first PR and the second one seen", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "review" && tasks[0].PR != nil && slices.Contains(tasks[0].SeenPRs, second)
+	})
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR.Number != 1 {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v", len(tasks), tasks[0].PR)
+	}
+	logged := 0
+	for _, entry := range tasks[0].Log {
+		if strings.Contains(entry.Text, "splitByPR is off") {
+			logged++
+		}
+	}
+	if logged != 1 {
+		t.Errorf("dropped PR logged %d times, want once", logged)
+	}
+}
 
 func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	root, log := setupProject(t)
@@ -2155,6 +2192,29 @@ func TestReviewInAWorkingSessionGetsItsOwnCard(t *testing.T) {
 	}
 	if !review.PR.Review || review.GroupID != owner.ID || review.ColumnID != "reviewing" || review.PR.Author != "them" {
 		t.Fatalf("review card: group %q, column %s, %+v", review.GroupID, review.ColumnID, review.PR)
+	}
+}
+
+func TestSplitByPROffGivesAReviewInAWorkingSessionNoCard(t *testing.T) {
+	r := newReviewRig(t, "them", strings.Replace(reviewBoard, "{", `{"splitByPR": false,`, 1))
+	task := r.e.CreateTask("Auth", "REVIEWME")
+	if err := r.e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const reviewed = "https://github.com/o/r/pull/7"
+	waitForAll(t, r.e, "the reviewed PR to be seen", func(tasks []*store.Task) bool {
+		return slices.Contains(tasks[0].SeenPRs, reviewed)
+	})
+	tasks := r.e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR != nil || tasks[0].ColumnID != "exec" {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v, column %s", len(tasks), tasks[0].PR, tasks[0].ColumnID)
+	}
+	logged := false
+	for _, entry := range tasks[0].Log {
+		logged = logged || strings.Contains(entry.Text, "Reviewing PR #7, not split off")
+	}
+	if !logged {
+		t.Errorf("the dropped review was not logged: %+v", tasks[0].Log)
 	}
 }
 

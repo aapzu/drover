@@ -66,6 +66,8 @@ func (m Model) View() string {
 			body = m.place(bodyHeight, m.renderMovePicker())
 		case modePalette:
 			body = m.place(bodyHeight, m.renderPalette(bodyHeight))
+		case modeConfig:
+			body = m.place(bodyHeight, m.renderConfig())
 		case modeConfirm:
 			body = m.place(bodyHeight, modalStyle.Width(min(70, m.width-4)).Render(m.confirmText))
 		}
@@ -138,8 +140,10 @@ func (m Model) renderFooter() string {
 	if m.flash != "" {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
+	if m.mode == modeBoard {
+		return m.boardFooter()
+	}
 	hints := map[mode]string{
-		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  b hide  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
 		modePalette:   "↑↓ select  enter run  esc cancel",
 		modeLive:      "LIVE: ctrl+q back to board",
 		modeAssistant: "ASSISTANT: ctrl+q hide panel",
@@ -148,8 +152,44 @@ func (m Model) renderFooter() string {
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
+		modeConfig:    "↑↓ select  enter change  x reset  esc close",
+	}
+	if m.configEditing {
+		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
+		if configOptions[m.configSel].shared {
+			hints[modeConfig] = "enter save  esc cancel"
+		}
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
+}
+
+// boardFooter describes the selected card and its agent's settings, with the
+// two keys that lead to every other command.
+func (m Model) boardFooter() string {
+	right := dim.Render("ctrl+k commands · ? help") + " "
+	var parts []string
+	if t := m.current(); t != nil {
+		parts = append(parts, bold.Render(fmt.Sprintf("#%d", t.Number)))
+		if s := m.sessionFor(t); s != nil {
+			perm := s.PermissionMode
+			if s.ModeInherited {
+				perm = ""
+			}
+			for _, p := range []string{s.Model, s.Effort, perm} {
+				if p != "" {
+					parts = append(parts, muted.Render(p))
+				}
+			}
+		}
+		if ref := m.cardRef(t); ref != "" {
+			parts = append(parts, ref)
+		}
+	}
+	left := " " + strings.Join(parts, dim.Render(" · "))
+	room := max(0, m.width-lipgloss.Width(right)-1)
+	left = ansi.Truncate(left, room, "…")
+	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func (m Model) renderMain(l layout) string {
@@ -577,24 +617,18 @@ func titledBox(style lipgloss.Style, title, body string, width, height int) stri
 	return top + "\n" + rest
 }
 
-// lastLines keeps the bottom n non-trailing-blank lines of a pane capture.
-func lastLines(s string, n int) string {
+// captureLines splits a pane capture into lines, dropping trailing blank ones.
+func captureLines(s string) []string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
 		lines = lines[:len(lines)-1]
 	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-// previewWindow shows n lines ending scroll lines above the bottom.
+// previewWindow shows n lines ending scroll lines above the last line with content.
 func previewWindow(s string, n, scroll int) string {
-	if scroll == 0 {
-		return lastLines(s, n)
-	}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	lines := captureLines(s)
 	end := clamp(len(lines)-scroll, min(n, len(lines)), len(lines))
 	return strings.Join(lines[max(0, end-n):end], "\n")
 }
@@ -668,6 +702,7 @@ func (m Model) renderHelp() string {
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
 		{"t", "show or hide column settings under column names"},
+		{"o", "change settings in drover.local.json and drover.json"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},
