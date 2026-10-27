@@ -438,16 +438,20 @@ func TestSettingsDiffer(t *testing.T) {
 		s    store.Session
 		col  config.Column
 		mode string
+		dir  string
 		want bool
 	}{
-		{"inherited, hooks report a mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "", false},
-		{"forced plan leaving for inherited", store.Session{PermissionMode: "plan"}, config.Column{}, "", true},
-		{"saved before ModeInherited", store.Session{PermissionMode: "auto"}, config.Column{}, "", true},
-		{"same forced mode", store.Session{PermissionMode: "acceptEdits"}, config.Column{}, "acceptEdits", false},
-		{"inherited entering a forced mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "plan", true},
-		{"model differs", store.Session{PermissionMode: "plan", Model: "opus"}, config.Column{ModelOverride: "sonnet"}, "plan", true},
+		{"inherited, hooks report a mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "", "", false},
+		{"forced plan leaving for inherited", store.Session{PermissionMode: "plan"}, config.Column{}, "", "", true},
+		{"saved before ModeInherited", store.Session{PermissionMode: "auto"}, config.Column{}, "", "", true},
+		{"same forced mode", store.Session{PermissionMode: "acceptEdits"}, config.Column{}, "acceptEdits", "", false},
+		{"inherited entering a forced mode", store.Session{PermissionMode: "default", ModeInherited: true}, config.Column{}, "plan", "", true},
+		{"model differs", store.Session{PermissionMode: "plan", Model: "opus"}, config.Column{ModelOverride: "sonnet"}, "plan", "", true},
+		{"launched in the root, card has a worktree", store.Session{PermissionMode: "plan", Cwd: "/root"}, config.Column{}, "plan", "/root/wt", true},
+		{"launched in the worktree", store.Session{PermissionMode: "plan", Cwd: "/root/wt"}, config.Column{}, "plan", "/root/wt", false},
+		{"launch directory not recorded", store.Session{PermissionMode: "plan"}, config.Column{}, "plan", "/root/wt", false},
 	} {
-		if got := settingsDiffer(&tc.s, tc.col, tc.mode); got != tc.want {
+		if got := settingsDiffer(&tc.s, tc.col, tc.mode, tc.dir); got != tc.want {
 			t.Errorf("%s: settingsDiffer = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -637,6 +641,75 @@ func TestPlanExitHandsTurnToTarget(t *testing.T) {
 	if want := []string{"Moved Backlog → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
 		t.Errorf("moves = %v, want %v", moves, want)
 	}
+}
+
+func TestPlanExitRestartsTheAgentInAWorktree(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("PLAN the refactor", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
+		return t.ColumnID == "exec" && inWorktree(t)
+	})
+	if got.WorktreePath == root {
+		t.Errorf("worktree is the project root %s", root)
+	}
+}
+
+func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","noWorktree":true},
+	  {"id":"review","name":"Review","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	started := waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	id := started.Sessions[store.MainSession].AgentSessionID
+	rootTranscript := claude.TranscriptPath(id, root)
+	os.MkdirAll(filepath.Dir(rootTranscript), 0o755)
+	os.WriteFile(rootTranscript, []byte("{}\n"), 0o644)
+	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the agent to resume in the worktree", inWorktree)
+	if _, err := os.Stat(claude.TranscriptPath(id, got.WorktreePath)); err != nil {
+		t.Errorf("the conversation did not follow the agent into the worktree: %v", err)
+	}
+	if _, err := os.Stat(rootTranscript); !os.IsNotExist(err) {
+		t.Errorf("the transcript is still under the project root: %v", err)
+	}
+	if s := got.Sessions[store.MainSession]; s.AgentSessionID != id {
+		t.Errorf("session id changed from %s to %s; the conversation should resume", id, s.AgentSessionID)
+	}
+	waitForAll(t, e, "the agent to be resumed", func([]*store.Task) bool {
+		return strings.Contains(readFile(log), "--resume\n"+id)
+	})
 }
 
 func TestPRRequestMovesCard(t *testing.T) {

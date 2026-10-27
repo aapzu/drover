@@ -732,8 +732,8 @@ func (m Model) renderHelp() string {
 	if lipgloss.Width(body)+8 > m.width {
 		body = section("Keys", rows) + "\n\n" + right
 	}
-	footer := dim.Render("Moving a card into an agent column creates its worktree and starts Claude\n" +
-		"with that column's permission mode, model and effort, then runs its automations.")
+	footer := dim.Render("Moving a card into an agent column creates its worktree (unless the column has noWorktree)\n" +
+		"and starts Claude with that column's permission mode, model and effort, then runs its automations.")
 	return modalStyle.Render(body + "\n\n" + footer)
 }
 

@@ -352,6 +352,26 @@ func TestDefaultBoardStartsInPlanning(t *testing.T) {
 	if !slices.Equal(board.LegacyTodo, []string{"todo"}) {
 		t.Errorf("default board's legacy ids = %v, want just the old default id", board.LegacyTodo)
 	}
+	for _, c := range board.Columns {
+		if want := c.ID == "planning"; c.NoWorktree != want {
+			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
+		}
+	}
+}
+
+func TestLoadNoWorktreeColumn(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[
+	  {"id":"plan","name":"Planning","autoSpawn":true,"noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	board, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !board.Columns[0].NoWorktree || board.Columns[1].NoWorktree {
+		t.Errorf("NoWorktree = %v, %v; want true, false", board.Columns[0].NoWorktree, board.Columns[1].NoWorktree)
+	}
 }
 
 func TestDefaultModelFillsColumns(t *testing.T) {

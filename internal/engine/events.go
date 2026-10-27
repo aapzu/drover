@@ -339,19 +339,56 @@ func (e *Engine) planExit(taskID string, visit int) {
 		return
 	}
 	e.logf(card, "Plan approved, moving to %s", target.Name)
+	// The agent is already editing in the project root, so stop it before the
+	// worktree is built.
+	var name string
+	e.with(func() {
+		s := t.Sessions[store.MainSession]
+		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && t.WorktreePath == "" && !target.NoWorktree && e.isRepo {
+			name = s.Tmux
+		}
+	})
+	interrupted := name != ""
+	if interrupted {
+		if err := e.interrupt(name); err != nil {
+			e.logf(t, "Couldn't interrupt the agent before creating its worktree: %v", err)
+		}
+	}
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(card, "Plan-exit move failed: %v", err)
 		return
 	}
 	// The agent keeps working in the same turn after leaving plan mode, now
 	// with the target's permissions, so that turn belongs to the new visit.
+	var dir string
+	moved := false
 	e.with(func() {
-		if s := t.Sessions[store.MainSession]; s != nil && s.Status == store.StatusRunning {
-			s.TurnInVisit = true
-			s.SetMode(e.board.PermissionMode(target))
-			s.RespawnPending = false
+		s := t.Sessions[store.MainSession]
+		if s == nil || s.Status != store.StatusRunning {
+			return
+		}
+		s.TurnInVisit = true
+		s.SetMode(e.board.PermissionMode(target))
+		s.RespawnPending = false
+		if dir = e.dirOf(t); s.MovedFrom(dir) {
+			moved, name = true, s.Tmux
 		}
 	})
+	if moved {
+		if !interrupted {
+			if err := e.interrupt(name); err != nil {
+				e.logf(t, "Couldn't interrupt the agent to move it into its worktree: %v", err)
+			}
+		}
+		if err := e.switchSettings(t, store.MainSession, target, dir); err != nil {
+			e.logf(t, "Moving the agent into its worktree failed: %v", err)
+			e.notify("#%d: moving the agent into its worktree failed: %v", card.Number, err)
+			return
+		}
+	}
+	if moved || interrupted {
+		e.sendMessage(t, store.MainSession, "The plan is approved. Continue implementing it in your new worktree.")
+	}
 }
 
 // shipTask runs shipOpenedPR under the task lock, if a move is pending.
@@ -467,7 +504,8 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 }
 
 // respawnPending switches an agent whose card moved mid-turn into a column
-// with other settings, in place or by resuming its conversation. A keepAgent
+// with other settings or another directory, in place or by resuming its
+// conversation. A keepAgent
 // column drops a pending settings switch and keeps the agent's settings.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
@@ -481,18 +519,18 @@ func (e *Engine) respawnPending(taskID, key string) {
 		col = e.sessionColumn(t)
 	}
 	mode := e.board.PermissionMode(col)
+	worktree := e.Root
+	if t != nil {
+		worktree = e.dirOf(t)
+	}
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode)
+		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode, worktree)
 	if due && waitsForBackground(s, mode) {
 		e.mu.Unlock()
 		return
 	}
 	if s != nil {
 		s.RespawnPending = false
-	}
-	worktree := ""
-	if t != nil {
-		worktree = t.WorktreePath
 	}
 	e.mu.Unlock()
 	if !due {
@@ -575,7 +613,7 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	s.Model, s.Effort = launch.Model, launch.Effort
 	s.SetMode(launch.PermissionMode)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, t.ID)
+	worktree, err := e.ensureWorktree(t, col, t.ID)
 	if err != nil {
 		e.with(func() {
 			s.Status = store.StatusExited
@@ -584,6 +622,9 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 		})
 		e.notify("#%d: %v", t.Number, err)
 		return
+	}
+	if launch.Resume && worktree != e.Root {
+		e.carryTranscript(t, key, worktree)
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)

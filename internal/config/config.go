@@ -93,6 +93,7 @@ type Column struct {
 	ModelOverride  string      `json:"modelOverride,omitempty"`
 	EffortOverride string      `json:"effortOverride,omitempty"`
 	PlanExitTarget string      `json:"planExitTarget,omitempty"`
+	NoWorktree     bool        `json:"noWorktree,omitempty"`
 	Automations    Automations `json:"automations,omitzero"`
 }
 
@@ -409,7 +410,7 @@ func Default() *Board {
 		AutoName:         true,
 		SplitByPR:        true,
 		Columns: []Column{
-			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
+			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing", NoWorktree: true},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{waitingForYou()}}},
 			{ID: "waiting-for-me", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,

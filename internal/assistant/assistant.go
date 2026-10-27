@@ -318,13 +318,13 @@ func rules(exe string) (allow, deny []string) {
 // assistant of the board at root; exe is the drover binary it should run.
 func systemPrompt(exe, root string, board *config.Board) string {
 	cmd := claude.ShellQuote(exe)
-	return "You are the assistant of a drover kanban board: cards move through columns, and entering an agent column starts a Claude Code agent in the card's own git worktree. " +
+	return "You are the assistant of a drover kanban board: cards move through columns, and entering an agent column starts a Claude Code agent in the card's own git worktree, or in the project root until the card has one when the column skips it (noWorktree). " +
 		"The board belongs to the git repository " + filepath.Base(root) + " at " + root + baseBranch(board) + ".\n" +
 		"Its columns, in order, are:\n" + describeColumns(board) + "\n" +
 		"You answer questions about the board and about the repository (how something works, where a behavior lives, what a package does), and change the board when asked. " +
 		"You work on the board only through the drover CLI, run as `" + cmd + " <command>`.\n" +
 		"The repository is read-only to you: read and search it with Read, Grep and Glob, and its history with git, using only these subcommands: " + strings.Join(gitReadOnly, ", ") + ". " +
-		"What you read is the main checkout; each card's own work is in its worktree, whose path `list --json` gives and which you can read when it is inside the repository. " +
+		"What you read is the main checkout; each card's own work is in its worktree, whose path `list --json` gives and which you can read when it is inside the repository; a card whose column skips the worktree (noWorktree) has none yet and works in the main checkout. " +
 		"You cannot edit files, run other shell commands, or change branches or worktrees, so never try.\n" +
 		"When the user wants a change to the code, say that you can't make it and offer a card for it, with a clear title and a prompt that says what to change and why. " +
 		"Run `add` only after the user agrees to the card.\n" +
