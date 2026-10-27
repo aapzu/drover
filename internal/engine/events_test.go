@@ -45,12 +45,32 @@ func TestStopClearsBackgroundOnlyWhenNoneRunning(t *testing.T) {
 }
 
 func TestRespawnWaitsForBackgroundAgents(t *testing.T) {
-	s := &store.Session{Status: store.StatusRunning, RespawnPending: true, Relocate: "/wt", Background: []string{"toolu_1"}}
+	s := &store.Session{Status: store.StatusRunning, RespawnPending: true, Background: []string{"toolu_1"}}
 	task := &store.Task{ID: "t1", Sessions: map[string]*store.Session{store.MainSession: s}}
 	e := &Engine{state: &store.State{Tasks: []*store.Task{task}}, board: &config.Board{}}
 	e.respawnPending("t1", store.MainSession)
 	if !s.RespawnPending {
 		t.Error("respawn ran while a background agent was still running")
+	}
+}
+
+func TestWaitsForBackgroundExceptWhenEnteringPlan(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		background []string
+		current    string
+		mode       string
+		want       bool
+	}{
+		{"model change in plan mode", []string{"toolu_1"}, "plan", "plan", true},
+		{"other mode", []string{"toolu_1"}, "plan", "acceptEdits", true},
+		{"entering plan", []string{"toolu_1"}, "acceptEdits", "plan", false},
+		{"nothing running", nil, "plan", "plan", false},
+	} {
+		s := &store.Session{Background: c.background, PermissionMode: c.current}
+		if got := waitsForBackground(s, c.mode); got != c.want {
+			t.Errorf("%s: waits %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

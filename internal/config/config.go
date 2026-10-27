@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,6 @@ const (
 	LocalFileName        = "drover.local.json"
 	DefaultWorktreesDir  = ".drover/worktrees"
 	DefaultMaxConcurrent = 8
-	DefaultTodoModel     = "haiku"
 	DefaultAgentModel    = "default"
 )
 
@@ -37,9 +37,11 @@ type Board struct {
 	IdleTimeoutMinutes    int           `json:"idleTimeoutMinutes,omitempty"`
 	Notifications         Notifications `json:"notifications"`
 	AutoName              bool          `json:"autoName"`
+	SplitByPR             bool          `json:"splitByPR"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
+	LegacyTodo            []string      `json:"-"`
 }
 
 // Notifications picks the agent events that raise a desktop notification and
@@ -115,11 +117,10 @@ type Automation struct {
 // Conditional reports whether the row is gated.
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
-func (c Column) IsTodo() bool { return c.Role == "todo" }
 func (c Column) IsDone() bool { return c.Role == "done" }
 
 // IsAgent columns run an agent for the cards in them.
-func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsTodo() && !c.IsDone() }
+func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsDone() }
 
 // Load reads drover.json and applies drover.local.json on top of it.
 // A missing drover.json yields the default board and found=false.
@@ -132,7 +133,7 @@ func Load(root string) (board *Board, found bool, err error) {
 		return nil, false, err
 	default:
 		found = true
-		board = &Board{Notifications: DefaultNotifications(), AutoName: true}
+		board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
 		if err := json.Unmarshal(data, board); err != nil {
 			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
 		}
@@ -140,6 +141,7 @@ func Load(root string) (board *Board, found bool, err error) {
 	if err := board.applyLocal(root); err != nil {
 		return nil, found, err
 	}
+	board.dropTodo()
 	if err := board.validate(); err != nil {
 		return nil, found, err
 	}
@@ -147,15 +149,23 @@ func Load(root string) (board *Board, found bool, err error) {
 	if rel, err := filepath.Rel(board.WorktreesPath(root), root); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 		return nil, found, fmt.Errorf("worktreesDir %q must not contain the repo root", board.WorktreesDir)
 	}
-	board.defaultTodoModel()
 	board.defaultModel()
 	board.defaultWaitingForYou()
 	return board, found, nil
 }
 
-func (b *Board) defaultTodoModel() {
-	if col := &b.Columns[b.todoIndex()]; col.ModelOverride == "" {
-		col.ModelOverride = DefaultTodoModel
+// dropTodo removes columns with the "todo" role, which no longer exists, and
+// remembers their ids in LegacyTodo, plus "todo", the id the default board used.
+func (b *Board) dropTodo() {
+	b.Columns = slices.DeleteFunc(b.Columns, func(c Column) bool {
+		if c.Role != "todo" {
+			return false
+		}
+		b.LegacyTodo = append(b.LegacyTodo, c.ID)
+		return true
+	})
+	if _, _, ok := b.Column("todo"); !ok && !slices.Contains(b.LegacyTodo, "todo") {
+		b.LegacyTodo = append(b.LegacyTodo, "todo")
 	}
 }
 
@@ -208,6 +218,7 @@ func (b *Board) applyLocal(root string) error {
 		MaxConcurrent      *int            `json:"maxConcurrent"`
 		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
 		AutoName           *bool           `json:"autoName"`
+		SplitByPR          *bool           `json:"splitByPR"`
 		Notifications      json.RawMessage `json:"notifications"`
 	}
 	if err := json.Unmarshal(data, &local); err != nil {
@@ -227,6 +238,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.AutoName != nil {
 		b.AutoName = *local.AutoName
+	}
+	if local.SplitByPR != nil {
+		b.SplitByPR = *local.SplitByPR
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -300,8 +314,8 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
 		}
 		seen[c.ID] = true
-		if c.KeepAgent && (c.AutoSpawn || c.IsTodo() || c.IsDone()) {
-			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn, To Do or Done", FileName, c.ID)
+		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
+			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
 		}
 	}
 	if f := b.PRFlow; f != nil {
@@ -385,24 +399,16 @@ func (b *Board) PermissionMode(c Column) string {
 	}
 }
 
-func (b *Board) TodoColumn() Column { return b.Columns[b.todoIndex()] }
-
-func (b *Board) todoIndex() int {
-	for i, c := range b.Columns {
-		if c.IsTodo() {
-			return i
-		}
-	}
-	return 0
-}
+// FirstColumn is where new and imported cards land.
+func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
 func Default() *Board {
 	return &Board{
 		ArchiveDoneAfter: "7d",
 		Notifications:    DefaultNotifications(),
 		AutoName:         true,
+		SplitByPR:        true,
 		Columns: []Column{
-			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},
 			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{waitingForYou()}}},
 			{ID: "waiting-for-me", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},

@@ -101,18 +101,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		if ev.PermissionMode != "" {
 			s.PermissionMode = ev.PermissionMode
 		}
-		if s.Relocate != "" && (ev.Name == "Stop" || ev.ToolName == "EnterWorktree") && sameDir(ev.Cwd, s.Relocate) {
-			s.Relocate = ""
-			t.AddLog("Agent moved into the worktree")
-		}
-		if n := len(s.Pending); ev.Cwd != "" && n > 0 {
-			s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool {
-				return p.Relocate != "" && sameDir(ev.Cwd, p.Relocate)
-			})
-			if len(s.Pending) < n {
-				t.AddLog("Agent is already in the worktree")
-			}
-		}
 		switch ev.Name {
 		case "SessionStart":
 			if ev.Source == "startup" && s.Started && ev.SessionID != s.AgentSessionID {
@@ -152,17 +140,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 					out = append(out, func() { e.autoName(taskID, prompt, placeholder) })
 				}
 			}
-			if s.Scratch && t.Title != "" {
-				switch {
-				case !typed:
-					out = append(out, func() { e.leaveScratchWorking(taskID, false) })
-				case s.Routing:
-					s.NextRoute = prompt
-				default:
-					s.Routing = true
-					out = append(out, func() { e.routeScratch(taskID, prompt) })
-				}
-			}
 			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
 				out = append(out, func() { e.prRequested(taskID, visit) })
 			}
@@ -171,10 +148,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 		case "PreToolUse":
 			s.Activity = store.ActivityThinking
-			if s.Scratch && s.Stay && editsFiles(ev.ToolName) {
-				s.Stay = false
-				out = append(out, func() { e.leaveScratchWorking(taskID, true) })
-			}
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
 			if id, ok := ev.BackgroundAgent(); ok {
@@ -200,9 +173,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true
-			if s.Relocate != "" {
-				s.RespawnPending = true
-			}
 			if ev.BackgroundsFinished() {
 				s.Background = nil
 			}
@@ -400,9 +370,8 @@ func (e *Engine) shipTask(t *store.Task) bool {
 // shipOpenedPR moves the card that took its session's first PR to the
 // prFlow's opened column once the agent is idle, unless you moved it first.
 // A PR you review goes to the reviewFlow's started column instead, once gh has
-// confirmed it isn't yours, and leaves To Do even while its agent works. A card
-// whose agent runs outside drover never moves. It reports whether it moved the
-// card. The caller holds the task lock.
+// confirmed it isn't yours. A card whose agent runs outside drover never moves.
+// It reports whether it moved the card. The caller holds the task lock.
 func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	e.mu.Lock()
 	pending := t.PRMovePending
@@ -410,12 +379,12 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	if !pending {
 		return false
 	}
-	var target, from config.Column
+	var target config.Column
 	reason := "PR opened"
 	e.with(func() {
 		col, _, _ := e.board.Column(t.ColumnID)
 		review := t.PR.IsReview()
-		if hasExternal(t) || !agentIdle(t) && !(review && col.IsTodo()) {
+		if hasExternal(t) || !agentIdle(t) {
 			return
 		}
 		if review && t.PR.State == "" {
@@ -427,7 +396,6 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 			return
 		}
 		t.PRMovePending = false
-		from = col
 		if review {
 			reason = "Review started"
 		}
@@ -435,7 +403,7 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 		switch {
 		case target.ID == "" || target.ID == col.ID:
 			target = config.Column{}
-		case !isAgentColumn(col) && !(review && col.IsTodo()):
+		case !isAgentColumn(col):
 			t.AddLog(fmt.Sprintf("%s, not moving to %s: the card is in %s", reason, target.Name, col.Name))
 			target = config.Column{}
 		}
@@ -447,7 +415,6 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	if err := e.moveLocked(t.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(t, "%s move failed: %v", reason, err)
 		e.notify("#%d: moving to %s failed: %v", t.Number, target.Name, err)
-		e.restoreScratch(t, t, from)
 		return false
 	}
 	return true
@@ -500,10 +467,8 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 }
 
 // respawnPending switches an agent whose card moved mid-turn into a column
-// with other settings, in place or by resuming its conversation, and restarts
-// one that was asked to move into its worktree but didn't. A keepAgent column
-// drops a pending settings switch and keeps the agent's settings, unless it
-// already has a move into its worktree pending.
+// with other settings, in place or by resuming its conversation. A keepAgent
+// column drops a pending settings switch and keeps the agent's settings.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -517,14 +482,12 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	mode := e.board.PermissionMode(col)
 	due := s != nil && s.RespawnPending && s.Status == store.StatusRunning &&
-		key == store.MainSession && (s.Relocate != "" || !col.KeepAgent && settingsDiffer(s, col, mode))
-	if due && s.HasBackground() {
+		key == store.MainSession && !col.KeepAgent && settingsDiffer(s, col, mode)
+	if due && waitsForBackground(s, mode) {
 		e.mu.Unlock()
 		return
 	}
-	relocate := ""
 	if s != nil {
-		relocate = s.Relocate
 		s.RespawnPending = false
 	}
 	worktree := ""
@@ -535,11 +498,15 @@ func (e *Engine) respawnPending(taskID, key string) {
 	if !due {
 		return
 	}
-	if relocate != "" {
-		e.relocateByRespawn(t, s, col, key, relocate)
-	} else if _, err := e.switchSettings(t, key, col, worktree); err != nil {
+	if err := e.switchSettings(t, key, col, worktree); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
 	}
+}
+
+// waitsForBackground reports whether a due switch to mode must wait for s's
+// background agents, which a restart would kill.
+func waitsForBackground(s *store.Session, mode string) bool {
+	return s.HasBackground() && (mode != "plan" || s.PermissionMode == "plan")
 }
 
 // dequeue starts queued sessions while there are free slots. Called with mu held.
@@ -607,42 +574,17 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 	}
 	s.Model, s.Effort = launch.Model, launch.Effort
 	s.SetMode(launch.PermissionMode)
-	scratch := s.Scratch
 	e.mu.Unlock()
-	worktree := e.Root
-	if !scratch {
-		var err error
-		if worktree, err = e.ensureWorktree(t, t.ID); err != nil {
-			e.with(func() {
-				s.Status = store.StatusExited
-				s.Activity = store.ActivityIdle
-				t.AddLog(fmt.Sprintf("Worktree failed: %v", err))
-			})
-			e.notify("#%d: %v", t.Number, err)
-			return
-		}
+	worktree, err := e.ensureWorktree(t, t.ID)
+	if err != nil {
+		e.with(func() {
+			s.Status = store.StatusExited
+			s.Activity = store.ActivityIdle
+			t.AddLog(fmt.Sprintf("Worktree failed: %v", err))
+		})
+		e.notify("#%d: %v", t.Number, err)
+		return
 	}
 	e.with(func() { s.UpdatedAt = time.Now() })
 	e.startTmux(t, key, worktree, launch)
-}
-
-// editsFiles reports whether tool changes files itself, which a session routed
-// to stay in the main checkout must not do.
-func editsFiles(tool string) bool {
-	switch tool {
-	case "Edit", "MultiEdit", "Write", "NotebookEdit":
-		return true
-	}
-	return false
-}
-
-// sameDir reports whether a and b are the same directory, through symlinks
-// such as macOS's /var → /private/var.
-func sameDir(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, errA := filepath.EvalSymlinks(a)
-	rb, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && ra == rb
 }

@@ -123,6 +123,7 @@ func New(root string) (*Engine, error) {
 		gitx.EnsureExcluded(root, board.WorktreesPath(root))
 	}
 	e.reconcile()
+	e.migrateTodo()
 	return e, nil
 }
 
@@ -256,9 +257,23 @@ func (e *Engine) ownsWorktree(path string) bool {
 	return err == nil
 }
 
+// ReloadBoard picks up a settings change straight away rather than on the next tick.
+func (e *Engine) ReloadBoard() { e.reload(false) }
+
+// Board is the board as last loaded from drover.json and drover.local.json.
+func (e *Engine) Board() *config.Board {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.board
+}
+
 // reloadBoard picks up edits to drover.json and drover.local.json made while
 // the TUI runs.
-func (e *Engine) reloadBoard() {
+func (e *Engine) reloadBoard() { e.reload(true) }
+
+// reload loads the board if the files changed. notice controls the "Reloaded"
+// message; load errors are always reported.
+func (e *Engine) reload(notice bool) {
 	stamp := config.Stamp(e.Root)
 	e.mu.Lock()
 	unchanged := stamp == e.boardStamp
@@ -280,7 +295,77 @@ func (e *Engine) reloadBoard() {
 	if e.isRepo {
 		gitx.EnsureExcluded(e.Root, board.WorktreesPath(e.Root))
 	}
-	e.notify("Reloaded drover.json")
+	e.migrateTodo()
+	if notice {
+		e.notify("Reloaded drover.json")
+	}
+}
+
+// migrateTodo moves the cards still in a removed To Do column to the first
+// column. Its conversation is resumed from the first column.
+func (e *Engine) migrateTodo() {
+	e.mu.Lock()
+	legacy := e.board.LegacyTodo
+	first := e.board.FirstColumn()
+	var ids []string
+	for _, t := range e.state.Tasks {
+		if slices.Contains(legacy, t.ColumnID) {
+			ids = append(ids, t.ID)
+		}
+	}
+	e.mu.Unlock()
+	moved := 0
+	for _, id := range ids {
+		t, owner, unlock := e.lockGroup(id)
+		e.mu.Lock()
+		stale := t != nil && slices.Contains(legacy, t.ColumnID)
+		drives := stale && t == owner && store.Driver(e.state.Tasks, owner) == t
+		e.mu.Unlock()
+		if stale {
+			moved++
+			drop := false
+			if drives {
+				_, leftRunning := e.stopSessions(owner, "", store.StatusSuspended)
+				drop = !leftRunning
+			}
+			e.with(func() {
+				if drop {
+					e.dropUnstarted(t)
+				}
+				t.AddLog(fmt.Sprintf("Moved to %s: the To Do column was removed", first.Name))
+				t.ColumnID = first.ID
+			})
+		}
+		unlock()
+	}
+	if moved > 0 {
+		e.notify("The To Do column was removed: moved %d cards to %s", moved, first.Name)
+	}
+}
+
+// dropUnstarted forgets t's sessions that never recorded a conversation, so
+// the card reads as not started. Called with mu held.
+func (e *Engine) dropUnstarted(t *store.Task) {
+	for key, s := range t.Sessions {
+		if s.Status != store.StatusExternal && !e.talkedTo(t, key) {
+			delete(t.Sessions, key)
+		}
+	}
+}
+
+// talkedTo reports whether s got a prompt, counting the one whose hook event
+// the board has not read yet. An unreadable event log counts as talked to, so
+// nothing is thrown away on a guess. Called with mu held.
+func (e *Engine) talkedTo(t *store.Task, key string) bool {
+	s := t.Sessions[key]
+	if s.Started {
+		return true
+	}
+	events, _, err := claude.ReadEvents(filepath.Join(e.sessionDir(t, key), "events.jsonl"), s.EventsOffset)
+	if err != nil {
+		return true
+	}
+	return slices.ContainsFunc(events, func(ev claude.Event) bool { return ev.Name == "UserPromptSubmit" })
 }
 
 // reconcile marks sessions whose tmux session vanished while the TUI was
@@ -308,7 +393,7 @@ func (e *Engine) CreateTask(title, prompt string) *store.Task {
 			Number:    e.state.NextNumber,
 			Title:     title,
 			Prompt:    prompt,
-			ColumnID:  e.board.TodoColumn().ID,
+			ColumnID:  e.board.FirstColumn().ID,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -319,22 +404,58 @@ func (e *Engine) CreateTask(title, prompt string) *store.Task {
 	return task
 }
 
-// NewSession adds a card whose agent starts right away in the main checkout.
+// NewSession adds a card in the first column and starts its agent right away.
 func (e *Engine) NewSession() (*store.Task, error) {
+	col := e.firstColumn()
+	if !col.IsAgent() {
+		return nil, fmt.Errorf("%s, the first column, runs no agent; make it an agent column in drover.json to start sessions with n", col.Name)
+	}
 	task := e.CreateTask("", "")
-	_, _, unlock := e.lockGroup(task.ID)
-	err := e.startScratch(task, true)
-	unlock()
-	if err != nil {
-		e.DeleteTask(task.ID)
-		return task, fmt.Errorf("starting session: %w", err)
+	_, owner, unlock := e.lockGroup(task.ID)
+	defer unlock()
+	if err := e.activate(task, col, col, "", true, true); err != nil {
+		return task, errors.Join(fmt.Errorf("starting session: %w", err), e.discardCard(task, owner))
 	}
 	return task, nil
 }
 
-// DiscardSilent deletes a card whose scratch session never started, and stops
-// its agent. A card that is titled, has a worktree, has left To Do, or has a
-// started conversation is kept.
+// discardCard deletes a card that was never used, with its worktree and its
+// branch, and tells you when the branch stays. A worktree whose setup failed
+// before it was recorded on the card is removed too. The caller holds the
+// group lock.
+func (e *Engine) discardCard(t, owner *store.Task) error {
+	e.mu.Lock()
+	branch, unrecorded := t.Branch, ""
+	base, defaultBase := t.BaseBranch, e.board.DefaultBaseBranch
+	if t.WorktreePath == "" && e.isRepo {
+		folder := filepath.Join(e.board.WorktreesPath(e.Root), fmt.Sprintf("%s%d", worktreeFolderPrefix, t.Number))
+		if _, err := os.Stat(filepath.Join(folder, ".git")); err == nil {
+			unrecorded, branch = folder, gitx.BranchName(t.Title, t.ID)
+		}
+	}
+	e.mu.Unlock()
+	if err := e.deleteCard(t, owner); err != nil {
+		return err
+	}
+	if unrecorded != "" {
+		gitx.RemoveWorktree(e.Root, unrecorded)
+	}
+	if branch != "" {
+		resolved, err := gitx.ResolveBase(e.Root, base, defaultBase)
+		if err == nil {
+			err = gitx.DeleteUnusedBranch(e.Root, branch, resolved)
+		}
+		if err != nil {
+			e.notify("couldn't delete the unused branch %s: %v", branch, err)
+		}
+	}
+	return nil
+}
+
+// DiscardSilent deletes a new card whose agent never got a message, and stops
+// the agent, its worktree and its unused branch. A card that is titled, has a
+// prompt or an issue, has left the first column, has a started conversation or
+// has uncommitted changes in its worktree is kept.
 func (e *Engine) DiscardSilent(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -342,28 +463,14 @@ func (e *Engine) DiscardSilent(id string) error {
 		return nil
 	}
 	e.mu.Lock()
-	s := scratchSession(t)
-	silent := s != nil && !s.Started && t.Title == "" && t.WorktreePath == "" && t.ColumnID == e.board.TodoColumn().ID
+	s := t.Sessions[store.MainSession]
+	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && t.ColumnID == e.board.FirstColumn().ID && !e.talkedTo(t, store.MainSession)
+	path, copied := t.WorktreePath, e.board.CopyFiles
 	e.mu.Unlock()
-	if !silent {
+	if !silent || gitx.Dirty(path, copied...) {
 		return nil
 	}
-	return e.deleteCard(t, owner)
-}
-
-// startScratch runs t's conversation in the main checkout. The caller holds
-// the task lock.
-func (e *Engine) startScratch(t *store.Task, fresh bool) error {
-	e.mu.Lock()
-	col := e.board.TodoColumn()
-	e.mu.Unlock()
-	err := e.spawn(t, col, store.MainSession, e.Root, fresh, "", true)
-	e.with(func() {
-		if s := t.Sessions[store.MainSession]; s != nil {
-			s.Scratch, s.Stay = true, false
-		}
-	})
-	return err
+	return e.discardCard(t, owner)
 }
 
 func (e *Engine) EditTask(id, title, prompt string) {
@@ -418,9 +525,27 @@ func (e *Engine) deleteCard(t, owner *store.Task) error {
 	return nil
 }
 
+// HideTask hides a card from the board in any column, or shows it again.
+func (e *Engine) HideTask(id string, hidden bool) error {
+	t, _, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	e.with(func() {
+		t.Hidden = hidden
+		if hidden {
+			t.AddLog("Hidden")
+		} else {
+			t.AddLog("Unhidden")
+		}
+	})
+	return nil
+}
+
 // ArchiveTask hides a card in Done from the board, or shows it again.
-// Archiving removes the worktree once every card sharing it is archived or in
-// To Do; a dirty one is kept and ErrDirty returned unless force is set.
+// Archiving removes the worktree once every card sharing it is archived; a
+// dirty one is kept and ErrDirty returned unless force is set.
 func (e *Engine) ArchiveTask(id string, archived, force bool) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -450,8 +575,8 @@ func (e *Engine) ArchiveTask(id string, archived, force bool) error {
 	return nil
 }
 
-// ArchiveColumn archives every card in a Done column and returns how many
-// were. Worktrees with uncommitted changes are kept.
+// ArchiveColumn archives every card in a Done column that isn't hidden and
+// returns how many were. Worktrees with uncommitted changes are kept.
 func (e *Engine) ArchiveColumn(colID string) int {
 	n := 0
 	var owners []string
@@ -460,7 +585,7 @@ func (e *Engine) ArchiveColumn(colID string) int {
 			return
 		}
 		for _, t := range e.state.Tasks {
-			if t.ColumnID == colID && !t.Archived {
+			if t.ColumnID == colID && !t.Archived && !t.Hidden {
 				t.Archived = true
 				t.AddLog("Archived")
 				owners = append(owners, e.owner(t).ID)
@@ -532,16 +657,15 @@ func (e *Engine) Move(id, targetID string, opts MoveOptions) error {
 }
 
 // moveLocked moves one card. The caller holds its group's lock. A card that
-// shares its session with other cards only stops the agent or resets the
-// conversation once no card in the group needs them. Only a move to To Do
-// removes the worktree; archiving does the rest.
+// shares its session with other cards only stops the agent once no card in the
+// group needs it.
 func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	e.mu.Lock()
 	t := e.find(id)
 	board := e.board
 	var owner *store.Task
 	var from config.Column
-	othersActive, othersEnded, othersTodo := false, true, true
+	othersActive, othersEnded := false, true
 	var nextDriver string
 	if t != nil {
 		owner = e.owner(t)
@@ -558,8 +682,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 					nextDriver = m.ID
 				}
 			}
-			othersEnded = othersEnded && (col.IsTodo() || col.IsDone())
-			othersTodo = othersTodo && col.IsTodo()
+			othersEnded = othersEnded && col.IsDone()
 		}
 	}
 	e.mu.Unlock()
@@ -573,7 +696,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	if from.ID == target.ID {
 		return nil
 	}
-	ending := (target.IsTodo() || target.IsDone()) && othersEnded
+	ending := target.IsDone() && othersEnded
 	external := e.externalCheck(owner)
 	if external != nil && ending {
 		return external
@@ -604,7 +727,7 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		t.AddLog(fmt.Sprintf("Moved %s → %s", from.Name, target.Name))
 	})
 
-	if !isAgentColumn(target) && !target.IsTodo() && !target.IsDone() && !opts.skipEnter {
+	if !isAgentColumn(target) && !target.IsDone() && !opts.skipEnter {
 		defer e.runEnterGroup(t, e.withoutAgent(t, target.Automations.OnEnter), groupContext{from: from, to: target})
 	}
 	switch {
@@ -613,17 +736,10 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 			e.with(func() { owner.ActiveCard = nextDriver })
 		}
 		return nil
-	case target.IsTodo() && othersTodo:
-		e.stopSessions(owner, "", store.StatusExited)
-		e.with(func() { owner.Sessions = nil })
-		return e.removeWorktree(owner)
 	case keeps:
 		return nil
 	case !isAgentColumn(target):
 		e.stopSessions(owner, "", store.StatusSuspended)
-		if target.IsTodo() {
-			return e.releaseIdle(owner)
-		}
 		return nil
 	case external != nil:
 		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
@@ -633,8 +749,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	}
 }
 
-// Start resumes or starts the agent for a task in place, without re-running
-// the column's enter automations.
+// Start resumes or starts the agent for a task in place. A card that never had
+// an agent runs its agent column's enter automations, as entering it would;
+// otherwise they are not run again.
 func (e *Engine) Start(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -644,11 +761,14 @@ func (e *Engine) Start(id string) error {
 	if err := e.externalCheck(owner); err != nil {
 		return err
 	}
-	col, err := e.startColumn(t, owner)
+	col, err := e.startColumn(t)
 	if err != nil {
 		return err
 	}
-	return e.activate(t, col, col, "", false, true)
+	e.mu.Lock()
+	entering := len(owner.Sessions) == 0 && col.IsAgent()
+	e.mu.Unlock()
+	return e.activate(t, col, col, "", entering, true)
 }
 
 // TakeOver kills the process running the task's conversation in another
@@ -659,7 +779,7 @@ func (e *Engine) TakeOver(id string) error {
 	if t == nil {
 		return errors.New("task not found")
 	}
-	col, err := e.startColumn(t, owner)
+	col, err := e.startColumn(t)
 	if err != nil {
 		return err
 	}
@@ -701,13 +821,12 @@ func (e *Engine) externalLive(t *store.Task) (claude.Live, bool) {
 }
 
 // startColumn returns the column t's agent would run in, or an error when the
-// column runs no agent. A scratch session runs in To Do too.
-func (e *Engine) startColumn(t, owner *store.Task) (config.Column, error) {
+// card is in Done.
+func (e *Engine) startColumn(t *store.Task) (config.Column, error) {
 	e.mu.Lock()
 	col, _, _ := e.board.Column(t.ColumnID)
-	scratch := scratchSession(owner)
 	e.mu.Unlock()
-	if (col.IsTodo() && scratch == nil) || col.IsDone() {
+	if col.IsDone() {
 		return col, fmt.Errorf("move the task out of %s to start an agent", col.Name)
 	}
 	return col, nil
@@ -855,28 +974,9 @@ func (e *Engine) ensureWorktree(t *store.Task, busyID string) (string, error) {
 	return path, nil
 }
 
-// adoptScratch moves a conversation from the main checkout into worktree so
-// the agent resumes it there. One that never got a message starts fresh.
-func (e *Engine) adoptScratch(t *store.Task, s *store.Session, worktree string) {
-	e.mu.Lock()
-	path, started := s.TranscriptPath, s.Started
-	if path == "" {
-		path = claude.TranscriptPath(s.AgentSessionID, e.Root)
-	}
-	e.mu.Unlock()
-	moved, err := e.moveConversation(t, path, worktree)
-	switch {
-	case err != nil && !moved:
-		e.notify("#%d: couldn't move the conversation into the worktree, starting a new one: %v", t.Number, err)
-	case !moved && started:
-		e.notify("#%d: couldn't find the conversation to carry over, starting a new one", t.Number)
-	}
-	e.with(func() { s.Started, s.TranscriptPath, s.Scratch, s.Stay = moved, "", false, false })
-}
-
 // moveConversation moves the transcript at path into worktree's project and
 // logs how that went.
-func (e *Engine) moveConversation(t *store.Task, path, worktree string) (bool, error) {
+func (e *Engine) moveConversation(t *store.Task, path, worktree string) {
 	moved, err := claude.MoveTranscript(path, worktree)
 	switch {
 	case moved && err != nil:
@@ -888,45 +988,10 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) (bool, e
 	default:
 		e.logf(t, "No conversation found at %s", path)
 	}
-	return moved, err
 }
 
-// relocateLive keeps a running scratch conversation alive across the move,
-// and returns the request asking it to switch into worktree itself. It
-// declines, leaving the restart to the caller, when there is nothing to keep.
-func (e *Engine) relocateLive(t *store.Task, s *store.Session, worktree string) (store.Pending, bool) {
-	e.mu.Lock()
-	ok := s.Status == store.StatusRunning && s.Started
-	name, branch := s.Tmux, t.Branch
-	e.mu.Unlock()
-	if !ok || !tmux.Has(name) {
-		return store.Pending{}, false
-	}
-	e.with(func() { s.Scratch, s.Stay = false, false })
-	e.logf(t, "Asking the agent to move into the worktree")
-	return store.Pending{Relocate: worktree, Text: fmt.Sprintf("This task now has its own git worktree at %s on branch %s. "+
-		"Call the EnterWorktree tool with path %q to switch into it, and do all further work there.", worktree, branch, worktree)}, true
-}
-
-// relocateByRespawn resumes an agent that did not move into worktree when
-// asked, in a new process there.
-func (e *Engine) relocateByRespawn(t *store.Task, s *store.Session, col config.Column, key, worktree string) {
-	e.logf(t, "The agent didn't move into the worktree, restarting it there")
-	e.mu.Lock()
-	name := s.Tmux
-	e.mu.Unlock()
-	tmux.Stop(name)
-	e.adoptScratch(t, s, worktree)
-	e.mu.Lock()
-	fresh := !s.Started
-	e.mu.Unlock()
-	if err := e.spawn(t, col, key, worktree, fresh, "", false); err != nil {
-		e.logf(t, "Respawn failed: %v", err)
-	}
-}
-
-// carryTranscript moves a conversation that switched into worktree while
-// running, and so is still recorded under the main checkout, next to it so
+// carryTranscript moves a conversation still recorded under the main checkout,
+// such as one from before the To Do column was removed, next to worktree so
 // `claude --resume` finds it there.
 func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
 	e.mu.Lock()
@@ -948,16 +1013,16 @@ func settingsDiffer(s *store.Session, col config.Column, mode string) bool {
 }
 
 // switchSettings moves a live, idle agent to col's settings, in place when it
-// can and by resuming it in a new process otherwise, which it reports.
-func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, worktree string) (restarted bool, err error) {
+// can and by resuming it in a new process otherwise.
+func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, worktree string) error {
 	if e.retune(t, key, col) {
-		return false, nil
+		return nil
 	}
 	e.mu.Lock()
 	name := t.Sessions[key].Tmux
 	e.mu.Unlock()
 	tmux.Stop(name)
-	return true, e.spawn(t, col, key, worktree, false, "", false)
+	return e.spawn(t, col, key, worktree, false, "", false)
 }
 
 // retune switches a running agent to col's permission mode as you would,
@@ -1016,15 +1081,6 @@ func switchMode(name, mode string) error {
 	return fmt.Errorf("the screen shows %q", cmp.Or(seen, "no mode"))
 }
 
-// scratchSession returns t's conversation while it still runs in the main
-// checkout. Called with mu held.
-func scratchSession(t *store.Task) *store.Session {
-	if s := t.Sessions[store.MainSession]; s != nil && s.Scratch {
-		return s
-	}
-	return nil
-}
-
 func (e *Engine) removeWorktree(t *store.Task) error {
 	tmux.Kill(e.shellName(t))
 	e.mu.Lock()
@@ -1047,14 +1103,13 @@ func (e *Engine) removeWorktree(t *store.Task) error {
 }
 
 // freeWorktree removes owner's worktree once every card sharing it is
-// archived or in To Do; pending counts as archived. A dirty worktree is kept
-// unless force is set, and ErrDirty is returned.
+// archived; pending counts as archived. A dirty worktree is kept unless force
+// is set, and ErrDirty is returned.
 func (e *Engine) freeWorktree(owner, pending *store.Task, force bool) error {
 	e.mu.Lock()
 	idle := true
 	for _, m := range store.Members(e.state.Tasks, owner) {
-		col, _, _ := e.board.Column(m.ColumnID)
-		idle = idle && (m.Archived || m == pending || col.IsTodo())
+		idle = idle && (m.Archived || m == pending)
 	}
 	path, copied := owner.WorktreePath, e.board.CopyFiles
 	e.mu.Unlock()
@@ -1198,25 +1253,12 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	defer e.setBusy(card.ID, "")
 	e.mu.Lock()
 	t := e.owner(card)
-	scratch := scratchSession(t)
 	e.mu.Unlock()
-	worktree := e.Root
-	var relocation store.Pending
-	if scratch == nil || !col.IsTodo() {
-		var err error
-		if worktree, err = e.ensureWorktree(t, card.ID); err != nil {
-			e.logf(card, "Worktree failed: %v", err)
-			e.notify("#%d: %v", card.Number, err)
-			return err
-		}
-		if scratch != nil {
-			if p, ok := e.relocateLive(t, scratch, worktree); ok {
-				relocation = p
-			} else {
-				e.stopSessions(t, "", store.StatusSuspended)
-				e.adoptScratch(t, scratch, worktree)
-			}
-		}
+	worktree, err := e.ensureWorktree(t, card.ID)
+	if err != nil {
+		e.logf(card, "Worktree failed: %v", err)
+		e.notify("#%d: %v", card.Number, err)
+		return err
 	}
 	e.with(func() { t.ActiveCard = card.ID })
 	key := store.MainSession
@@ -1260,12 +1302,8 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 
 	switch {
 	case live && changed && !busy:
-		restarted, err := e.switchSettings(t, key, col, worktree)
-		if err != nil {
+		if err := e.switchSettings(t, key, col, worktree); err != nil {
 			return err
-		}
-		if restarted {
-			relocation = store.Pending{}
 		}
 	case queued && evict:
 		e.startQueuedNow(t, key)
@@ -1283,9 +1321,6 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
 			return err
 		}
-	}
-	if relocation.Text != "" {
-		e.sendPending(t, key, relocation)
 	}
 	if message != "" {
 		e.sendMessage(t, key, message)
@@ -1442,8 +1477,6 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		s.Model, s.Effort = col.ModelOverride, col.EffortOverride
 		s.SetMode(e.board.PermissionMode(col))
 		s.RespawnPending = false
-		s.Pending = slices.DeleteFunc(s.Pending, func(p store.Pending) bool { return p.Relocate != "" })
-		s.Relocate = ""
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
@@ -1532,8 +1565,7 @@ func (e *Engine) sendMessage(t *store.Task, key, text string) {
 	e.sendPending(t, key, store.Pending{Text: text})
 }
 
-// sendPending is sendMessage for a queued message. Typing a relocation
-// request starts watching for the move; its reply is no turn of the column's.
+// sendPending is sendMessage for a queued message.
 func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 	e.mu.Lock()
 	s := t.Sessions[key]
@@ -1550,10 +1582,7 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 	}
 	// Claim the turn before typing so a concurrent sender queues instead.
 	s.Activity = store.ActivityThinking
-	s.TurnInVisit = p.Relocate == ""
-	if p.Relocate != "" {
-		s.Relocate = p.Relocate
-	}
+	s.TurnInVisit = true
 	s.UpdatedAt = time.Now()
 	e.mu.Unlock()
 
@@ -1564,7 +1593,6 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 		if err != nil {
 			s.Activity = store.ActivityIdle
 			s.TurnInVisit = false
-			s.Relocate = ""
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
 	})

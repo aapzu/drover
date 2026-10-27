@@ -66,6 +66,8 @@ func (m Model) View() string {
 			body = m.place(bodyHeight, m.renderMovePicker())
 		case modePalette:
 			body = m.place(bodyHeight, m.renderPalette(bodyHeight))
+		case modeConfig:
+			body = m.place(bodyHeight, m.renderConfig())
 		case modeConfirm:
 			body = m.place(bodyHeight, modalStyle.Width(min(70, m.width-4)).Render(m.confirmText))
 		}
@@ -139,7 +141,7 @@ func (m Model) renderFooter() string {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
 	hints := map[mode]string{
-		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
+		modeBoard:     "←→↑↓ navigate  ctrl+k commands  H/L move  n new  / filter  b hide  A archive  enter attach  tab type into agent  s send  r start  S suspend  Q suspend all  +/- </> resize  z density  : assistant  ? help  q quit",
 		modePalette:   "↑↓ select  enter run  esc cancel",
 		modeLive:      "LIVE: ctrl+q back to board",
 		modeAssistant: "ASSISTANT: ctrl+q hide panel",
@@ -148,6 +150,13 @@ func (m Model) renderFooter() string {
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
+		modeConfig:    "↑↓ select  enter change  x reset  esc close",
+	}
+	if m.configEditing {
+		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
+		if configOptions[m.configSel].shared {
+			hints[modeConfig] = "enter save  esc cancel"
+		}
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
@@ -178,8 +187,6 @@ func (m Model) renderBoard(l layout) string {
 
 func columnSummary(c config.Column) string {
 	switch {
-	case c.IsTodo():
-		return "sessions · main checkout"
 	case c.IsDone():
 		return "finished · archive removes worktree"
 	case c.KeepAgent:
@@ -219,7 +226,7 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	inner := width - 2
 	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Underline(selected)
 	count := fmt.Sprintf(" %d", len(tasks))
-	if hidden := m.archivedIn(col.ID); hidden > 0 {
+	if hidden := m.offBoardIn(col.ID); hidden > 0 {
 		count += fmt.Sprintf(" +%d", hidden)
 	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
@@ -268,6 +275,9 @@ func (m Model) status(t *store.Task) string {
 	}
 	s := m.sessionFor(t)
 	if s == nil {
+		if col, _, _ := m.snap.Board.Column(t.ColumnID); col.IsAgent() {
+			return dim.Render("○ not started")
+		}
 		return ""
 	}
 	// A group card the agent isn't working for doesn't show the agent's activity
@@ -341,7 +351,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	}
 	if dragged {
 		style = style.Faint(true).BorderForeground(lipgloss.Color("#1f2937"))
-	} else if t.Archived {
+	} else if t.Archived || t.Hidden {
 		style = style.Faint(true)
 	}
 	group := groupMarker(g, t, sibling)
@@ -640,7 +650,7 @@ func (m Model) renderHelp() string {
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
 		{"m", "move card to a column (↑↓ and enter, or 1-9)"},
-		{"n", "new Claude session (no branch until moved right)"},
+		{"n", "new card with an agent in the first column"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
@@ -661,10 +671,13 @@ func (m Model) renderHelp() string {
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
+		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
+		{"B", "show or hide hidden cards"},
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
 		{"t", "show or hide column settings under column names"},
+		{"o", "change settings in drover.local.json and drover.json"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},

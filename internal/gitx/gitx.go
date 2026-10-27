@@ -291,7 +291,12 @@ func CurrentBranch(dir string) string {
 	return out
 }
 
-func DeleteBranch(root, branch string) error {
+// DeleteUnusedBranch deletes branch when every commit on it is already in
+// base, so no work is lost whatever the main checkout has checked out.
+func DeleteUnusedBranch(root, branch, base string) error {
+	if _, err := run(root, "merge-base", "--is-ancestor", branch, base); err != nil {
+		return fmt.Errorf("it has commits that are not in %s", base)
+	}
 	_, err := run(root, "branch", "-D", branch)
 	return err
 }

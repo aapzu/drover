@@ -3,13 +3,6 @@
   "worktreesDir": ".claude/worktrees",
   "columns": [
     {
-      "id": "todo",
-      "name": "Sessions",
-      "role": "todo",
-      "color": "#6b7280",
-      "permissionMode": "plan"
-    },
-    {
       "id": "planning",
       "name": "Planning",
       "color": "#8b5cf6",
