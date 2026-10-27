@@ -88,12 +88,25 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 
 	if sessKey == store.MainSession {
 		gc := groupContext{from: col, to: col, trigger: "turn_end", reply: reply}
+		skip, started := e.takeTurnEndRow(owner, sessKey), false
 		for _, row := range col.Automations.OnTurnEnd {
+			if skip != "" && rowName(row) == skip {
+				e.logf(t, "Automation %q skipped: this turn answered its own message", rowName(row))
+				continue
+			}
 			if !e.shouldRun(t, row, gc) {
 				continue
 			}
 			if row.Type != "move_to_column" {
 				e.execute(t, row, gc)
+				if row.Type == "send_message" && !started {
+					started = true
+					e.with(func() {
+						if s := owner.Sessions[sessKey]; s != nil {
+							s.TurnEndRow = rowName(row)
+						}
+					})
+				}
 				continue
 			}
 			if fixing {
@@ -123,6 +136,20 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 		return
 	}
 	e.flushPending(owner, sessKey)
+}
+
+// takeTurnEndRow returns the turn-end row whose message started the turn that
+// just ended, and forgets it.
+func (e *Engine) takeTurnEndRow(owner *store.Task, sessKey string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := owner.Sessions[sessKey]
+	if s == nil {
+		return ""
+	}
+	row := s.TurnEndRow
+	s.TurnEndRow = ""
+	return row
 }
 
 // truncatePrompt caps prompt at 4000 runes so the Haiku calls stay small.

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -96,6 +97,34 @@ func TestConditionGatesTurnEndRows(t *testing.T) {
 	moved := waitFor(t, e, "the ALWAYS row to move the card", func(t *store.Task) bool { return t.ColumnID == "review" })
 	if !hasLog(moved, `Automation "Never" skipped: condition not met`) {
 		t.Errorf("Never row not skipped: %+v", moved.Log)
+	}
+}
+
+func TestTurnEndRowSkipsTheTurnItStarted(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{"onTurnEnd":[
+	    {"name":"Again","type":"send_message","message":"again please"},
+	    {"name":"Count","type":"run_script","script":"echo x >> count"}]}},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+
+	task := e.CreateTask("Do the work", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	moved := waitFor(t, e, "the row to skip its own turn", func(t *store.Task) bool {
+		return hasLog(t, `Automation "Again" skipped: this turn answered its own message`)
+	})
+	time.Sleep(time.Second)
+	events := readFile(e.sessionDir(moved, store.MainSession) + "/events.jsonl")
+	if got := strings.Count(events, "Stop"); got != 2 {
+		t.Errorf("turns ended = %d, want 2 (the prompt and the row's message)", got)
+	}
+	if typed := readFile(os.Getenv("FAKE_LOG")); strings.Count(typed, "again please") != 1 {
+		t.Errorf("row's message sent more than once:\n%s", typed)
+	}
+	if got := readFile(filepath.Join(moved.WorktreePath, "count")); got != "x\nx\n" {
+		t.Errorf("run_script row ran %q on the two turn ends, want it on both", got)
 	}
 }
 

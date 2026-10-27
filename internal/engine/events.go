@@ -124,6 +124,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if s.Activity == store.ActivityStarting || ev.Source == "clear" {
 				s.Activity = store.ActivityIdle
 				s.TurnInVisit = false
+				s.TurnEndRow = ""
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
@@ -279,6 +280,7 @@ func (e *Engine) checkInterrupted() []func() {
 					}
 					s.Activity = store.ActivityIdle
 					s.TurnInVisit = false
+					s.TurnEndRow = ""
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {

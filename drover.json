@@ -20,7 +20,7 @@
           {
             "name": "Waiting for me",
             "type": "move_to_column",
-            "targetColumn": "self-review",
+            "targetColumn": "waiting-for-me",
             "condition": "The reply ends by asking me for a decision or input"
           }
         ]
