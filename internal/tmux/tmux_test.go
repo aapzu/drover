@@ -61,6 +61,44 @@ func TestTypingIntoDetachedSession(t *testing.T) {
 	}
 }
 
+func TestResizeWaitsForDetach(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+
+	name := "attached"
+	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	size := func() string {
+		out, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(out)
+	}
+
+	AttachCommand(name)
+	defer Detached(name)
+	before := size()
+	if err := Resize(name, 50, 12); err != nil {
+		t.Fatal(err)
+	}
+	if got := size(); got != before {
+		t.Fatalf("attached window was resized from %s to %s", before, got)
+	}
+
+	Detached(name)
+	if err := Resize(name, 50, 12); err != nil {
+		t.Fatal(err)
+	}
+	if got := size(); got != "50x12" {
+		t.Fatalf("window is %s after detach, want 50x12", got)
+	}
+}
+
 func TestCaptureReturnsHistory(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")

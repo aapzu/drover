@@ -48,6 +48,7 @@ drover
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
 | `v` | show or hide archived cards |
+| `b` / `B` | hide or unhide the selected card in any column / show or hide hidden cards |
 | `t` | show or hide column settings under column names |
 | `enter` | attach to the agent's terminal, starting it if needed (`Ctrl-q` returns) |
 | `tab` | type into the agent from the preview (`Ctrl-q` returns) |
@@ -179,6 +180,11 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   removes the card's worktree; a worktree shared by several cards goes once all
   of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
+- **Settings view.** `o` changes the settings in both files. Each row shows
+  where its value comes from: `local`, `shared` (`drover.json`) or `default`.
+  Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
+  allow either, and `x` removes the override. Columns and flows stay in
+  `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent in
   the card's own worktree, on that column's settings (the default board uses
   Planning in `plan` mode). Your first message becomes the card's title, which

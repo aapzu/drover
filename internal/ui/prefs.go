@@ -35,6 +35,7 @@ type prefs struct {
 	HidePreview   bool           `json:"hidePreview,omitempty"`
 	NoMouse       bool           `json:"noMouse,omitempty"`
 	ShowArchived  bool           `json:"showArchived,omitempty"`
+	ShowHidden    bool           `json:"showHidden,omitempty"`
 	ShowSettings  bool           `json:"showSettings,omitempty"`
 
 	// AssistantWidth is in columns; 0 means the default share of the screen.

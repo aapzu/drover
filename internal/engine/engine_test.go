@@ -2529,3 +2529,56 @@ func TestSlotEvictionSparesKeptAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestHideTaskSurvivesMove(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := e.CreateTask("Open", "")
+	if err := e.HideTask(task.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Snapshot().Tasks[0].Hidden {
+		t.Error("moving a card unhid it")
+	}
+	if err := e.HideTask(task.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if e.Snapshot().Tasks[0].Hidden {
+		t.Error("card is still hidden")
+	}
+	if err := e.HideTask("nope", true); err == nil {
+		t.Error("hid an unknown card")
+	}
+}
+
+func TestArchiveColumnSkipsHiddenCards(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := e.CreateTask("Shown", "")
+	hidden := e.CreateTask("Hidden", "")
+	for _, task := range []*store.Task{shown, hidden} {
+		if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.HideTask(hidden.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.ArchiveColumn("done"); n != 1 {
+		t.Errorf("ArchiveColumn = %d, want only the visible card", n)
+	}
+	for _, task := range e.Snapshot().Tasks {
+		if want := task.ID == shown.ID; task.Archived != want {
+			t.Errorf("#%d archived = %v, want %v", task.Number, task.Archived, want)
+		}
+	}
+}
