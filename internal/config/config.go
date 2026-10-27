@@ -37,6 +37,7 @@ type Board struct {
 	IdleTimeoutMinutes    int           `json:"idleTimeoutMinutes,omitempty"`
 	Notifications         Notifications `json:"notifications"`
 	AutoName              bool          `json:"autoName"`
+	SplitByPR             bool          `json:"splitByPR"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -132,7 +133,7 @@ func Load(root string) (board *Board, found bool, err error) {
 		return nil, false, err
 	default:
 		found = true
-		board = &Board{Notifications: DefaultNotifications(), AutoName: true}
+		board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
 		if err := json.Unmarshal(data, board); err != nil {
 			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
 		}
@@ -208,6 +209,7 @@ func (b *Board) applyLocal(root string) error {
 		MaxConcurrent      *int            `json:"maxConcurrent"`
 		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
 		AutoName           *bool           `json:"autoName"`
+		SplitByPR          *bool           `json:"splitByPR"`
 		Notifications      json.RawMessage `json:"notifications"`
 	}
 	if err := json.Unmarshal(data, &local); err != nil {
@@ -227,6 +229,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.AutoName != nil {
 		b.AutoName = *local.AutoName
+	}
+	if local.SplitByPR != nil {
+		b.SplitByPR = *local.SplitByPR
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -401,6 +406,7 @@ func Default() *Board {
 		ArchiveDoneAfter: "7d",
 		Notifications:    DefaultNotifications(),
 		AutoName:         true,
+		SplitByPR:        true,
 		Columns: []Column{
 			{ID: "todo", Name: "Sessions", Role: "todo", Color: "#6b7280", PermissionMode: "plan"},
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing"},

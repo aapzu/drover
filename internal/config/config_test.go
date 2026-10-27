@@ -407,6 +407,34 @@ func TestLocalOverridesApplyToDefaultBoard(t *testing.T) {
 	}
 }
 
+func TestSplitByPRDefaultsOnAndLocalCanTurnItOff(t *testing.T) {
+	dir := t.TempDir()
+	board, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !board.SplitByPR {
+		t.Error("default board does not split by PR")
+	}
+
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"splitByPR":false,
+	  "columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+	if board, _, err = Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	if board.SplitByPR {
+		t.Error("shared splitByPR:false is ignored")
+	}
+
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"splitByPR":true}`), 0o644)
+	if board, _, err = Load(dir); err != nil {
+		t.Fatal(err)
+	}
+	if !board.SplitByPR {
+		t.Error("local splitByPR:true does not override the shared file")
+	}
+}
+
 func TestBrokenLocalFileIsAnError(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":`), 0o644)

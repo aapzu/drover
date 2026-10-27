@@ -794,6 +794,31 @@ case "$3" in
 esac
 `
 
+func TestSplitByPROffKeepsOneCard(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"splitByPR":false}`), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Refactor auth", "PRS")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForAll(t, e, "owner shipped to review with its first PR", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "review" && tasks[0].PR != nil
+	})
+	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].PR.Number != 1 {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v", len(tasks), tasks[0].PR)
+	}
+}
+
 func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
