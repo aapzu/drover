@@ -178,8 +178,6 @@ func (m Model) renderBoard(l layout) string {
 
 func columnSummary(c config.Column) string {
 	switch {
-	case c.IsTodo():
-		return "sessions · main checkout"
 	case c.IsDone():
 		return "finished · archive removes worktree"
 	case c.KeepAgent:
@@ -268,6 +266,9 @@ func (m Model) status(t *store.Task) string {
 	}
 	s := m.sessionFor(t)
 	if s == nil {
+		if col, _, _ := m.snap.Board.Column(t.ColumnID); col.IsAgent() {
+			return dim.Render("○ not started")
+		}
 		return ""
 	}
 	// A group card the agent isn't working for doesn't show the agent's activity
@@ -640,7 +641,7 @@ func (m Model) renderHelp() string {
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},
 		{"m", "move card to a column (↑↓ and enter, or 1-9)"},
-		{"n", "new Claude session (no branch until moved right)"},
+		{"n", "new card with an agent in the first column"},
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},

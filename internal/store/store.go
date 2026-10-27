@@ -95,10 +95,7 @@ type Session struct {
 	TurnInVisit bool `json:"turnInVisit"`
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
-	RespawnPending bool `json:"respawnPending,omitempty"`
-	// Relocate is the worktree a running scratch agent was asked to move into,
-	// until its hooks report it there.
-	Relocate           string    `json:"relocate,omitempty"`
+	RespawnPending     bool      `json:"respawnPending,omitempty"`
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
@@ -109,14 +106,6 @@ type Session struct {
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
 	HandedOff bool `json:"handedOff,omitempty"`
-	Scratch   bool `json:"scratch,omitempty"`
-	// Stay keeps a scratch session in the main checkout because its latest
-	// prompt needs no worktree. It is saved so a restart doesn't move the card.
-	Stay    bool `json:"stay,omitempty"`
-	Routing bool `json:"-"`
-	// NextRoute is the latest prompt typed while Routing, judged once the
-	// current check returns.
-	NextRoute string `json:"-"`
 	// Forked is set by a fork SessionStart; a blank startup right after it
 	// means the conversation was moved to a background session.
 	Forked         bool         `json:"forked,omitempty"`
@@ -180,8 +169,7 @@ func (p *PR) IsReview() bool { return p != nil && p.Review }
 
 // Pending is a message waiting for the session to become idle.
 type Pending struct {
-	Text     string `json:"text"`
-	Relocate string `json:"relocate,omitempty"`
+	Text string `json:"text"`
 }
 
 type LogEntry struct {

@@ -51,7 +51,7 @@ func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	os.MkdirAll(root, 0o755)
-	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: "a", Number: 1, ColumnID: "todo"}}}
+	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: "a", Number: 1, ColumnID: "planning"}}}
 	if err := state.Save(root); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 		req  inbox.Request
 		want string
 	}{
-		"unknown column": {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "nowhere"}, `unknown column "nowhere"; columns are todo, planning`},
+		"unknown column": {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "nowhere"}, `unknown column "nowhere"; columns are planning, executing`},
 		"unknown card":   {inbox.Request{Op: inbox.OpRemove, Number: 7}, "no card #7"},
 		"bad linear":     {inbox.Request{Op: inbox.OpAdd, Linear: "banana"}, "not a Linear issue key"},
 		"fine move":      {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, ""},
@@ -97,8 +97,20 @@ func TestAgentState(t *testing.T) {
 		"exited":           {session(store.StatusExited, store.ActivityIdle), "exited"},
 		"starting":         {session(store.StatusRunning, store.ActivityStarting), "starting"},
 	} {
-		if got := agentState(tc.task); got != tc.want {
+		if got := agentState(tc.task, config.Column{}); got != tc.want {
 			t.Errorf("%s: agentState = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestAgentStateOfACardWithoutASession(t *testing.T) {
+	task := &store.Task{ID: "a"}
+	if got := agentState(task, config.Column{ID: "planning", AutoSpawn: true}); got != "not started" {
+		t.Errorf("a card in an agent column without a session = %q, want not started", got)
+	}
+	for name, col := range map[string]config.Column{"plain": {ID: "review"}, "done": {ID: "done", Role: "done"}} {
+		if got := agentState(task, col); got != "" {
+			t.Errorf("a card in a %s column without a session = %q, want none", name, got)
 		}
 	}
 }
@@ -110,12 +122,12 @@ func TestAskNeedsAQuestion(t *testing.T) {
 }
 
 func TestCardsReportTheOwnersBranchAndAgent(t *testing.T) {
-	board := &config.Board{Columns: []config.Column{{ID: "todo", Name: "Todo"}, {ID: "exec", Name: "Executing"}}}
+	board := &config.Board{Columns: []config.Column{{ID: "inbox", Name: "Inbox"}, {ID: "exec", Name: "Executing"}}}
 	owner := &store.Task{ID: "a", Number: 1, ColumnID: "exec", Branch: "b/one", WorktreePath: "/wt/1", Sessions: map[string]*store.Session{
 		store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityThinking},
 	}}
 	split := &store.Task{ID: "b", Number: 2, ColumnID: "exec", GroupID: "a", PR: &store.PR{URL: "https://x/pr/2"}}
-	bare := &store.Task{ID: "c", Number: 3, ColumnID: "todo", Issue: &store.Issue{Key: "DX-1"}}
+	bare := &store.Task{ID: "c", Number: 3, ColumnID: "inbox", Issue: &store.Issue{Key: "DX-1"}}
 
 	cards := buildCards(board, []*store.Task{split, owner, bare})
 	if got := []int{cards[0].Number, cards[1].Number, cards[2].Number}; !slices.Equal(got, []int{3, 1, 2}) {

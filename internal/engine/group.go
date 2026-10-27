@@ -50,24 +50,6 @@ func workColumn(board *config.Board) (config.Column, bool) {
 	return config.Column{}, false
 }
 
-// firstAgentColumn is where a card's work starts: the first agent column.
-func firstAgentColumn(board *config.Board) (config.Column, bool) {
-	for _, c := range board.Columns {
-		if isAgentColumn(c) {
-			return c, true
-		}
-	}
-	return config.Column{}, false
-}
-
-// hasPlanColumn reports whether a plan column comes before the work column, so
-// a new session has a choice between planning and working. Called with mu held.
-func (e *Engine) hasPlanColumn() bool {
-	first, _ := firstAgentColumn(e.board)
-	work, found := workColumn(e.board)
-	return found && first.ID != work.ID
-}
-
 // lockGroup takes the lock shared by every card of id's group and returns the
 // card, its owner and the unlock function. card is nil if id is unknown.
 func (e *Engine) lockGroup(id string) (card, owner *store.Task, unlock func()) {
@@ -107,9 +89,9 @@ func (e *Engine) startRef(review bool) string {
 // With splitByPR off, further PRs are logged on the owner and get no card.
 // With review set the PRs are ones you asked the agent to review. They are
 // marked as such and use the reviewFlow's started column instead. The owner's
-// card takes the first only while it is still in To Do, and a further card
-// starts in that column straight away, before gh has confirmed the PR isn't
-// yours; if it is yours, the card is removed again.
+// card takes the first only while it is still in the first column, and a
+// further card starts in that column straight away, before gh has confirmed
+// the PR isn't yours; if it is yours, the card is removed again.
 // Called with mu held.
 func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 	members := store.Members(e.state.Tasks, owner)
@@ -122,8 +104,7 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 	if review {
 		logText, verb = "Reviewing PR #%d", "is reviewing"
 	}
-	col, _, _ := e.board.Column(owner.ColumnID)
-	if owner.PR == nil && len(members) == 1 && len(urls) > 0 && (!review || col.IsTodo()) {
+	if owner.PR == nil && len(members) == 1 && len(urls) > 0 && (!review || owner.ColumnID == e.board.FirstColumn().ID) {
 		n := gh.Number(urls[0])
 		owner.PR = &store.PR{URL: urls[0], Number: n, Review: review}
 		owner.PRMovePending = hasTarget

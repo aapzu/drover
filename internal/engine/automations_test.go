@@ -15,7 +15,7 @@ func TestWorkColumn(t *testing.T) {
 	plan := config.Column{ID: "plan", AutoSpawn: true, PermissionMode: "plan"}
 	plan2 := config.Column{ID: "plan2", AutoSpawn: true, PermissionMode: "plan"}
 	exec := config.Column{ID: "exec", AutoSpawn: true}
-	todo := config.Column{ID: "todo", Role: "todo", AutoSpawn: true}
+	inbox := config.Column{ID: "inbox"}
 	review := config.Column{ID: "review"}
 	cases := []struct {
 		name  string
@@ -23,10 +23,10 @@ func TestWorkColumn(t *testing.T) {
 		want  string
 	}{
 		{"default board", config.Default(), "executing"},
-		{"skips plan columns", &config.Board{Columns: []config.Column{todo, plan, plan2, exec}}, "exec"},
-		{"all plan", &config.Board{Columns: []config.Column{todo, plan, plan2}}, ""},
-		{"board plan mode", &config.Board{DefaultPermissionMode: "plan", Columns: []config.Column{todo, exec}}, ""},
-		{"no agent column", &config.Board{Columns: []config.Column{todo, review}}, ""},
+		{"skips plan columns", &config.Board{Columns: []config.Column{inbox, plan, plan2, exec}}, "exec"},
+		{"all plan", &config.Board{Columns: []config.Column{inbox, plan, plan2}}, ""},
+		{"board plan mode", &config.Board{DefaultPermissionMode: "plan", Columns: []config.Column{inbox, exec}}, ""},
+		{"no agent column", &config.Board{Columns: []config.Column{inbox, review}}, ""},
 	}
 	for _, c := range cases {
 		got, ok := workColumn(c.board)
@@ -36,52 +36,9 @@ func TestWorkColumn(t *testing.T) {
 	}
 }
 
-func TestFirstAgentColumn(t *testing.T) {
-	plan := config.Column{ID: "plan", AutoSpawn: true, PermissionMode: "plan"}
-	todo := config.Column{ID: "todo", Role: "todo", AutoSpawn: true}
-	review := config.Column{ID: "review"}
-	cases := []struct {
-		name  string
-		board *config.Board
-		want  string
-	}{
-		{"default board", config.Default(), "planning"},
-		{"skips non-agent columns", &config.Board{Columns: []config.Column{todo, review, plan}}, "plan"},
-		{"no agent column", &config.Board{Columns: []config.Column{todo, review}}, ""},
-	}
-	for _, c := range cases {
-		got, ok := firstAgentColumn(c.board)
-		if got.ID != c.want || ok != (c.want != "") {
-			t.Errorf("%s: firstAgentColumn = %q, %v, want %q", c.name, got.ID, ok, c.want)
-		}
-	}
-}
-
-func TestHasPlanColumn(t *testing.T) {
-	plan := config.Column{ID: "plan", AutoSpawn: true, PermissionMode: "plan"}
-	exec := config.Column{ID: "exec", AutoSpawn: true}
-	todo := config.Column{ID: "todo", Role: "todo"}
-	cases := []struct {
-		name  string
-		board *config.Board
-		want  bool
-	}{
-		{"plan before work", &config.Board{Columns: []config.Column{todo, plan, exec}}, true},
-		{"work before plan", &config.Board{Columns: []config.Column{todo, exec, plan}}, false},
-		{"only plan", &config.Board{Columns: []config.Column{todo, plan}}, false},
-		{"no agent column", &config.Board{Columns: []config.Column{todo}}, false},
-	}
-	for _, c := range cases {
-		e := &Engine{board: c.board}
-		if got := e.hasPlanColumn(); got != c.want {
-			t.Errorf("%s: hasPlanColumn = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
 func TestRunScriptAutomation(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{"onEnter":[
 	    {"name":"Mark","type":"run_script","script":"printf '%s|%s' {{title}} \"$DROVER_TASKNUMBER\" > marker"},
 	    {"name":"Break","type":"run_script","script":"echo boom; exit 3"}]}},
@@ -104,7 +61,7 @@ func TestRunScriptAutomation(t *testing.T) {
 
 func TestNotifyRunsInColumnWithoutAgent(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"review","name":"In review","automations":{"onEnter":[
 	    {"name":"Ping","type":"notify","title":"{{title}}","body":"now in {{toColumn}}"},
 	    {"name":"Talk","type":"send_message","message":"hello"}]}},
@@ -125,7 +82,7 @@ func TestNotifyRunsInColumnWithoutAgent(t *testing.T) {
 
 func TestConditionGatesTurnEndRows(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{"onTurnEnd":[
 	    {"name":"Never","type":"move_to_column","targetColumn":"Done","condition":"The agent gave up"},
 	    {"name":"Always","type":"move_to_column","targetColumn":"Review","condition":"ALWAYS true"}]}},
@@ -144,7 +101,7 @@ func TestConditionGatesTurnEndRows(t *testing.T) {
 
 func TestConditionScriptGatesEnterRows(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{"onEnter":[
 	    {"name":"Titled","type":"run_script","script":"echo yes > titled","conditionScript":"test \"$DROVER_TITLE\" = {{title}}"},
 	    {"name":"Blocked","type":"run_script","script":"echo yes > blocked","conditionScript":"exit 1"},
@@ -173,7 +130,7 @@ func TestConditionScriptGatesEnterRows(t *testing.T) {
 
 func TestConditionScriptGatesTurnEndRows(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{
 	    "onEnter":[{"name":"Mark","type":"run_script","script":"touch ready"}],
 	    "onTurnEnd":[
@@ -211,7 +168,7 @@ func TestConditionScriptGatesTurnEndRows(t *testing.T) {
 
 func TestErroredConditionScriptNotifiesForMove(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"done","name":"Done","role":"done"}]}`)
 	task := e.CreateTask("Do the work", "")
 	for len(e.Notices()) > 0 {
@@ -247,7 +204,7 @@ func TestErroredConditionScriptNotifiesForMove(t *testing.T) {
 
 func TestConditionScriptSeesAgentReply(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
-	  {"id":"todo","name":"To Do","role":"todo"},
+	  {"id":"backlog","name":"Backlog"},
 	  {"id":"done","name":"Done","role":"done"}]}`)
 	task := e.CreateTask("Do the work", "")
 	row := config.Automation{Type: "notify", ConditionScript: `printf %s {{agentReply}} | grep -q DONE && test "$DROVER_AGENTREPLY" = "all DONE"`}

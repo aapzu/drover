@@ -63,12 +63,12 @@ func (e *Engine) DiscoverSessions(limit int) (found []claude.Found, more bool) {
 }
 
 // importColumn puts a running agent in the work column, so the card shows
-// where the work is; others go to To Do.
+// where the work is; others go to the first column.
 func importColumn(board *config.Board, running bool) config.Column {
 	if c, ok := workColumn(board); running && ok {
 		return c
 	}
-	return board.TodoColumn()
+	return board.FirstColumn()
 }
 
 // ImportSessions adds a card per conversation not already on the board and
@@ -278,8 +278,8 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 	return out
 }
 
-// ImportIssues adds a To Do card per issue not already on the board and
-// returns the cards it added.
+// ImportIssues adds a card per issue not already on the board, in the first
+// column without an agent, and returns the cards it added.
 func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
 	var added []*store.Task
 	for _, i := range issues {
@@ -300,7 +300,7 @@ func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
 				Number:    e.state.NextNumber,
 				Title:     i.Title,
 				Prompt:    prompt,
-				ColumnID:  e.board.TodoColumn().ID,
+				ColumnID:  e.board.FirstColumn().ID,
 				Branch:    i.BranchName,
 				CreatedAt: now,
 				UpdatedAt: now,

@@ -338,9 +338,10 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		moveOffer(board) +
 		"`" + cmd + " move <number> <column>` moves a card; columns are ids or names, and an unknown one is refused with the valid ones. " +
 		"`add <title> [-p prompt] [-c column]`, `edit <number> [--title t] [--prompt p]` and `rm <number>` change cards. " +
+		"`add` puts the card in the first column and starts no agent: its `agent` reads `not started` until the user starts one. " +
 		"A move into an agent column starts an agent, and into a column without one stops it.\n" +
-		"Change the board only when asked. Before `rm`, or a move to the To Do column, say what you are about to do and wait for the user to agree: " +
-		"a move to To Do deletes the card's worktree even with uncommitted changes. `rm` refuses while the worktree has uncommitted changes; " +
+		"Change the board only when asked. Before `rm`, say what you are about to do and wait for the user to agree. " +
+		"`rm` refuses while the worktree has uncommitted changes; " +
 		"report that instead of working around it, and never pass --force.\n" +
 		"Answer briefly, in plain text without markdown headings, and always write cards as #<number> and their title."
 }
@@ -386,8 +387,6 @@ func describeColumns(b *config.Board) string {
 	for i, c := range b.Columns {
 		what := "no agent runs here"
 		switch {
-		case c.IsTodo():
-			what = "no agent; a card moved here loses its worktree and conversation"
 		case c.IsDone():
 			what = "finished cards; the agent stops and the worktree is kept until the card is archived"
 		case c.KeepAgent:

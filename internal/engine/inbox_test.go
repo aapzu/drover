@@ -59,10 +59,10 @@ func TestCLIRequestsChangeTheOpenBoard(t *testing.T) {
 	e, root := running(t)
 
 	res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr("Fix login"), Prompt: ptr("It is broken")})
-	if res.Error != "" || res.Number != 1 || res.Column != "To Do" {
+	if res.Error != "" || res.Number != 1 || res.Column != "Planning" {
 		t.Fatalf("add = %+v", res)
 	}
-	if c := cardNumbered(e, 1); c == nil || c.Title != "Fix login" || c.Prompt != "It is broken" || c.ColumnID != "todo" {
+	if c := cardNumbered(e, 1); c == nil || c.Title != "Fix login" || c.Prompt != "It is broken" || c.ColumnID != "planning" || len(c.Sessions) != 0 {
 		t.Fatalf("card after add = %+v", c)
 	}
 
@@ -126,7 +126,7 @@ func TestCLIRequestErrorsComeBackAndChangeNothing(t *testing.T) {
 			t.Errorf("%s: error = %q, want %q", name, res.Error, tc.want)
 		}
 	}
-	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].ColumnID != "todo" {
+	if tasks := e.Snapshot().Tasks; len(tasks) != 1 || tasks[0].ColumnID != "planning" {
 		t.Errorf("failed requests changed the board: %+v", tasks)
 	}
 }
@@ -167,16 +167,16 @@ func TestCLIEditChangesOnlyWhatItIsGiven(t *testing.T) {
 	}
 }
 
-func TestCLIAddByColumnNameStaysInTodo(t *testing.T) {
+func TestCLIAddToTheFirstColumnStartsNoAgent(t *testing.T) {
 	e, root := running(t)
-	for _, column := range []string{"todo", "to do"} {
-		if res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr(column), Column: column}); res.Error != "" || res.Column != "To Do" {
+	for _, column := range []string{"planning", "PLANNING"} {
+		if res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr(column), Column: column}); res.Error != "" || res.Column != "Planning" {
 			t.Fatalf("add -c %q = %+v", column, res)
 		}
 	}
 	for _, c := range e.Snapshot().Tasks {
-		if c.ColumnID != "todo" || len(c.Sessions) != 0 {
-			t.Errorf("card %q left To Do or started: %+v", c.Title, c)
+		if c.ColumnID != "planning" || len(c.Sessions) != 0 {
+			t.Errorf("card %q left Planning or started: %+v", c.Title, c)
 		}
 	}
 }
