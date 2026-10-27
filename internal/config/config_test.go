@@ -435,7 +435,7 @@ func TestSplitByPRDefaultsOnAndLocalCanTurnItOff(t *testing.T) {
 		t.Error("default board does not split by PR")
 	}
 
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	if board, _, err = Load(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestSplitByPRDefaultsOnAndLocalCanTurnItOff(t *testing.T) {
 	}
 
 	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"splitByPR":false,
-	  "columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+	  "columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
 	if board, _, err = Load(dir); err != nil {
 		t.Fatal(err)
 	}
