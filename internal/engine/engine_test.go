@@ -1121,11 +1121,11 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
 	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
 	t.Setenv("FAKE_GH", ghFile)
-	pr := func(reviews string) {
-		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":"OPEN","headRefOid":"aaa",
-		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, reviews)), 0o644)
+	pr := func(head, reviews string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":"OPEN","headRefOid":%q,
+		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, head, reviews)), 0o644)
 	}
-	pr("")
+	pr("aaa", "")
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1139,14 +1139,17 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 	}
 	waitFor(t, e, "the PR to ship to In review", func(t *store.Task) bool { return t.ColumnID == "review" })
 
-	pr(`{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`)
+	review := `{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`
+	pr("aaa", review)
 	waitFor(t, e, "the card to go back to Executing", func(t *store.Task) bool { return t.ColumnID == "exec" })
 	waitFor(t, e, "the proposal message", func(*store.Task) bool {
 		data, _ := os.ReadFile(log)
 		return strings.Contains(string(data), "Don't change anything")
 	})
-	if c := e.Snapshot().Tasks[0]; c.PR.FixFrom != "" {
-		t.Errorf("a proposal armed the fix tracking: %q", c.PR.FixFrom)
+	pr("bbb", review)
+	time.Sleep(600 * time.Millisecond)
+	if c := e.Snapshot().Tasks[0]; c.ColumnID != "exec" {
+		t.Errorf("card went to %s after a push the proposal didn't ask for", c.ColumnID)
 	}
 }
 

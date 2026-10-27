@@ -98,7 +98,7 @@ const (
 // Proposes reports whether the agent presents review fixes before applying them.
 func (f *PRFlow) Proposes() bool {
 	if f == nil {
-		return false
+		return true
 	}
 	switch f.ChangesRequestedMode {
 	case ChangesModePropose:
@@ -111,12 +111,10 @@ func (f *PRFlow) Proposes() bool {
 
 // ChangesMessage is what the agent is sent when a review requests changes.
 func (f *PRFlow) ChangesMessage() string {
-	switch {
-	case f == nil:
-		return fixChangesMessage
-	case f.ChangesRequestedMessage != "":
+	if f != nil && f.ChangesRequestedMessage != "" {
 		return f.ChangesRequestedMessage
-	case f.Proposes():
+	}
+	if f.Proposes() {
 		return proposeChangesMessage
 	}
 	return fixChangesMessage

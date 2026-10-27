@@ -278,8 +278,8 @@ func TestChangesRequestedMode(t *testing.T) {
 		t.Error("default board does not propose")
 	}
 	var nilFlow *PRFlow
-	if nilFlow.Proposes() || nilFlow.ChangesMessage() != fixChangesMessage {
-		t.Error("a missing prFlow does not fix")
+	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
+		t.Error("a missing prFlow does not propose")
 	}
 	dir := t.TempDir()
 	for mode, valid := range map[string]bool{"propose": true, "fix": true, "auto": false} {

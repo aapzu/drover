@@ -363,6 +363,7 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		if e.inColumn(card, flow.Opened) {
 			return prMove{to: e.flowColumn(flow.ChangesRequested), message: flow.ChangesMessage(),
 				onMoved: func() {
+					pr.FixFrom = ""
 					if !flow.Proposes() {
 						pr.FixFrom = info.HeadSHA
 					}
