@@ -28,3 +28,18 @@ func TestAgentSessionPrefersMainThenAnyRunning(t *testing.T) {
 		t.Errorf("with nothing running got %+v", got)
 	}
 }
+
+func TestSessionMovedFrom(t *testing.T) {
+	for _, tc := range []struct {
+		cwd, dir string
+		want     bool
+	}{
+		{"", "/wt", false},
+		{"/wt", "/wt", false},
+		{"/root", "/wt", true},
+	} {
+		if got := (&Session{Cwd: tc.cwd}).MovedFrom(tc.dir); got != tc.want {
+			t.Errorf("Cwd %q MovedFrom(%q) = %v, want %v", tc.cwd, tc.dir, got, tc.want)
+		}
+	}
+}

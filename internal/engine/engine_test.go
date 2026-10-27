@@ -660,8 +660,7 @@ func TestPlanExitRestartsTheAgentInAWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.ColumnID == "exec" && t.WorktreePath != "" && s != nil && s.Status == store.StatusRunning && s.Cwd == t.WorktreePath
+		return t.ColumnID == "exec" && inWorktree(t)
 	})
 	if got.WorktreePath == root {
 		t.Errorf("worktree is the project root %s", root)
@@ -669,6 +668,7 @@ func TestPlanExitRestartsTheAgentInAWorktree(t *testing.T) {
 }
 
 func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
@@ -690,13 +690,19 @@ func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.
 		return s != nil && s.Started && s.Activity == store.ActivityIdle
 	})
 	id := started.Sessions[store.MainSession].AgentSessionID
+	rootTranscript := claude.TranscriptPath(id, root)
+	os.MkdirAll(filepath.Dir(rootTranscript), 0o755)
+	os.WriteFile(rootTranscript, []byte("{}\n"), 0o644)
 	if err := e.Move(task.ID, "review", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	got := waitFor(t, e, "the agent to resume in the worktree", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.WorktreePath != "" && s != nil && s.Status == store.StatusRunning && s.Cwd == t.WorktreePath
-	})
+	got := waitFor(t, e, "the agent to resume in the worktree", inWorktree)
+	if _, err := os.Stat(claude.TranscriptPath(id, got.WorktreePath)); err != nil {
+		t.Errorf("the conversation did not follow the agent into the worktree: %v", err)
+	}
+	if _, err := os.Stat(rootTranscript); !os.IsNotExist(err) {
+		t.Errorf("the transcript is still under the project root: %v", err)
+	}
 	if s := got.Sessions[store.MainSession]; s.AgentSessionID != id {
 		t.Errorf("session id changed from %s to %s; the conversation should resume", id, s.AgentSessionID)
 	}

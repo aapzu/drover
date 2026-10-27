@@ -1,6 +1,7 @@
 // Package engine owns the board state and implements the transition
-// rules: moving a card creates its worktree, starts or resumes its agent, and
-// runs the column's automations.
+// rules: moving a card into an agent column creates its worktree unless the
+// column skips it, starts or resumes its agent, and runs the column's
+// automations.
 //
 // Locking: mu guards state and board and is only held briefly. Each task also
 // has its own lock, held for a whole transition, so slow work (git, tmux,
@@ -404,7 +405,7 @@ func (e *Engine) NewSession() (*store.Task, error) {
 }
 
 // discardCard deletes a card that was never used, with its worktree and its
-// branch, and tells you when the branch stays. A worktree whose setup failed
+// branch if it has them, and tells you when the branch stays. A worktree whose setup failed
 // before it was recorded on the card is removed too. The caller holds the
 // group lock.
 func (e *Engine) discardCard(t, owner *store.Task) error {
@@ -850,16 +851,16 @@ func (e *Engine) SuspendAll() []Handoff {
 		if e.owner(t) != t {
 			continue
 		}
-		dir := t.WorktreePath
-		if dir == "" {
-			dir = e.Root
-		}
 		active := false
 		for _, s := range t.Sessions {
 			if s.Status != store.StatusRunning && s.Status != store.StatusQueued {
 				continue
 			}
 			active = true
+			dir := s.Cwd
+			if dir == "" {
+				dir = e.dirOf(t)
+			}
 			h := Handoff{Number: t.Number, Title: t.Title, Dir: dir}
 			if s.Started {
 				h.SessionID = s.AgentSessionID
@@ -987,8 +988,7 @@ func (e *Engine) moveConversation(t *store.Task, path, worktree string) {
 
 // carryTranscript moves a conversation still recorded under the main checkout,
 // such as one from a noWorktree column or from before the To Do column was
-// removed, next to worktree so
-// `claude --resume` finds it there.
+// removed, next to worktree so `claude --resume` finds it there.
 func (e *Engine) carryTranscript(t *store.Task, key, worktree string) {
 	e.mu.Lock()
 	id := t.Sessions[key].AgentSessionID
@@ -1243,8 +1243,8 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 	return stopped, leftRunning
 }
 
-// activate makes sure the agent for col is running in the task's worktree:
-// an existing session is kept (or respawned when the model changes), a missing
+// activate makes sure the agent for col is running in the task's worktree, or
+// in the project root for a noWorktree column without one: an existing session is kept (or respawned when the model changes), a missing
 // one is resumed or started, then the enter group runs. card is the card being
 // moved; the session belongs to its group's owner and now follows card. evict
 // lets a start you asked for suspend the longest-idle agent when every slot is
@@ -1286,13 +1286,11 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	e.mu.Unlock()
 	if stale != "" {
 		tmux.Stop(stale)
+		e.logf(t, "Restarting the agent in its worktree: it has no conversation to resume yet")
 	}
 	if busy {
 		if interrupt {
-			unlock := e.lockTyping(name)
-			err := tmux.SendKey(name, "Escape")
-			unlock()
-			if err != nil {
+			if err := e.interrupt(name); err != nil {
 				e.logf(t, "Couldn't interrupt the turn to switch to %s's settings: %v", col.Name, err)
 			} else {
 				e.logf(t, "Interrupting the turn to switch to %s's settings", col.Name)
@@ -1605,6 +1603,11 @@ func (e *Engine) sendPending(t *store.Task, key string, p store.Pending) {
 			t.AddLog(fmt.Sprintf("Sending message failed: %v", err))
 		}
 	})
+}
+
+func (e *Engine) interrupt(name string) error {
+	defer e.lockTyping(name)()
+	return tmux.SendKey(name, "Escape")
 }
 
 // lockTyping serializes typing into the tmux session name.

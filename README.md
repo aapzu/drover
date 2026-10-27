@@ -129,7 +129,7 @@ Each column takes these fields:
 | `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
 | `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
-| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card to a column without it creates the worktree and resumes the conversation there. |
+| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card into an agent column without it creates the worktree and resumes the conversation there. Use it only for agents that don't edit files, such as plan mode. |
 | `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |
 
 A model or effort change respawns the agent with `--resume`. A permission

@@ -42,6 +42,11 @@ func TestNewCardsLandInTheFirstColumnWithoutAnAgent(t *testing.T) {
 	}
 }
 
+func inWorktree(t *store.Task) bool {
+	s := t.Sessions[store.MainSession]
+	return t.WorktreePath != "" && s != nil && s.Status == store.StatusRunning && s.Cwd == t.WorktreePath
+}
+
 const planningWithoutWorktree = `{"columns":[
   {"id":"planning","name":"Planning","autoSpawn":true,"permissionMode":"plan","noWorktree":true},
   {"id":"exec","name":"Executing","autoSpawn":true},
@@ -94,10 +99,7 @@ func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	got := waitFor(t, e, "the agent to run in the worktree", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return t.WorktreePath != "" && s != nil && s.Status == store.StatusRunning && s.Cwd == t.WorktreePath
-	})
+	got := waitFor(t, e, "the agent to run in the worktree", inWorktree)
 	if got.WorktreePath == root {
 		t.Errorf("worktree is the project root %s", root)
 	}
