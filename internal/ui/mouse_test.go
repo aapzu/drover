@@ -56,6 +56,20 @@ func TestHorizontalWheelOverPreviewDoesNotScroll(t *testing.T) {
 	}
 }
 
+func TestHorizontalWheelOverBoardKeepsSelection(t *testing.T) {
+	m := testModel(120, 40, 2, 3)
+	m.col = 1
+	want := m.current().ID
+	y := m.layout().bodyY + columnHeaderHeight + 1
+
+	for _, button := range []tea.MouseButton{tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight} {
+		next, _ := m.Update(tea.MouseMsg{X: 1, Y: y, Action: tea.MouseActionPress, Button: button})
+		if got := next.(Model).current().ID; got != want {
+			t.Fatalf("button %v moved selection from %s to %s", button, want, got)
+		}
+	}
+}
+
 func TestWheelOverBoardMovesSelection(t *testing.T) {
 	m := testModel(120, 40, 2, 3)
 	m.col = 1
