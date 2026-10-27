@@ -720,6 +720,7 @@ func (m *Model) attach(id string) (tea.Cmd, bool) {
 	m.attached = id
 	m.syncFocus()
 	return tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+		tmux.Detached(name)
 		return attachDoneMsg{id: id, agent: true, paneGone: !tmux.Has(name), err: err}
 	}), true
 }
@@ -943,6 +944,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			id := t.ID
 			return m, tea.ExecProcess(tmux.AttachCommand(name), func(err error) tea.Msg {
+				tmux.Detached(name)
 				return attachDoneMsg{id: id, err: err}
 			})
 		}

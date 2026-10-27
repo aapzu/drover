@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -216,9 +217,22 @@ func Paste(name, text string) error {
 	return err
 }
 
+// attachedMu guards attached: sessions with a terminal attached, which Resize
+// must leave alone or the window stays at the board's size.
+var (
+	attachedMu sync.Mutex
+	attached   = map[string]bool{}
+)
+
 // Resize pins the window to the size the board draws it at so the board shows
-// the session's whole screen. It does nothing when the size already matches.
+// the session's whole screen. It does nothing when the size already matches or
+// a terminal is attached.
 func Resize(name string, width, height int) error {
+	attachedMu.Lock()
+	defer attachedMu.Unlock()
+	if attached[name] {
+		return nil
+	}
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
 	if err == nil && strings.TrimSpace(size) == fmt.Sprintf("%dx%d", width, height) {
 		return nil
@@ -228,11 +242,21 @@ func Resize(name string, width, height int) error {
 }
 
 // AttachCommand returns a command that attaches the terminal to the session;
-// DetachKey hands control back.
+// DetachKey hands control back, and Detached must be called once it exits.
 func AttachCommand(name string) *exec.Cmd {
+	attachedMu.Lock()
+	defer attachedMu.Unlock()
+	attached[name] = true
 	// Undo Resize so the window follows the attached terminal.
 	run("set-option", "-w", "-t", "="+name+":", "window-size", "latest")
 	return command("attach-session", "-t", "="+name)
+}
+
+// Detached lets Resize pin the session again after its terminal has exited.
+func Detached(name string) {
+	attachedMu.Lock()
+	defer attachedMu.Unlock()
+	delete(attached, name)
 }
 
 // UserServer holds the tmux flags that select your own tmux server, where
