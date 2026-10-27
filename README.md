@@ -5,12 +5,11 @@ starts.
 
 ```
  ▦ drover     my-app on main                                              ⠧ 1 working  ◆ 1 need you
- 1 Sessions 2           2 Planning 1             3 Executing 1            4 Code Review 0
- sessions · main check… plan · opus · xhigh      auto · opus · xhigh · ⚡2 auto · ⚡2
+ 1 Planning 1            2 Executing 1           3 Code Review 1
+ plan · opus · xhigh     auto · opus · xhigh · ⚡2 auto · ⚡2
 ╭──────────────────────╮╭──────────────────────╮╭──────────────────────╮
 │ #3 Upgrade React     ││ #1 Fix the login bug ││ #2 Add dark mode     │
-│                      ││                      ││ to settings page     │
-│                      ││ ◆ needs you fix-the… ││ ⠧ working add-dark…  │
+│ ○ not started        ││ ◆ needs you fix-the… ││ ⠧ working add-dark…  │
 ╰──────────────────────╯╰──────────────────────╯╰──────────────────────╯
 ╭─ #1 Fix the login bug · enter to attach, Ctrl-q inside to return ───────────────────────────╮
 │ live view of the agent's terminal …                                                          │
@@ -45,7 +44,7 @@ drover
 | `←→` / `h l`, `↑↓` / `j k` | select column / card |
 | `H` / `L` (or shift+←→) | move card to previous / next column |
 | `m`, then ↑↓ and enter, or `1`–`9` | move card to a column |
-| `n`, `e`, `x` | new Claude session (attaches right away), edit, delete task |
+| `n`, `e`, `x` | new card with an agent in the first column (attaches right away), edit, delete task |
 | `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
 | `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
 | `v` | show or hide archived cards |
@@ -84,21 +83,26 @@ A board is a row of columns defined in `drover.json`. Each card sits in one of
 them, and where it sits decides what happens to its agent and worktree. Columns
 live in `drover.json` only; `drover.local.json` can't change them.
 
-Every column is one of four kinds:
+Every column is one of three kinds:
 
 | Kind | Set with | Agent | Enter automations | Worktree |
 | --- | --- | --- | --- | --- |
-| **To Do** | `"role": "todo"` | none; a running agent stops and the conversation resets once the whole group is back here | none | removed when the group returns here |
 | **Agent** | `"autoSpawn": true` | started or resumed with the column's settings | every row runs | created on entry if missing |
 | **Plain** | neither | none; a running agent is suspended, unless `keepAgent` is set | `send_message` is skipped, `run_script` and `notify` run | kept |
 | **Done** | `"role": "done"` | suspended | none | kept until the card is archived |
 
-- **To Do** is where new sessions and imported past sessions land. Without a
-  `todo` role the first column is To Do. Its agent defaults to `haiku`
-  through `modelOverride`. `autoSpawn` does nothing on To Do or Done.
 - **Agent** columns do the work. Moving a card in starts its agent, and a
-  card going back to To Do or Done, or to a plain column, suspends it.
-  Turn-end automations run after each of its turns.
+  card going to Done or to a plain column suspends it. Turn-end automations
+  run after each of its turns. A move never removes a worktree or resets the
+  conversation; deleting or archiving a card does.
+- **The first column** is where new cards land: `drover add`, the assistant,
+  Linear issues and imported past sessions. They start no agent. In the default
+  board that is Planning, where a card reads `○ not started` until you press
+  `enter` or `r` on it, or move it to another agent column. A card whose agent
+  was stopped reads `⏸ suspended` or `■ exited` instead, and resumes its
+  conversation when started. A card that hasn't started holds no slot toward
+  `maxConcurrent`; starting it takes one, suspending the longest-idle agent
+  if all are busy or queueing behind them.
 - **Plain** columns are for waiting, such as "In review" or "Verify in
   develop". Their automations can ping you with `notify` or run a check with
   `run_script`, for example `go test ./...` as a `conditionScript` on a
@@ -116,10 +120,10 @@ Each column takes these fields:
 | --- | --- |
 | `id` | Unique. Used in `drover.json` targets such as `prFlow` and `planExitTarget`. |
 | `name` | Shown on the board. Targets and the CLI also accept it, case-insensitively. |
-| `role` | `todo` or `done`. Leave it out for other columns. |
+| `role` | `done`. Leave it out for other columns. A `todo` role from older versions is dropped when the board loads, and its cards move to the first column. |
 | `color` | Header color, such as `"#3b82f6"`. |
 | `autoSpawn` | Makes an agent column. |
-| `keepAgent` | On a plain column: keeps a running agent when a card moves in, instead of suspending it. Not allowed with `autoSpawn`, To Do or Done. |
+| `keepAgent` | On a plain column: keeps a running agent when a card moves in, instead of suspending it. Not allowed with `autoSpawn` or Done. |
 | `permissionMode` | Passed as `claude --permission-mode`. Without it, the board's `defaultPermissionMode`, or Claude Code's own default. |
 | `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
@@ -134,7 +138,6 @@ every column.
 ```json
 {
   "columns": [
-    { "id": "todo", "name": "Sessions", "role": "todo" },
     { "id": "planning", "name": "Planning", "autoSpawn": true, "permissionMode": "plan", "planExitTarget": "Executing" },
     { "id": "executing", "name": "Executing", "autoSpawn": true },
     { "id": "in-review", "name": "In review",
@@ -150,7 +153,6 @@ open, and to Done once it merges:
 
 | Column | Kind |
 | --- | --- |
-| Sessions | To Do |
 | Planning | Agent, in `plan` mode; approved plans go to Executing |
 | Executing | Agent |
 | Waiting for me | Agent |
@@ -163,7 +165,7 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 
 - **Shared board file.** Columns come from `drover.json` at the repo root, so
   you and your teammates share one board. With
-  no file it uses a built-in default (Sessions, Planning, Executing,
+  no file it uses a built-in default (Planning, Executing,
   Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
   `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
@@ -175,31 +177,21 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   board uses `7d`; with the setting missing from your `drover.json` nothing is
   archived automatically. `drover.local.json` doesn't read it. Archiving
   removes the card's worktree; a worktree shared by several cards goes once all
-  of them are archived or in To Do. `A` asks before deleting uncommitted
+  of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
-- **Sessions first, branches later.** `n` opens a Claude session in the main
-  checkout, on a card in the first (To Do role) column. The session runs Haiku
-  unless that column sets a `modelOverride`, and in that column's
-  `permissionMode` when it sets one (the default board uses `plan`).
-  Your first message
-  becomes the card's title, which Claude Haiku then shortens to a few words
-  unless `autoName` is `false`. Unless it stays (below), the card then moves to
-  the first agent column (Planning by default), which creates its worktree and
-  branch and resumes the same conversation there on that column's model,
-  restarting the agent; if you're attached, you follow it. Claude Haiku first
-  checks each message you type while the session is still in the main checkout
-  to decide where it goes: a task that changes no files, such as a question or
-  a look around the code, stays there and the card stays in To Do, until a
-  later message needs a worktree, the agent edits a file or you move the card.
-  On boards with a plan column, tasks that need no plan, such as a small fix or
-  "just do it", go to the first agent column that isn't a plan column. When
-  it's unsure or fails, the card gets a worktree and plans, where there is a
-  plan column. Move the card yourself to go elsewhere sooner.
+- **New cards.** `n` adds a card to the first column and starts its agent in
+  the card's own worktree, on that column's settings (the default board uses
+  Planning in `plan` mode). Your first message becomes the card's title, which
+  Claude Haiku then shortens to a few words unless `autoName` is `false`. The
+  branch is named from the card, so a card started with `n` gets `task-<id8>`.
+  Leaving the session without typing anything deletes the card, its worktree
+  and that unused branch.
 - **Worktree per task.** Entering an agent column creates
   `.drover/worktrees/drover-<N>` on branch `<slug>-<id8>` from the base branch.
-  To Do removes the worktree and resets the conversation. Done suspends the
-  agent and keeps the worktree; archiving the card removes it, asking first if
-  there are uncommitted changes. Branches are never deleted.
+  Moving a card never removes it: Done suspends the agent and keeps the
+  worktree, and archiving the card removes it, asking first if there are
+  uncommitted changes. Branches are never deleted, except the unused one of a
+  new session left empty.
 - **Worktree setup.** `copyFiles` lists paths git doesn't track, such as
   `.env`, to copy from the main checkout into each new worktree. They never
   count as uncommitted changes. `initScript` then runs with `sh -c` in the new
@@ -263,7 +255,7 @@ These settings work in `drover.json` and, for you alone, in
 A column's `automations` has two lists of rows. `onEnter` runs when a card
 enters the column, `onTurnEnd` each time the agent there finishes a turn. Rows
 run top to bottom, and a failing row is logged on the card without stopping
-the rest; `move_to_column` ends the list either way. Nothing runs when a card enters To Do or Done.
+the rest; `move_to_column` ends the list either way. Nothing runs when a card enters Done.
 
 | Type | Does | Fields |
 | --- | --- | --- |
@@ -340,8 +332,7 @@ the same color on every card of the group.
   that column's settings and runs its automations with the card's PR. Turn-end
   automations act only on the card the agent is working for.
 - The agent stops once no card in the group is in an agent column. The
-  worktree goes once every card is archived or in To Do, and the conversation
-  resets once every card is back in To Do.
+  worktree goes once every card is archived.
 - Deleting a card removes only that card while others remain.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
@@ -394,8 +385,8 @@ same sentence, unless it is negated ("don't review") or reads "review
 comments". `gh` then confirms the PR isn't yours. If it is, drover forgets it
 again.
 
-A session that is still in To Do takes the PR on its own card. One already
-working on something gets a separate card for it.
+A session that is still in the first column takes the PR on its own card. One
+already working on something gets a separate card for it.
 
 drover itself never posts a review. Nothing stops the agent from posting if you
 ask it to, for example with `--comment`.
@@ -416,7 +407,7 @@ same column targets as `prFlow`:
 ```
 
 - **started:** where the card goes once the agent's turn ends and gh has
-  confirmed the PR isn't yours, from To Do or an agent column.
+  confirmed the PR isn't yours, from an agent column.
 - **reviewed:** where it goes, from any column, when a review of yours shows up
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
@@ -444,10 +435,11 @@ selected. `a` does the same for every loaded session.
 - **Running agents** land in the first agent column. The card mirrors the
   agent's working or idle status, and the preview shows its latest reply.
   While it runs in its own terminal, the board won't start a second copy of
-  it, and moves to To Do or Done are refused. Once you exit it there, press
+  it, and moves to Done are refused. Once you exit it there, press
   `r` and the board resumes the conversation with `claude --resume` in the
   agent's original directory.
-- **Past sessions** land in To Do. Moving one into an agent column resumes it.
+- **Past sessions** land in the first column. Press `enter` or `r` on one, or
+  move it into an agent column, to resume it.
 - **Sessions that opened several PRs** are split into a card per PR as they
   are imported; the first PR stays on the session's own card.
 - **Board conversations you resume yourself**, for example with the commands
@@ -463,7 +455,7 @@ Set `LINEAR_API_KEY` to a personal API key (Linear → Settings → Security &
 access). Then `I`, followed by `tab`, lists your open assigned issues. `/`
 fetches any issue by key or URL.
 
-- Imported issues land in To Do. The issue description becomes the prompt.
+- Imported issues land in the first column, with no agent. The issue description becomes the prompt.
 - The worktree uses Linear's branch name (for example
   `you/dx-123-fix-login`), so pull requests link back to the issue.
 - `{{issueKey}}` and `{{issueUrl}}` work in automations.
@@ -489,8 +481,9 @@ drover ask "which cards are waiting on review?"
   write the `#`). Columns are ids or names. A prompt of `-` is read from stdin.
 - Without `--force`, `rm` fails when the card's worktree has uncommitted
   changes. `--force` discards them. The branch is kept.
-- `add -c` into an agent column starts the agent, like a move. If that fails the
-  card stays in To Do and the command says why.
+- `add` puts the card in the first column and starts no agent. `add -c` into
+  another agent column starts the agent, like a move. If that fails the card
+  stays in the first column and the command says why.
 - `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The
   title and prompt come from the issue, and one already on the board is refused.
 - The open board applies requests one at a time and the command prints the
@@ -502,8 +495,8 @@ drover ask "which cards are waiting on review?"
 - `list`, `add`, `move`, `edit`, `rm` and `ask` are commands, so a directory
   with one of those names needs `./`.
 - `list --json` also gives each card's `branch`, `worktree` and `agent` state
-  (`working`, `idle`, `needs you`, `starting`, `queued`, `suspended`, `exited`),
-  left out when empty. Cards that share one agent report the same three.
+  (`not started`, `working`, `idle`, `needs you`, `starting`, `queued`,
+  `suspended`, `exited`), left out when empty. Cards that share one agent report the same three.
 - `list --json` gives a card's pull request as `pr`: its `url`, `number`,
   `state` (`open`, `merged`, `closed`, or `unknown` until gh has answered),
   `reviewDecision` (`approved` or `changes requested`), `released`, `reviewing`
@@ -542,9 +535,9 @@ What the assistant may do is the same in the panel and in `drover ask`:
 
 - Besides read-only git (below), it may only run `drover list`, `move`, `add`,
   `edit` and `rm`, and never `--force`. Anything else is denied without asking
-  (`dontAsk` mode in the panel). It is told to ask you before deleting a card or
-  moving one to To Do, which removes its worktree. In a one-off `drover ask`
-  you answer that in the next question.
+  (`dontAsk` mode in the panel). It is told to ask you before deleting a card,
+  which removes its worktree. In a one-off `drover ask` you answer that in the
+  next question.
 - The repo is read-only to it, enforced in the tool permissions: Read, Grep and
   Glob, which Claude limits to the repo, and the git subcommands `status`,
   `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,

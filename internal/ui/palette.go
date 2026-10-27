@@ -17,7 +17,7 @@ const paletteKey = "ctrl+k"
 type paletteCommand struct{ name, key string }
 
 var paletteCommands = []paletteCommand{
-	{"New session", "n"},
+	{"New card with an agent", "n"},
 	{"Attach to the agent's terminal, starting it if needed", "enter"},
 	{"Type into the agent from the preview", "tab"},
 	{"Send a message to the agent", "s"},

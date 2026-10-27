@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,8 +37,11 @@ func TestLoadSampleBoard(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Load: found=%v err=%v", found, err)
 	}
-	if len(board.Columns) != 5 || board.TodoColumn().Name != "To Do" {
+	if len(board.Columns) != 4 || board.FirstColumn().Name != "Planning" {
 		t.Fatalf("unexpected columns: %+v", board.Columns)
+	}
+	if !slices.Equal(board.LegacyTodo, []string{"e6350e8a", "todo"}) {
+		t.Errorf("LegacyTodo = %v, want the dropped To Do column", board.LegacyTodo)
 	}
 	if board.DefaultBaseBranch != "develop" {
 		t.Errorf("local override not applied: %q", board.DefaultBaseBranch)
@@ -94,7 +99,7 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 func TestReviewFlow(t *testing.T) {
 	load := func(flow string) (*Board, error) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
 		  {"id":"waiting","name":"Waiting"}],"reviewFlow":`+flow+`}`), 0o644)
 		board, _, err := Load(dir)
 		return board, err
@@ -115,7 +120,7 @@ func TestReviewFlow(t *testing.T) {
 
 func TestWorktreesPath(t *testing.T) {
 	dir := t.TempDir()
-	board := `{"columns":[{"id":"todo","name":"To Do","role":"todo"}]`
+	board := `{"columns":[{"id":"first","name":"First"}]`
 	for _, tc := range []struct {
 		name, main, local, want string
 	}{
@@ -143,7 +148,7 @@ func TestWorktreesPath(t *testing.T) {
 func TestWorktreesDirMustNotContainRoot(t *testing.T) {
 	dir := t.TempDir()
 	for _, bad := range []string{".", "..", "./", dir, filepath.Dir(dir), "/"} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"worktreesDir":`+strconv.Quote(bad)+`,"columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"worktreesDir":`+strconv.Quote(bad)+`,"columns":[{"id":"first","name":"First"}]}`), 0o644)
 		if _, _, err := Load(dir); err == nil {
 			t.Errorf("worktreesDir %q accepted", bad)
 		}
@@ -230,18 +235,18 @@ func TestPRFlow(t *testing.T) {
 		t.Fatalf("default board: %v", err)
 	}
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"}],
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"}],
 	  "prFlow":{"opened":"In Review"}}`), 0o644)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("unknown prFlow column accepted")
 	}
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
 	  {"id":"in-review","name":"In Review"}],"prFlow":{"opened":"in review"}}`), 0o644)
 	board, _, err := Load(dir)
 	if err != nil || board.PRFlow == nil || board.PRFlow.Opened != "in review" {
 		t.Fatalf("prFlow not loaded: %+v %v", board.PRFlow, err)
 	}
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},
+	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
 	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`), 0o644)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("prFlow.requested without autoSpawn accepted")
@@ -256,10 +261,9 @@ func TestKeepAgent(t *testing.T) {
 	}{
 		{"plain column", `{"id":"in-review","name":"In review","keepAgent":true}`, true},
 		{"autoSpawn", `{"id":"in-review","name":"In review","autoSpawn":true,"keepAgent":true}`, false},
-		{"to do", `{"id":"backlog","name":"To Do","role":"todo","keepAgent":true}`, false},
 		{"done", `{"id":"done","name":"Done","role":"done","keepAgent":true}`, false},
 	} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"},`+tc.column+`]}`), 0o644)
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},`+tc.column+`]}`), 0o644)
 		board, _, err := Load(dir)
 		if (err == nil) != tc.ok {
 			t.Fatalf("%s: loaded = %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
@@ -310,29 +314,43 @@ func TestArchiveDoneAfter(t *testing.T) {
 	}
 }
 
-func TestTodoColumnModel(t *testing.T) {
-	for _, tc := range []struct {
-		name, todo, want string
-	}{
-		{"unset", ``, DefaultTodoModel},
-		{"overridden", `,"modelOverride":"sonnet"`, "sonnet"},
-	} {
-		root := t.TempDir()
-		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"todo","name":"To Do","role":"todo"`+tc.todo+`}]}`), 0o644)
-		board, _, err := Load(root)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		if got := board.TodoColumn().ModelOverride; got != tc.want {
-			t.Errorf("%s: todo model = %q, want %q", tc.name, got, tc.want)
-		}
+func TestLegacyTodoColumnDropped(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[
+	  {"id":"backlog","name":"Backlog","role":"todo"},
+	  {"id":"planning","name":"Planning","autoSpawn":true}
+	]}`), 0o644)
+	board, _, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if board.FirstColumn().ID != "planning" || !slices.Equal(board.LegacyTodo, []string{"backlog", "todo"}) {
+		t.Errorf("columns = %+v, legacy = %v; want Planning first and backlog dropped", board.Columns, board.LegacyTodo)
+	}
+	if err := board.Save(root); err != nil {
+		t.Fatal(err)
+	}
+	saved, _ := os.ReadFile(filepath.Join(root, FileName))
+	if strings.Contains(string(saved), "todo") || strings.Contains(string(saved), "Backlog") {
+		t.Errorf("saved board still holds the To Do column: %s", saved)
+	}
+
+	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"backlog","name":"Backlog","role":"todo"}]}`), 0o644)
+	if _, _, err := Load(root); err == nil {
+		t.Error("a board with only a To Do column loaded")
+	}
+}
+
+func TestDefaultBoardStartsInPlanning(t *testing.T) {
 	board, _, err := Load(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := board.TodoColumn().ModelOverride; got != DefaultTodoModel {
-		t.Errorf("default board: todo model = %q, want %q", got, DefaultTodoModel)
+	if first := board.FirstColumn(); first.ID != "planning" || !first.IsAgent() {
+		t.Errorf("first column = %+v, want the Planning agent column", first)
+	}
+	if !slices.Equal(board.LegacyTodo, []string{"todo"}) {
+		t.Errorf("default board's legacy ids = %v, want just the old default id", board.LegacyTodo)
 	}
 }
 
@@ -345,7 +363,7 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 	} {
 		root := t.TempDir()
 		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[
-		  {"id":"todo","name":"To Do","role":"todo"},
+		  {"id":"first","name":"First"},
 		  {"id":"planning","name":"Planning","autoSpawn":true},
 		  {"id":"executing","name":"Executing","autoSpawn":true,"modelOverride":"opus"}
 		]`+tc.board+`}`), 0o644)
@@ -359,8 +377,8 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 		if got := board.Columns[2].ModelOverride; got != "opus" {
 			t.Errorf("%s: executing model = %q, want its own override opus", tc.name, got)
 		}
-		if got := board.TodoColumn().ModelOverride; got != DefaultTodoModel {
-			t.Errorf("%s: todo model = %q, want %q", tc.name, got, DefaultTodoModel)
+		if got := board.FirstColumn().ModelOverride; got != tc.want {
+			t.Errorf("%s: first column model = %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }
@@ -368,7 +386,7 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 func TestLocalOverridesPersonalSettings(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"maxConcurrent":4,"notifications":{"turnDone":false},
-	  "columns":[{"id":"todo","name":"To Do","role":"todo"}]}`), 0o644)
+	  "columns":[{"id":"first","name":"First"}]}`), 0o644)
 	board, _, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
