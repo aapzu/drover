@@ -126,6 +126,13 @@ func TestTurnEndRowSkipsTheTurnItStarted(t *testing.T) {
 	if got := readFile(filepath.Join(moved.WorktreePath, "count")); got != "x\nx\n" {
 		t.Errorf("run_script row ran %q on the two turn ends, want it on both", got)
 	}
+
+	if err := e.Send(task.ID, "follow-up"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the row to fire again after a turn it didn't start", func(*store.Task) bool {
+		return strings.Count(readFile(os.Getenv("FAKE_LOG")), "again please") == 2
+	})
 }
 
 func TestConditionScriptGatesEnterRows(t *testing.T) {

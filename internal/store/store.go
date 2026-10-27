@@ -172,6 +172,8 @@ func (p *PR) IsReview() bool { return p != nil && p.Review }
 // Pending is a message waiting for the session to become idle.
 type Pending struct {
 	Text string `json:"text"`
+	// Row names the turn-end row that sent the message.
+	Row string `json:"row,omitempty"`
 }
 
 type LogEntry struct {

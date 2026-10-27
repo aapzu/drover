@@ -88,7 +88,7 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 
 	if sessKey == store.MainSession {
 		gc := groupContext{from: col, to: col, trigger: "turn_end", reply: reply}
-		skip, started := e.takeTurnEndRow(owner, sessKey), false
+		skip := e.takeTurnEndRow(owner, sessKey)
 		for _, row := range col.Automations.OnTurnEnd {
 			if skip != "" && rowName(row) == skip {
 				e.logf(t, "Automation %q skipped: this turn answered its own message", rowName(row))
@@ -99,14 +99,6 @@ func (e *Engine) runTurnEnd(taskID, sessKey string, visit int, reply string) {
 			}
 			if row.Type != "move_to_column" {
 				e.execute(t, row, gc)
-				if row.Type == "send_message" && !started {
-					started = true
-					e.with(func() {
-						if s := owner.Sessions[sessKey]; s != nil {
-							s.TurnEndRow = rowName(row)
-						}
-					})
-				}
 				continue
 			}
 			if fixing {
@@ -222,7 +214,11 @@ func (e *Engine) execute(t *store.Task, row config.Automation, gc groupContext) 
 		e.mu.Lock()
 		owner := e.owner(t)
 		e.mu.Unlock()
-		e.sendMessage(owner, store.MainSession, e.render(t, row.Message, gc, false))
+		p := store.Pending{Text: e.render(t, row.Message, gc, false)}
+		if gc.trigger == "turn_end" {
+			p.Row = rowName(row)
+		}
+		e.sendPending(owner, store.MainSession, p)
 	case "run_script":
 		err = e.runShellRow(t, row, row.Script, gc)
 	case "notify":
