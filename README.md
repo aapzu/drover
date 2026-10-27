@@ -166,7 +166,7 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   no file it uses a built-in default (Sessions, Planning, Executing,
   Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
-  `worktreesDir`, `splitByPR` and those under [Agents and notifications](#agents-and-notifications).
+  `worktreesDir` and those under [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
@@ -344,8 +344,8 @@ the same color on every card of the group.
   resets once every card is back in To Do.
 - Deleting a card removes only that card while others remain.
 - **`splitByPR`** (default `true`) set to `false` in `drover.json` or
-  `drover.local.json` keeps every PR on the session's own card, with no further
-  cards.
+  `drover.local.json` stops further PRs from getting cards. Only the first PR
+  the session opens appears, on the session's own card.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
 - `gh pr view` refreshes every open PR's card once a minute. Cards

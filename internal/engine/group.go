@@ -104,7 +104,7 @@ func (e *Engine) startRef(review bool) string {
 // the owner's own card, which moves to the prFlow's opened column once the
 // agent's turn ends. Each further PR becomes its own card in the group, in
 // the opened column, else in the column of the card the session works for.
-// With splitByPR off, further PRs get no card at all.
+// With splitByPR off, further PRs are logged on the owner and get no card.
 // With review set the PRs are ones you asked the agent to review. They are
 // marked as such and use the reviewFlow's started column instead. The owner's
 // card takes the first only while it is still in To Do, and a further card
@@ -132,6 +132,12 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 		urls = urls[1:]
 	}
 	if !e.board.SplitByPR {
+		for _, url := range urls {
+			if !slices.Contains(owner.SeenPRs, url) {
+				owner.SeenPRs = append(owner.SeenPRs, url)
+				owner.AddLog(fmt.Sprintf(logText+", not split off: splitByPR is off", gh.Number(url)))
+			}
+		}
 		urls = nil
 	}
 	for _, url := range urls {
