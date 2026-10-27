@@ -576,24 +576,18 @@ func titledBox(style lipgloss.Style, title, body string, width, height int) stri
 	return top + "\n" + rest
 }
 
-// lastLines keeps the bottom n non-trailing-blank lines of a pane capture.
-func lastLines(s string, n int) string {
+// captureLines splits a pane capture into lines, dropping trailing blank ones.
+func captureLines(s string) []string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
 		lines = lines[:len(lines)-1]
 	}
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
-// previewWindow shows n lines ending scroll lines above the bottom.
+// previewWindow shows n lines ending scroll lines above the last line with content.
 func previewWindow(s string, n, scroll int) string {
-	if scroll == 0 {
-		return lastLines(s, n)
-	}
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	lines := captureLines(s)
 	end := clamp(len(lines)-scroll, min(n, len(lines)), len(lines))
 	return strings.Join(lines[max(0, end-n):end], "\n")
 }

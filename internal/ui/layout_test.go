@@ -157,6 +157,31 @@ func TestPreviewWindow(t *testing.T) {
 	}
 }
 
+func TestPreviewWindowIgnoresTrailingBlankLines(t *testing.T) {
+	text := "1\n2\n3\n4\n\n  \n"
+	if got := previewWindow(text, 3, 0); got != "2\n3\n4" {
+		t.Fatalf("scroll 0: got %q", got)
+	}
+	if got := previewWindow(text, 3, 1); got != "1\n2\n3" {
+		t.Fatalf("scroll 1: got %q", got)
+	}
+	styled := "1\n2\n3\n4\n\x1b[0m\n"
+	if got := previewWindow(styled, 3, 0); got != "2\n3\n4" {
+		t.Fatalf("styled blank line: got %q", got)
+	}
+}
+
+func TestStalePreviewCaptureIsIgnored(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	id := m.snap.Tasks[0].ID
+	at := time.Now()
+	next, _ := m.Update(previewMsg{taskID: id, content: "new", at: at.Add(time.Second)})
+	next, _ = next.(Model).Update(previewMsg{taskID: id, content: "old", at: at})
+	if got := next.(Model).previewTxt; got != "new" {
+		t.Fatalf("stale capture replaced newer one: got %q", got)
+	}
+}
+
 func TestPreviewScrollStaysAnchored(t *testing.T) {
 	m := testModel(120, 40, 1, 1)
 	id := m.snap.Tasks[0].ID

@@ -39,6 +39,23 @@ func TestWheelOverPreviewScrollsInLiveMode(t *testing.T) {
 	}
 }
 
+func TestHorizontalWheelOverPreviewDoesNotScroll(t *testing.T) {
+	m := testModel(120, 40, 2, 3)
+	m.snap.Live = map[string]string{"c0-t0": "sess"}
+	m.mode = modeLive
+	m.previewHistory = 100
+	m.previewScroll = 3
+	l := m.layout()
+
+	for _, button := range []tea.MouseButton{tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight} {
+		msg := tea.MouseMsg{X: 5, Y: l.previewY + 2, Action: tea.MouseActionPress, Button: button}
+		next, _ := m.Update(msg)
+		if got := next.(Model).previewScroll; got != 3 {
+			t.Fatalf("button %v moved scroll to %d", button, got)
+		}
+	}
+}
+
 func TestWheelOverBoardMovesSelection(t *testing.T) {
 	m := testModel(120, 40, 2, 3)
 	m.col = 1

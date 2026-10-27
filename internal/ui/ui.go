@@ -627,7 +627,7 @@ func (m Model) capturePreview() tea.Cmd {
 	w, h := l.boardW-2, l.previewH-2
 	scrollback := scrollbackFor(m.previewScroll, h)
 	return func() tea.Msg {
-		msg := previewMsg{taskID: id}
+		msg := previewMsg{taskID: id, at: time.Now()}
 		if ok {
 			if l.previewH > 0 {
 				tmux.Resize(name, w, h)
@@ -636,7 +636,6 @@ func (m Model) capturePreview() tea.Cmd {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 			}
 		}
-		msg.at = time.Now()
 		return msg
 	}
 }
