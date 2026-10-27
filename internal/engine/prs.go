@@ -361,8 +361,12 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		card.AddLog(fmt.Sprintf("Changes requested on PR #%d", pr.Number))
 		e.notify("#%d: changes requested on PR #%d", card.Number, pr.Number)
 		if e.inColumn(card, flow.Opened) {
-			return prMove{to: e.flowColumn(flow.ChangesRequested), message: flow.ChangesRequestedMessage,
-				onMoved: func() { pr.FixFrom = info.HeadSHA }}
+			return prMove{to: e.flowColumn(flow.ChangesRequested), message: flow.ChangesMessage(),
+				onMoved: func() {
+					if !flow.Proposes() {
+						pr.FixFrom = info.HeadSHA
+					}
+				}}
 		}
 	case pr.FixFrom != "" && info.HeadSHA != pr.FixFrom && e.inColumn(card, flow.ChangesRequested) && agentIdle(owner):
 		return prMove{to: e.flowColumn(flow.Opened), onMoved: func() {
