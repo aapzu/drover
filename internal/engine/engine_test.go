@@ -2122,6 +2122,29 @@ func TestReviewInAWorkingSessionGetsItsOwnCard(t *testing.T) {
 	}
 }
 
+func TestSplitByPROffGivesAReviewInAWorkingSessionNoCard(t *testing.T) {
+	r := newReviewRig(t, "them", strings.Replace(reviewBoard, "{", `{"splitByPR": false,`, 1))
+	task := r.e.CreateTask("Auth", "REVIEWME")
+	if err := r.e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const reviewed = "https://github.com/o/r/pull/7"
+	waitForAll(t, r.e, "the reviewed PR to be seen", func(tasks []*store.Task) bool {
+		return slices.Contains(tasks[0].SeenPRs, reviewed)
+	})
+	tasks := r.e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR != nil || tasks[0].ColumnID != "exec" {
+		t.Fatalf("splitByPR off: %d cards, owner PR %+v, column %s", len(tasks), tasks[0].PR, tasks[0].ColumnID)
+	}
+	logged := false
+	for _, entry := range tasks[0].Log {
+		logged = logged || strings.Contains(entry.Text, "Reviewing PR #7, not split off")
+	}
+	if !logged {
+		t.Errorf("the dropped review was not logged: %+v", tasks[0].Log)
+	}
+}
+
 func TestLeavingDoneClearsArchived(t *testing.T) {
 	root, _ := setupProject(t)
 	e, err := New(root)
