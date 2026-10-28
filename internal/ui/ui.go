@@ -372,6 +372,9 @@ func (m Model) selectedIndex() int {
 }
 
 func (m *Model) selectTask(t *store.Task) {
+	if t == nil {
+		return
+	}
 	for i, c := range m.columns() {
 		if c.ID == m.columnOf(t) {
 			m.col = i
@@ -532,9 +535,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case sessionStartedMsg:
 		m.applySnap(msg.snap)
-		if msg.task != nil {
-			m.selectTask(msg.task)
-		}
+		m.selectTask(msg.task)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil

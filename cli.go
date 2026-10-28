@@ -40,8 +40,7 @@ time it opens.
 // ask is replaced in tests.
 var ask = assistant.Ask
 
-// waitForBoard is how long a command waits for the open board to answer. It
-// is a variable so tests can shorten it.
+// waitForBoard is how long a command waits for the open board to answer.
 var waitForBoard = 2 * time.Minute
 
 var cliCommands = map[string]func(root string, args []string) error{

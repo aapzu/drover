@@ -34,7 +34,7 @@ func typeInPalette(m Model, s string) Model {
 }
 
 func pressInPalette(m Model, k tea.KeyType) Model {
-	next, _ := m.updatePalette(tea.KeyMsg{Type: k})
+	next, _ := m.updatePalette(special(k))
 	return next.(Model)
 }
 

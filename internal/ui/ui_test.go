@@ -136,7 +136,6 @@ func TestSendDeliversTheMessageToTheCardsAgent(t *testing.T) {
 		t.Errorf("busy = %+v", m.busy)
 	}
 
-	// The engine has no running agent for the card, so the send comes back as an error.
 	for _, msg := range runCmds(cmd) {
 		m, _ = update(m, msg)
 	}

@@ -407,7 +407,6 @@ func TestEnterOnAnExternalAgentLooksForItsTerminal(t *testing.T) {
 	if cmd == nil || len(m.busy) != 0 {
 		t.Fatalf("cmd nil %v busy %v", cmd == nil, m.busy)
 	}
-	// The engine's copy of the card has no external session, so it has nothing to attach to.
 	msgs := runCmds(cmd)
 	got, ok := msgs[0].(externalAttachMsg)
 	if !ok || got.id != card.ID || got.number != 1 || got.pid != 4242 || got.cmd != nil {

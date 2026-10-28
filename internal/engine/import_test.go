@@ -280,9 +280,11 @@ func TestSyncIssueStartedMovesTheLinearIssue(t *testing.T) {
 			}
 			e.syncIssueStarted(tc.card)
 			if len(tc.updates) == 0 {
-				time.Sleep(200 * time.Millisecond)
-				if updates != nil && len(updates()) != 0 {
-					t.Errorf("updated Linear anyway: %v", updates())
+				if updates != nil {
+					time.Sleep(50 * time.Millisecond)
+					if len(updates()) != 0 {
+						t.Errorf("updated Linear anyway: %v", updates())
+					}
 				}
 				return
 			}

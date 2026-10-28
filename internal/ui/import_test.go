@@ -191,8 +191,7 @@ func issue(id string) linear.Issue {
 	return i
 }
 
-// linearModel is importOn with a Linear key in the environment, so the Linear tab works. The
-// key is fake: nothing here runs a command that would use it.
+// linearModel is importOn with a Linear key in the environment, so the Linear tab works.
 func linearModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("LINEAR_API_KEY", "test-key")
@@ -268,7 +267,7 @@ func TestImportTabSwitchesSource(t *testing.T) {
 }
 
 func pressKey(m Model, k tea.KeyType) (Model, tea.Cmd) {
-	next, cmd := m.updateImport(tea.KeyMsg{Type: k})
+	next, cmd := m.updateImport(special(k))
 	return next.(Model), cmd
 }
 

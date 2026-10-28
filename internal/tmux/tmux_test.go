@@ -394,7 +394,7 @@ func TestSendTextAndScreen(t *testing.T) {
 	if err := SendText(name, "first\nsecond"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, name, "secondfirst") // cat prints "first" right after the tty echoes the pasted "second"
+	waitFor(t, name, "secondfirst")
 	screen, err := Screen(name)
 	if err != nil {
 		t.Fatal(err)

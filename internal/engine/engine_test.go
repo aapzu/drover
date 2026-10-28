@@ -615,8 +615,6 @@ func TestPlanExit(t *testing.T) {
 		wait  func(*store.Task) bool
 		check func(t *testing.T, root string, got *store.Task)
 	}{
-		// After the plan is approved the agent keeps going in the same turn;
-		// that turn's end must run the target column's automations.
 		"hands the turn to the target": {
 			`{"columns":[
 	  {"id":"backlog","name":"Backlog"},

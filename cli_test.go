@@ -458,7 +458,7 @@ func TestSendReportsWhatTheBoardAnswered(t *testing.T) {
 	}{
 		"an error result":      {func(inbox.Request) inbox.Result { return inbox.Result{Error: "card is busy"} }, "card is busy"},
 		"a board that closes":  {nil, "the board closed before answering"},
-		"a board that is slow": {func(inbox.Request) inbox.Result { time.Sleep(time.Second); return inbox.Result{} }, "no answer from the board after 150ms"},
+		"a board that is slow": {func(inbox.Request) inbox.Result { time.Sleep(300 * time.Millisecond); return inbox.Result{} }, "no answer from the board after 150ms"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			short(t)

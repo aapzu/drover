@@ -12,7 +12,7 @@ import (
 )
 
 func wheelDown(x, y int) tea.MouseMsg {
-	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}
+	return mouse(tea.MouseActionPress, tea.MouseButtonWheelDown, x, y)
 }
 
 func TestWheelOverBoard(t *testing.T) {
@@ -38,7 +38,7 @@ func TestWheelOverBoard(t *testing.T) {
 			}
 			y := m.layout().bodyY + columnHeaderHeight + 1
 
-			next, _ := m.Update(tea.MouseMsg{X: 1, Y: y, Action: tea.MouseActionPress, Button: tt.button})
+			next, _ := m.Update(mouse(tea.MouseActionPress, tt.button, 1, y))
 			got := next.(Model)
 			if got.col != tt.col || got.current().ID != tt.card || got.mode != m.mode {
 				t.Fatalf("mode %v col %d card %s", got.mode, got.col, got.current().ID)
@@ -54,7 +54,7 @@ func TestWheelOverPreviewScrollsInLiveMode(t *testing.T) {
 	m.previewHistory = 100
 	l := m.layout()
 
-	up := tea.MouseMsg{X: 5, Y: l.previewY + 2, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}
+	up := mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 5, l.previewY+2)
 	next, _ := m.Update(up)
 	got := next.(Model)
 	if got.mode != modeLive || got.previewScroll != 3 {
@@ -71,7 +71,7 @@ func TestHorizontalWheelOverPreviewDoesNotScroll(t *testing.T) {
 	l := m.layout()
 
 	for _, button := range []tea.MouseButton{tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight} {
-		msg := tea.MouseMsg{X: 5, Y: l.previewY + 2, Action: tea.MouseActionPress, Button: button}
+		msg := mouse(tea.MouseActionPress, button, 5, l.previewY+2)
 		next, _ := m.Update(msg)
 		if got := next.(Model).previewScroll; got != 3 {
 			t.Fatalf("button %v moved scroll to %d", button, got)
@@ -114,7 +114,7 @@ func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			m := setup()
-			m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: c.button, X: c.x, Y: c.y})
+			m.Update(mouse(tea.MouseActionPress, c.button, c.x, c.y))
 			job, ok := sentJob(m)
 			if !ok || job.session != "sess" || job.literal != c.want {
 				t.Fatalf("sent %+v (sent=%v), want %q to sess", job, ok, c.want)
@@ -131,7 +131,7 @@ func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := setup()
 			mutate(&m)
-			m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp, X: 10, Y: l.previewY + 3})
+			m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, l.previewY+3))
 			if job, ok := sentJob(m); ok {
 				t.Fatalf("sent %+v, want the preview to scroll instead", job)
 			}
