@@ -386,10 +386,7 @@ func TestLinkFilesSkipsWorktreesDirAndTakenPaths(t *testing.T) {
 }
 
 func TestFastForward(t *testing.T) {
-	tmp, _ := filepath.EvalSymlinks(t.TempDir())
-	root := filepath.Join(tmp, "repo")
-	git(t, tmp, "init", "-q", "-b", "main", root)
-	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	root := newRepo(t)
 	wt, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "feature", "main")
 	if err != nil {
 		t.Fatal(err)

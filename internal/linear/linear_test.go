@@ -12,7 +12,7 @@ import (
 // fakeLinear answers the queries the client sends and records mutations.
 func fakeLinear(t *testing.T, stateType string, updates *[]string) *Client {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return clientFor(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "lin_api_test" {
 			t.Errorf("missing API key header")
 		}
@@ -41,9 +41,7 @@ func fakeLinear(t *testing.T, stateType string, updates *[]string) *Client {
 			}
 			w.Write([]byte(`{"data":{"issue":{"id":"i1","identifier":"DX-1","title":"Speed up CI"}}}`))
 		}
-	}))
-	t.Cleanup(srv.Close)
-	return &Client{Key: "lin_api_test", Endpoint: srv.URL, HTTP: srv.Client()}
+	})
 }
 
 func TestMyIssuesAndFetch(t *testing.T) {

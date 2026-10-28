@@ -139,7 +139,7 @@ func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 	}
 }
 
-// mouseModel is three columns of two cards with a saved-layout directory.
+// mouseModel is three columns of two cards with a temp project root so saving the layout works.
 func mouseModel(t *testing.T) Model {
 	t.Helper()
 	m := testModel(120, 40, 3, 2)
@@ -155,6 +155,7 @@ func mousePress(x, y int) tea.MouseMsg { return mouse(tea.MouseActionPress, tea.
 func mouseMotion(x, y int) tea.MouseMsg {
 	return mouse(tea.MouseActionMotion, tea.MouseButtonNone, x, y)
 }
+
 func mouseRelease(x, y int) tea.MouseMsg {
 	return mouse(tea.MouseActionRelease, tea.MouseButtonLeft, x, y)
 }

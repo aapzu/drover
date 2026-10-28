@@ -345,9 +345,9 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 	}
 }
 
-// loadJSON loads a board from a drover.json holding shared and, when they are
-// not empty, a drover.local.json holding local. An empty shared leaves
-// drover.json out, so the default board loads.
+// loadJSON loads a board from drover.json and drover.local.json holding shared
+// and local. An empty one leaves its file out; with no drover.json the default
+// board loads.
 func loadJSON(t *testing.T, shared, local string) (*Board, error) {
 	t.Helper()
 	dir := t.TempDir()
@@ -595,7 +595,6 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		}
 	}
 
-	// Nothing requires a Done column.
 	if board, err := loadJSON(t, `{"columns":[{"id":"a","name":"A"}]}`, ""); err != nil || len(board.Columns) != 1 {
 		t.Errorf("a board without a done column: %+v, %v", board, err)
 	}

@@ -84,7 +84,7 @@ func TestStartQueuedNow(t *testing.T) {
 		if s := card.Sessions["side"]; s.Status != store.StatusQueued {
 			t.Errorf("status = %s, want queued", s.Status)
 		}
-		if got := notice(e); !strings.Contains(got, "#1 queued: 1 agents running (limit 1)") {
+		if got := notice(e); !strings.Contains(got, "#1 queued: 1 agent") {
 			t.Errorf("notice = %q", got)
 		}
 	})

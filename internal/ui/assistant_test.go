@@ -138,6 +138,7 @@ func TestTypingInThePanelReachesClaudeNotTheBoard(t *testing.T) {
 		t.Errorf("esc should go to claude: %+v, mode %v", job, m.mode)
 	}
 }
+
 func TestCtrlQHidesThePanel(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -167,6 +168,7 @@ func TestCtrlQHidesThePanel(t *testing.T) {
 		})
 	}
 }
+
 func TestReopeningARunningPanelDoesNotRestartClaude(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -262,6 +264,7 @@ func TestZeroResetsThePanelWidth(t *testing.T) {
 		t.Errorf("saved width = %d, want 0", got)
 	}
 }
+
 func TestPanelShowsClaudesScreenAndAStoppedSession(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
@@ -331,6 +334,20 @@ func TestPanelNeedsRoomForTheBoard(t *testing.T) {
 		t.Error("the panel should come back when the terminal grows again")
 	}
 }
+
+func TestChoosingAnAssistantCommandInThePaletteOpensThePanel(t *testing.T) {
+	m := assistantModel(t)
+	m.paletteInput = newPaletteInput()
+	m.paletteInput.Focus()
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	m = typeInPalette(m, "assistant")
+	fakePanel(t)
+	m = pressInPalette(m, tea.KeyEnter)
+	if m.mode != modeAssistant {
+		t.Errorf("mode = %v after choosing the first assistant command", m.mode)
+	}
+}
+
 func TestNewConversationStartsTheSessionOnce(t *testing.T) {
 	for name, alive := range map[string]bool{"cold": false, "running": true} {
 		t.Run(name, func(t *testing.T) {
@@ -425,6 +442,7 @@ func TestCaptureLoopRunsOnceAndOnlyWhileFocused(t *testing.T) {
 		t.Errorf("focusing by click should start one new loop: gen %d, was %d", m.assist.tickGen, gen)
 	}
 }
+
 func TestBoardTickCapturesAnUnfocusedPanelOnly(t *testing.T) {
 	f := fakePanel(t)
 	m := open(t, assistantModel(t))
@@ -943,6 +961,7 @@ func TestTypingSnapsAScrolledPanelBackToTheBottom(t *testing.T) {
 		t.Errorf("captured %d lines of scrollback after typing", f.capturedBack)
 	}
 }
+
 func TestHiddenOrStoppedPanelIsNotCaptured(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1003,6 +1022,7 @@ func TestFocusedCaptureLoopSurvivesTheStartingPhase(t *testing.T) {
 		t.Errorf("captures = %d after the start finished, want 1", f.captures)
 	}
 }
+
 func TestWheelUpStopsAtTheTopOfTheHistory(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))

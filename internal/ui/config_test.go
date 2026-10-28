@@ -56,6 +56,7 @@ func TestConfigOpensFromTheBoard(t *testing.T) {
 		t.Fatal("o didn't open the config view")
 	}
 }
+
 func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
 	tests := []struct {
 		option, key string
@@ -179,6 +180,7 @@ func TestConfigSharedOnlyOptionGoesToDroverJSON(t *testing.T) {
 		t.Errorf("archiveDoneAfter not applied: %v", m.snap.Board.ArchiveAfter())
 	}
 }
+
 func TestConfigResetOfASingleLayer(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -328,6 +330,7 @@ func TestConfigResetWithBothLayersRemovesLocalFirst(t *testing.T) {
 		t.Errorf("the second x should remove the shared key: label=%q", m.configSrc[m.configSel])
 	}
 }
+
 func TestConfigEmptyPrompt(t *testing.T) {
 	path := []string{"defaultBaseBranch"}
 	tests := []struct {

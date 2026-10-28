@@ -290,6 +290,7 @@ func TestLiveSessionComesFromTheSnapshot(t *testing.T) {
 		t.Error("an unknown card has no live session")
 	}
 }
+
 func TestCursorAfterACardMovesElsewhere(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -360,6 +361,7 @@ func TestMovePickerArrowsChooseAndEnterMoves(t *testing.T) {
 		t.Errorf("mode = %v, col = %d after enter, want the board with the card moved to column 1", m.mode, m.col)
 	}
 }
+
 func TestMovePickerOnCurrentColumnDoesNotMove(t *testing.T) {
 	for name, k := range map[string]tea.KeyMsg{"enter": {Type: tea.KeyEnter}, "digit": key("1")} {
 		t.Run(name, func(t *testing.T) {
@@ -376,6 +378,7 @@ func TestMovePickerOnCurrentColumnDoesNotMove(t *testing.T) {
 		})
 	}
 }
+
 func TestMovePickerOpensOnCardsColumn(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -405,6 +408,7 @@ func TestMovePickerOpensOnCardsColumn(t *testing.T) {
 		})
 	}
 }
+
 func TestMovePickerForACardBeyondTheListedColumns(t *testing.T) {
 	tests := []struct {
 		name string
@@ -453,6 +457,7 @@ func TestMovePickerCancelKeysAndOutOfRangeDigitsDoNotMove(t *testing.T) {
 		}
 	}
 }
+
 func TestMovePickerCursorStaysWithinTheColumns(t *testing.T) {
 	repeat := func(k tea.KeyType, n int) []tea.KeyMsg {
 		keys := make([]tea.KeyMsg, n)
@@ -526,6 +531,7 @@ func TestMovePickerRendersCursorAndCurrentColumn(t *testing.T) {
 		t.Errorf("current line = %q, want the (current) tag on Col 0", current)
 	}
 }
+
 func TestMovePickerDigitIgnoresCursorPosition(t *testing.T) {
 	m := testModel(120, 40, 3, 1)
 	m.mode = modeMove
@@ -540,6 +546,7 @@ func TestMovePickerDigitIgnoresCursorPosition(t *testing.T) {
 		t.Errorf("busy column = %q after moving the cursor and pressing 3, want the move to c2", got)
 	}
 }
+
 func TestMovePickerEnterAdoptsOrphanCardIntoFirstColumn(t *testing.T) {
 	m := testModel(120, 40, 3, 1)
 	m.snap.Tasks[0].ColumnID = "deleted"

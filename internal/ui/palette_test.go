@@ -151,6 +151,7 @@ func TestPaletteClosesAndReopensEmpty(t *testing.T) {
 		}
 	}
 }
+
 func TestPaletteKeysAreUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for _, c := range paletteCommands {

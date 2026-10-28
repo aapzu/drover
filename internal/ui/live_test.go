@@ -33,6 +33,7 @@ func TestLiveModeSendsTypedKeysToTheCardsAgent(t *testing.T) {
 		t.Errorf("paste job = %+v", job)
 	}
 }
+
 func TestLiveModeWithoutARunningAgentSaysSoAndLeaves(t *testing.T) {
 	m := liveModel()
 	m.snap.Live = map[string]string{}
@@ -64,6 +65,7 @@ func TestLiveModeSendsNamedKeysAndForwardsEsc(t *testing.T) {
 		}
 	}
 }
+
 func TestLiveModeDropsKeysItCannotSend(t *testing.T) {
 	for name, msg := range map[string]tea.KeyMsg{
 		"ctrl+z":                       {Type: tea.KeyCtrlZ},

@@ -193,7 +193,6 @@ func TestTagValue(t *testing.T) {
 		{"present", "<a> x </a>", "a", "x", true},
 		{"surrounded", "pre <a>x</a> post", "a", "x", true},
 		{"other tag", "<b>x</b>", "a", "", false},
-		{"unclosed", "<a>x", "a", "x", false},
 		{"empty", "<a></a>", "a", "", true},
 	}
 	for _, c := range cases {
@@ -201,6 +200,12 @@ func TestTagValue(t *testing.T) {
 		if value != c.value || ok != c.ok {
 			t.Errorf("%s: tagValue(%q, %q) = %q, %v", c.name, c.in, c.tag, value, ok)
 		}
+	}
+}
+
+func TestTagValueNeedsTheClosingTag(t *testing.T) {
+	if _, ok := tagValue("<a>x", "a"); ok {
+		t.Error("an unclosed tag reported ok")
 	}
 }
 
@@ -212,6 +217,7 @@ func TestFirstLine(t *testing.T) {
 		{"trims first", "\n  one\ntwo\n", "one"},
 		{"exactly 80", long[:80], long[:80]},
 		{"truncates", long, long[:77] + "…"},
+		{"truncates whole characters", strings.Repeat("ä", 100), strings.Repeat("ä", 77) + "…"},
 		{"empty", "", ""},
 	}
 	for _, c := range cases {

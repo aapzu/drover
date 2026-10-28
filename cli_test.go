@@ -314,7 +314,8 @@ func project(t *testing.T) string {
 }
 
 // openBoard holds the project's lock like a running board and answers every
-// request with reply. It returns the requests seen so far.
+// request with reply, or releases the lock without answering when reply is nil,
+// like a board that closed. It returns the requests seen so far.
 func openBoard(t *testing.T, root string, reply func(inbox.Request) inbox.Result) func() []inbox.Request {
 	t.Helper()
 	release, ok := inbox.Hold(root)

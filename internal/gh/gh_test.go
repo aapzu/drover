@@ -53,8 +53,8 @@ func TestInMergeQueueRejectsAnythingButAPullRequestURL(t *testing.T) {
 func TestInMergeQueueAsksGraphQLAndReadsTheAnswer(t *testing.T) {
 	dir := t.TempDir()
 	args := filepath.Join(dir, "args")
-	os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\necho \"$@\" > \"$FAKE_ARGS\"\ncat \"$FAKE_OUT\"\n"), 0o755)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+cat "$FAKE_OUT"`)
 	t.Setenv("FAKE_ARGS", args)
 	out := filepath.Join(dir, "out")
 	t.Setenv("FAKE_OUT", out)

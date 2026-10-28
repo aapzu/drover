@@ -26,16 +26,16 @@ func TestBoardKeysMoveTheSelection(t *testing.T) {
 		card string
 	}{
 		{"j", []tea.KeyMsg{key("j")}, 0, "b"},
-		{"down", []tea.KeyMsg{ctrl(tea.KeyDown)}, 0, "b"},
+		{"down", []tea.KeyMsg{special(tea.KeyDown)}, 0, "b"},
 		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "c"},
 		{"k", []tea.KeyMsg{key("j"), key("j"), key("k")}, 0, "b"},
-		{"up stops at the first card", []tea.KeyMsg{ctrl(tea.KeyUp), ctrl(tea.KeyUp)}, 0, "a"},
+		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "a"},
 		{"G", []tea.KeyMsg{key("G")}, 0, "c"},
 		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "a"},
 		{"l", []tea.KeyMsg{key("l")}, 1, ""},
-		{"right", []tea.KeyMsg{ctrl(tea.KeyRight)}, 1, ""},
+		{"right", []tea.KeyMsg{special(tea.KeyRight)}, 1, ""},
 		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "a"},
-		{"left stops at the first column", []tea.KeyMsg{ctrl(tea.KeyLeft)}, 0, "a"},
+		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "a"},
 		{"l stops at the last column", []tea.KeyMsg{key("l"), key("l"), key("l"), key("l"), key("l"), key("l")}, 4, ""},
 		{"j in an empty column", []tea.KeyMsg{key("l"), key("j"), key("G"), key("g")}, 1, ""},
 	}
@@ -72,7 +72,7 @@ func TestBoardKeysMoveTheCardBetweenColumns(t *testing.T) {
 
 	moved := m
 	moved.snap.Tasks[0].ColumnID = "executing"
-	for _, k := range []tea.KeyMsg{key("H"), ctrl(tea.KeyShiftLeft)} {
+	for _, k := range []tea.KeyMsg{key("H"), special(tea.KeyShiftLeft)} {
 		moved.busy = map[string]op{}
 		next, cmd := update(moved, k)
 		if cmd == nil || next.col != 0 || next.busy[card.ID].column != "planning" {
@@ -80,7 +80,7 @@ func TestBoardKeysMoveTheCardBetweenColumns(t *testing.T) {
 		}
 	}
 	moved.busy = map[string]op{}
-	next, cmd := update(moved, ctrl(tea.KeyShiftRight))
+	next, cmd := update(moved, special(tea.KeyShiftRight))
 	if cmd == nil || next.busy[card.ID].column != "waiting-for-me" {
 		t.Errorf("shift+right: busy %v", next.busy)
 	}
@@ -224,20 +224,20 @@ func TestPageKeysScrollThePreview(t *testing.T) {
 	m.previewHistory = 100
 	page := m.layout().previewH - 3
 
-	m, cmd := update(m, ctrl(tea.KeyPgUp))
+	m, cmd := update(m, special(tea.KeyPgUp))
 	if m.previewScroll != page || cmd == nil {
 		t.Errorf("pgup: scroll %d cmd nil %v, want %d", m.previewScroll, cmd == nil, page)
 	}
-	m, _ = update(m, ctrl(tea.KeyPgDown))
+	m, _ = update(m, special(tea.KeyPgDown))
 	if m.previewScroll != 0 {
 		t.Errorf("pgdown: scroll %d", m.previewScroll)
 	}
-	m, _ = update(m, ctrl(tea.KeyPgDown))
+	m, _ = update(m, special(tea.KeyPgDown))
 	if m.previewScroll != 0 {
 		t.Errorf("pgdown past the bottom: scroll %d", m.previewScroll)
 	}
 	m.previewHistory = 5
-	if m, _ = update(m, ctrl(tea.KeyPgUp)); m.previewScroll != 5 {
+	if m, _ = update(m, special(tea.KeyPgUp)); m.previewScroll != 5 {
 		t.Errorf("pgup past the history: scroll %d", m.previewScroll)
 	}
 }
@@ -263,7 +263,7 @@ func TestBoardKeysOpenTheirModes(t *testing.T) {
 			m := realModel(t, "a")
 			msg := key(tt.key)
 			if tt.key == "delete" {
-				msg = ctrl(tea.KeyDelete)
+				msg = special(tea.KeyDelete)
 			}
 			m, _ = update(m, msg)
 			if m.mode != tt.mode {
@@ -279,9 +279,9 @@ func TestBoardKeysNeedACard(t *testing.T) {
 		msg := key(k)
 		switch k {
 		case "enter":
-			msg = ctrl(tea.KeyEnter)
+			msg = special(tea.KeyEnter)
 		case "tab":
-			msg = ctrl(tea.KeyTab)
+			msg = special(tea.KeyTab)
 		}
 		next, cmd := update(m, msg)
 		if next.mode != modeBoard || cmd != nil || len(next.busy) != 0 {
@@ -307,7 +307,7 @@ func TestFilterKeysNarrowThenClear(t *testing.T) {
 	if titles(m.tasksForColumn(0)) != "beta" || m.filter != "bet" {
 		t.Fatalf("filter %q shows %q", m.filter, titles(m.tasksForColumn(0)))
 	}
-	m, _ = update(m, ctrl(tea.KeyEnter))
+	m, _ = update(m, special(tea.KeyEnter))
 	if m.mode != modeBoard || m.filter != "bet" {
 		t.Fatalf("enter: mode %v filter %q, want the filter kept", m.mode, m.filter)
 	}
@@ -315,22 +315,22 @@ func TestFilterKeysNarrowThenClear(t *testing.T) {
 	if m.filterInput.Value() != "bet" {
 		t.Errorf("reopened with %q, want the filter in the input", m.filterInput.Value())
 	}
-	m, _ = update(m, ctrl(tea.KeyEsc))
+	m, _ = update(m, special(tea.KeyEsc))
 	if m.mode != modeBoard || m.filter != "" || len(m.tasksForColumn(0)) != 2 {
 		t.Errorf("esc in the filter: mode %v filter %q", m.mode, m.filter)
 	}
 
 	m, _ = update(m, key("/"))
 	m, _ = update(m, key("a"))
-	m, _ = update(m, ctrl(tea.KeyEnter))
-	m, _ = update(m, ctrl(tea.KeyEsc))
+	m, _ = update(m, special(tea.KeyEnter))
+	m, _ = update(m, special(tea.KeyEsc))
 	if m.filter != "" {
 		t.Errorf("esc on the board kept the filter %q", m.filter)
 	}
 }
 
 func TestQuitKeys(t *testing.T) {
-	for _, k := range []tea.KeyMsg{key("q"), ctrl(tea.KeyCtrlC)} {
+	for _, k := range []tea.KeyMsg{key("q"), special(tea.KeyCtrlC)} {
 		_, cmd := update(realModel(t, "a"), k)
 		if cmd == nil {
 			t.Fatalf("%q did not quit", k.String())
@@ -377,7 +377,7 @@ func TestCardActionKeysMarkTheCardBusy(t *testing.T) {
 			m := realModel(t, "a")
 			msg := key(k)
 			if k == "enter" {
-				msg = ctrl(tea.KeyEnter)
+				msg = special(tea.KeyEnter)
 			}
 			m, cmd := update(m, msg)
 			if cmd == nil || m.busy[m.current().ID].label != label {
@@ -392,7 +392,7 @@ func TestCardActionKeysMarkTheCardBusy(t *testing.T) {
 
 func TestEnterAttachesToARunningAgent(t *testing.T) {
 	m := liveCard(t, "a")
-	m, cmd := update(m, ctrl(tea.KeyEnter))
+	m, cmd := update(m, special(tea.KeyEnter))
 	if m.attached != m.current().ID || cmd == nil || len(m.busy) != 0 {
 		t.Errorf("attached %q cmd nil %v busy %v", m.attached, cmd == nil, m.busy)
 	}
@@ -403,7 +403,7 @@ func TestEnterOnAnExternalAgentLooksForItsTerminal(t *testing.T) {
 	card := m.snap.Tasks[0]
 	card.Sessions = map[string]*store.Session{store.MainSession: {Status: store.StatusExternal, PID: 4242}}
 
-	m, cmd := update(m, ctrl(tea.KeyEnter))
+	m, cmd := update(m, special(tea.KeyEnter))
 	if cmd == nil || len(m.busy) != 0 {
 		t.Fatalf("cmd nil %v busy %v", cmd == nil, m.busy)
 	}
@@ -426,14 +426,14 @@ func TestShellKeyReportsErrors(t *testing.T) {
 
 func TestTabTypesIntoTheAgentOnlyWhenOneRuns(t *testing.T) {
 	m := realModel(t, "a")
-	m, cmd := update(m, ctrl(tea.KeyTab))
+	m, cmd := update(m, special(tea.KeyTab))
 	if m.mode != modeBoard || cmd != nil || !strings.Contains(m.flash, "No running agent to type into") {
 		t.Fatalf("mode %v cmd nil %v flash %q", m.mode, cmd == nil, m.flash)
 	}
 
 	m = liveCard(t, "a")
 	m.prefs.HidePreview = true
-	m, cmd = update(m, ctrl(tea.KeyTab))
+	m, cmd = update(m, special(tea.KeyTab))
 	if m.mode != modeLive || m.liveGen != 1 || m.prefs.HidePreview || cmd == nil {
 		t.Errorf("mode %v gen %d hidePreview %v cmd nil %v", m.mode, m.liveGen, m.prefs.HidePreview, cmd == nil)
 	}
@@ -490,8 +490,7 @@ func TestAssistantKeysReachTheBoardKeyHandler(t *testing.T) {
 	}
 }
 
-// paletteSetup gives a command's key the surroundings it needs to do anything
-// observable.
+// paletteSetup returns a model where the command bound to k has something to act on.
 func paletteSetup(t *testing.T, k string) Model {
 	t.Helper()
 	m := realModel(t, "a")

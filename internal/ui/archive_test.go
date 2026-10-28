@@ -17,6 +17,7 @@ func archiveModel(t *testing.T) Model {
 	m.eng = &engine.Engine{Root: t.TempDir()}
 	return m
 }
+
 func TestOffBoardCardsAreHiddenUntilShown(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -109,6 +110,7 @@ func TestArchiveKeys(t *testing.T) {
 		t.Error("v didn't show archived cards")
 	}
 }
+
 func TestOffBoardCombinations(t *testing.T) {
 	for _, c := range []struct {
 		archived, hidden, showArchived, showHidden, want bool

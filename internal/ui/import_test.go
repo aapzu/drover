@@ -204,39 +204,29 @@ func linearModel(t *testing.T) Model {
 func TestImportCursorStaysInTheList(t *testing.T) {
 	m := importModel(false, claude.Found{SessionID: "a", Cwd: "/repo/x"}, claude.Found{SessionID: "b", Cwd: "/repo/y"})
 	for _, tt := range []struct {
-		keys []string
+		keys []tea.KeyMsg
 		want int
 	}{
-		{[]string{"up", "k"}, 0},
-		{[]string{"j"}, 1},
-		{[]string{"down", "down"}, 2},
-		{[]string{"j", "j", "j", "j", "j"}, 3},
-		{[]string{"j", "j", "k"}, 1},
+		{[]tea.KeyMsg{special(tea.KeyUp), key("k")}, 0},
+		{[]tea.KeyMsg{key("j")}, 1},
+		{[]tea.KeyMsg{special(tea.KeyDown), special(tea.KeyDown)}, 2},
+		{[]tea.KeyMsg{key("j"), key("j"), key("j"), key("j"), key("j")}, 3},
+		{[]tea.KeyMsg{key("j"), key("j"), key("k")}, 1},
 	} {
 		got := m
 		for _, k := range tt.keys {
-			next, _ := got.updateImport(keyNamed(k))
+			next, _ := got.updateImport(k)
 			got = next.(Model)
 		}
 		if got.imp.cursor != tt.want {
-			t.Errorf("%v: cursor %d, want %d", tt.keys, got.imp.cursor, tt.want)
+			t.Errorf("%d keys: cursor %d, want %d", len(tt.keys), got.imp.cursor, tt.want)
 		}
 	}
 
 	empty := importModel(false)
-	if next, _ := empty.updateImport(keyNamed("down")); next.(Model).imp.cursor != 0 {
+	if next, _ := empty.updateImport(special(tea.KeyDown)); next.(Model).imp.cursor != 0 {
 		t.Error("down moved the cursor in an empty list")
 	}
-}
-
-func keyNamed(k string) tea.KeyMsg {
-	switch k {
-	case "up":
-		return tea.KeyMsg{Type: tea.KeyUp}
-	case "down":
-		return tea.KeyMsg{Type: tea.KeyDown}
-	}
-	return key(k)
 }
 
 func TestImportKeysSelectOneSession(t *testing.T) {

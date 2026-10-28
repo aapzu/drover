@@ -49,7 +49,7 @@ func liveCard(t *testing.T, titles ...string) Model {
 	return withLive(m, m.current().ID)
 }
 
-func ctrl(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
+func special(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
 
 func TestFormEditsTheSelectedCard(t *testing.T) {
 	m := realModel(t, "old")
@@ -59,25 +59,25 @@ func TestFormEditsTheSelectedCard(t *testing.T) {
 	}
 
 	m, _ = update(m, key("er"))
-	m, _ = update(m, ctrl(tea.KeyEnter))
+	m, _ = update(m, special(tea.KeyEnter))
 	if m.formFocus != 1 {
 		t.Fatalf("enter in the title left focus on %d, want the prompt", m.formFocus)
 	}
 	m, _ = update(m, key("do it"))
-	m, _ = update(m, ctrl(tea.KeyEnter))
+	m, _ = update(m, special(tea.KeyEnter))
 	if got := m.promptInput.Value(); got != "do it\n" {
 		t.Errorf("enter in the prompt should add a line, got %q", got)
 	}
-	m, _ = update(m, ctrl(tea.KeyTab))
+	m, _ = update(m, special(tea.KeyTab))
 	if m.formFocus != 0 {
 		t.Errorf("tab left focus on %d, want the title", m.formFocus)
 	}
-	m, _ = update(m, ctrl(tea.KeyShiftTab))
+	m, _ = update(m, special(tea.KeyShiftTab))
 	if m.formFocus != 1 {
 		t.Errorf("shift+tab left focus on %d, want the prompt", m.formFocus)
 	}
 
-	m, _ = update(m, ctrl(tea.KeyCtrlS))
+	m, _ = update(m, special(tea.KeyCtrlS))
 	got := m.current()
 	if m.mode != modeBoard || got.Title != "older" || got.Prompt != "do it" {
 		t.Fatalf("mode %v title %q prompt %q", m.mode, got.Title, got.Prompt)
@@ -88,14 +88,14 @@ func TestFormSaveNeedsATitleAndTrimsInput(t *testing.T) {
 	m := realModel(t, "old")
 	m, _ = update(m, key("e"))
 	m.titleInput.SetValue("  ")
-	m, _ = update(m, ctrl(tea.KeyCtrlS))
+	m, _ = update(m, special(tea.KeyCtrlS))
 	if m.mode != modeForm || m.flash != "A task needs a title" {
 		t.Fatalf("mode %v flash %q", m.mode, m.flash)
 	}
 
 	m.titleInput.SetValue("  new title ")
 	m.promptInput.SetValue("\n  the prompt \n")
-	m, _ = update(m, ctrl(tea.KeyCtrlS))
+	m, _ = update(m, special(tea.KeyCtrlS))
 	got := m.current()
 	if m.mode != modeBoard || got.Title != "new title" || got.Prompt != "the prompt" {
 		t.Errorf("mode %v title %q prompt %q", m.mode, got.Title, got.Prompt)
@@ -106,7 +106,7 @@ func TestFormEscDiscardsEdits(t *testing.T) {
 	m := realModel(t, "old")
 	m, _ = update(m, key("e"))
 	m, _ = update(m, key("x"))
-	m, _ = update(m, ctrl(tea.KeyEsc))
+	m, _ = update(m, special(tea.KeyEsc))
 	if m.mode != modeBoard || m.current().Title != "old" {
 		t.Errorf("mode %v title %q", m.mode, m.current().Title)
 	}
@@ -128,7 +128,7 @@ func TestSendDeliversTheMessageToTheCardsAgent(t *testing.T) {
 	if got := m.sendInput.Value(); got != "hello" {
 		t.Fatalf("typed %q", got)
 	}
-	m, cmd = update(m, ctrl(tea.KeyEnter))
+	m, cmd = update(m, special(tea.KeyEnter))
 	if m.mode != modeBoard || m.flash != "Sent to #1" || cmd == nil {
 		t.Fatalf("mode %v flash %q cmd nil %v", m.mode, m.flash, cmd == nil)
 	}
@@ -149,14 +149,14 @@ func TestSendIgnoresEmptyTextAndEscCancels(t *testing.T) {
 	m := liveCard(t, "a")
 	m, _ = update(m, key("s"))
 	m, _ = update(m, key("  "))
-	m, cmd := update(m, ctrl(tea.KeyEnter))
+	m, cmd := update(m, special(tea.KeyEnter))
 	if m.mode != modeBoard || cmd != nil || m.flash != "" {
 		t.Errorf("empty send: mode %v cmd nil %v flash %q", m.mode, cmd == nil, m.flash)
 	}
 
 	m, _ = update(m, key("s"))
 	m, _ = update(m, key("never"))
-	m, cmd = update(m, ctrl(tea.KeyEsc))
+	m, cmd = update(m, special(tea.KeyEsc))
 	if m.mode != modeBoard || cmd != nil || len(m.busy) != 0 {
 		t.Errorf("esc: mode %v cmd nil %v busy %v", m.mode, cmd == nil, m.busy)
 	}
@@ -167,7 +167,7 @@ func TestSendForACardThatVanishedDoesNothing(t *testing.T) {
 	m, _ = update(m, key("s"))
 	m, _ = update(m, key("hi"))
 	m.modalTask = "gone"
-	m, cmd := update(m, ctrl(tea.KeyEnter))
+	m, cmd := update(m, special(tea.KeyEnter))
 	if m.mode != modeBoard || cmd != nil || m.flash != "" {
 		t.Errorf("mode %v cmd nil %v flash %q", m.mode, cmd == nil, m.flash)
 	}
@@ -183,11 +183,11 @@ func TestDetailShowsTheCardAndScrolls(t *testing.T) {
 		t.Error("View doesn't show the detail")
 	}
 
-	m, _ = update(m, ctrl(tea.KeyDown))
+	m, _ = update(m, special(tea.KeyDown))
 	if m.mode != modeDetail {
 		t.Fatalf("a scroll key left the detail view: mode %v", m.mode)
 	}
-	for _, k := range []tea.KeyMsg{ctrl(tea.KeyEsc), key("q"), key("i")} {
+	for _, k := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("i")} {
 		next, _ := update(m, k)
 		if next.mode != modeBoard {
 			t.Errorf("%q: mode = %v, want the board", k.String(), next.mode)
@@ -214,7 +214,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 		}
 	}
 
-	for _, k := range []tea.KeyMsg{key("N"), key("n"), ctrl(tea.KeyEnter), ctrl(tea.KeyEsc)} {
+	for _, k := range []tea.KeyMsg{key("N"), key("n"), special(tea.KeyEnter), special(tea.KeyEsc)} {
 		m := realModel(t, "a")
 		m, _ = update(m, key("x"))
 		m, cmd := update(m, k)
@@ -234,7 +234,7 @@ func TestDeletingACardInAGroupSaysTheAgentKeepsWorking(t *testing.T) {
 }
 
 func TestHelpClosesOnAnyKey(t *testing.T) {
-	for _, k := range []tea.KeyMsg{key("x"), ctrl(tea.KeyEnter), ctrl(tea.KeyEsc), key("?")} {
+	for _, k := range []tea.KeyMsg{key("x"), special(tea.KeyEnter), special(tea.KeyEsc), key("?")} {
 		m := realModel(t, "a")
 		m, _ = update(m, key("?"))
 		if m.mode != modeHelp || !strings.Contains(m.View(), "search and run a command") {
@@ -696,7 +696,6 @@ func TestInitEnablesTheMouseUnlessItIsOff(t *testing.T) {
 	if cmd := m.Init(); cmd == nil {
 		t.Fatal("Init started nothing")
 	}
-	// New reads the layout saved for the repo.
 	m.prefs.NoMouse = true
 	if err := m.prefs.save(m.eng.Root); err != nil {
 		t.Fatal(err)
