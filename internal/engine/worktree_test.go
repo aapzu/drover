@@ -18,10 +18,12 @@ func worktreeBoard(extra string) string {
 	  {"id":"done","name":"Done","role":"done"}]}`
 }
 
-func TestNewWorktreeGetsCopiedFilesAndInitScript(t *testing.T) {
-	e := startWithBoard(t, worktreeBoard(`"copyFiles":[".env"],"initScript":"cat .env > init-ran && echo \"$DROVER_BRANCHNAME\" >> init-ran",`))
+func TestNewWorktreeGetsLinkedFilesAndInitScript(t *testing.T) {
+	e := startWithBoard(t, worktreeBoard(`"linkUntracked":true,"linkFiles":[".env"],"initScript":"cat .env > init-ran && echo \"$DROVER_BRANCHNAME\" >> init-ran",`))
 	os.WriteFile(filepath.Join(e.Root, ".env"), []byte("TOKEN=1\n"), 0o600)
 
+	os.MkdirAll(filepath.Join(e.Root, "node_modules", "pkg"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "node_modules", "pkg", "x.js"), []byte("x"), 0o644)
 	task := e.CreateTask("Set me up", "")
 	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
 		t.Fatal(err)
@@ -32,7 +34,13 @@ func TestNewWorktreeGetsCopiedFilesAndInitScript(t *testing.T) {
 	}
 	os.Remove(filepath.Join(moved.WorktreePath, "init-ran"))
 	if e.WorktreeDirty(task.ID) {
-		t.Error("the copied .env counts as an uncommitted change")
+		t.Error("the linked .env counts as an uncommitted change")
+	}
+	if target, _ := os.Readlink(filepath.Join(moved.WorktreePath, ".env")); target != filepath.Join(e.Root, ".env") {
+		t.Errorf(".env links to %q", target)
+	}
+	if _, err := os.Lstat(filepath.Join(moved.WorktreePath, "node_modules")); err == nil {
+		t.Error("node_modules was linked")
 	}
 }
 

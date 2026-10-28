@@ -113,56 +113,196 @@ func TestEnsureExcluded(t *testing.T) {
 	}
 }
 
-func TestCopyFilesAndDirtyIgnoresThem(t *testing.T) {
+func linkRepo(t *testing.T) (root, wt string) {
+	t.Helper()
 	tmp, _ := filepath.EvalSymlinks(t.TempDir())
-	root := filepath.Join(tmp, "repo")
+	root = filepath.Join(tmp, "repo")
 	git(t, tmp, "init", "-q", "-b", "main", root)
-	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
-	os.WriteFile(filepath.Join(root, ".env.shared"), []byte("SECRET=1"), 0o600)
-	os.Symlink(".env.shared", filepath.Join(root, ".env"))
-	os.MkdirAll(filepath.Join(root, "config", "local"), 0o755)
-	os.WriteFile(filepath.Join(root, "config", "tracked.json"), []byte("{}"), 0o644)
-	git(t, root, "add", "config/tracked.json")
-	git(t, root, "commit", "-q", "-m", "tracked")
-	os.WriteFile(filepath.Join(root, "config", "local", "dev.json"), []byte("{}"), 0o644)
-	os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
-	os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte("{}"), 0o644)
-	os.WriteFile(filepath.Join(tmp, "outside"), []byte("x"), 0o644)
+	write := func(rel, body string) {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+	}
+	write(".gitignore", "dist/\n.env\nnode_modules/\n")
+	write("config/tracked.json", "{}")
+	write("q", "1")
+	git(t, root, "add", ".")
+	git(t, root, "commit", "-q", "-m", "init")
+	write(".env", "SECRET=1")
+	write("config/local/dev.json", "{}")
+	write("notes.txt", "n")
+	write("dist/app.js", "x")
+	write("dist/cache/big.bin", "x")
+	write("node_modules/pkg/index.js", "x")
+	write("tools/node_modules/pkg/index.js", "x")
+	write("tools/run.sh", "x")
+	write("trees/1/file", "x")
+	write(".kangentic/worktrees/3/f.txt", "x")
+	write(".kangentic/worktrees/3/.git", "gitdir: elsewhere")
+	write("my file.txt", "x")
+	write("a b/c d.txt", "x")
+	write(".claude/settings.local.json", "{}")
+	write(".drover/state.json", "{}")
+	write("../outside", "x")
 	wt, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "b", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return root, wt
+}
 
-	paths := []string{".env", "config", ".claude/settings.local.json", "missing", "../outside"}
-	if err := CopyFiles(root, wt, paths); err != nil {
+func linked(t *testing.T, root, wt, rel string) bool {
+	t.Helper()
+	target, err := os.Readlink(filepath.Join(wt, rel))
+	if err != nil {
+		return false
+	}
+	if target != filepath.Join(root, rel) {
+		t.Errorf("%s links to %s", rel, target)
+	}
+	return true
+}
+
+func TestLinkFilesEverythingExceptSkipped(t *testing.T) {
+	root, wt := linkRepo(t)
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(wt, ".env")); string(b) != "SECRET=1" {
-		t.Errorf(".env = %q", b)
-	}
-	if info, err := os.Stat(filepath.Join(wt, ".env")); err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf(".env mode = %v, %v", info, err)
-	}
-	if _, err := os.Stat(filepath.Join(wt, "config", "local", "dev.json")); err != nil {
-		t.Errorf("directory not copied: %v", err)
-	}
-	for _, skipped := range []string{".claude/settings.local.json", "../outside"} {
-		if _, err := os.Stat(filepath.Join(wt, skipped)); err == nil {
-			t.Errorf("%s was copied", skipped)
+	for _, rel := range []string{".env", "notes.txt", "dist/app.js", "dist/cache", "config/local", "tools/run.sh"} {
+		if !linked(t, root, wt, rel) {
+			t.Errorf("%s was not linked", rel)
 		}
 	}
+	if linked(t, root, wt, "dist") {
+		t.Error("gitignored dist was linked whole, so a dist/ rule no longer matches it")
+	}
+	if out := git(t, wt, "status", "--porcelain", "--untracked-files=all"); strings.Contains(out, "dist") {
+		t.Errorf("git status in the worktree lists the links under an ignored directory:\n%s", out)
+	}
+	for _, rel := range []string{"node_modules", "tools/node_modules", ".claude", ".drover", ".kangentic", "config/tracked.json", "../outside"} {
+		if fi, err := os.Lstat(filepath.Join(wt, rel)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("%s was linked", rel)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(wt, "config", "tracked.json")); err != nil {
+		t.Errorf("tracked file gone: %v", err)
+	}
+}
 
-	if Dirty(wt, paths...) {
-		t.Error("copied files count as uncommitted changes")
+func TestLinkFilesExclude(t *testing.T) {
+	root, wt := linkRepo(t)
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, []string{".env", "dist/cache", "missing"}); err != nil {
+		t.Fatal(err)
+	}
+	if linked(t, root, wt, ".env") {
+		t.Error("excluded .env was linked")
+	}
+	if linked(t, root, wt, "dist") {
+		t.Error("dist was linked whole despite an excluded path inside")
+	}
+	if !linked(t, root, wt, "dist/app.js") {
+		t.Error("dist/app.js was not linked")
+	}
+	if _, err := os.Lstat(filepath.Join(wt, "dist", "cache")); err == nil {
+		t.Error("excluded dist/cache exists in the worktree")
+	}
+	if !linked(t, root, wt, "notes.txt") {
+		t.Error("notes.txt was not linked")
+	}
+}
+
+func TestLinkFilesWhitelistWinsOverExclude(t *testing.T) {
+	root, wt := linkRepo(t)
+	only := []string{".env", "config", "tools/run.sh", "node_modules", "config/tracked.json", ".claude/settings.local.json", "missing", "../outside"}
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), only, []string{".env", "config/local"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".env", "config/local", "tools/run.sh"} {
+		if !linked(t, root, wt, rel) {
+			t.Errorf("%s was not linked", rel)
+		}
+	}
+	for _, rel := range []string{"notes.txt", "dist", "node_modules", ".claude"} {
+		if _, err := os.Lstat(filepath.Join(wt, rel)); err == nil {
+			t.Errorf("%s exists in the worktree", rel)
+		}
+	}
+	if fi, err := os.Lstat(filepath.Join(wt, "config", "tracked.json")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("tracked.json = %v, %v", fi, err)
+	}
+}
+
+func TestDirtyKeepsAOneLetterFirstEntry(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "repo")
+	git(t, filepath.Dir(root), "init", "-q", "-b", "main", root)
+	os.WriteFile(filepath.Join(root, "q"), []byte("1"), 0o644)
+	git(t, root, "add", "q")
+	git(t, root, "commit", "-q", "-m", "init")
+	os.WriteFile(filepath.Join(root, "q"), []byte("2"), 0o644)
+	if !Dirty(root, root) {
+		t.Error("an edit to a tracked file named q is not dirty")
+	}
+}
+
+func TestLinkFilesSkipsWorktreesDirAndTakenPaths(t *testing.T) {
+	root, wt := linkRepo(t)
+	os.WriteFile(filepath.Join(wt, "dist"), []byte("tracked file"), 0o644)
+	if err := LinkFiles(root, wt, filepath.Join(root, "trees"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(wt, "trees")); err == nil {
+		t.Error("the worktrees directory was linked")
+	}
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), []string{"dist/app.js"}, nil); err != nil {
+		t.Errorf("a path under a file in the worktree is an error: %v", err)
+	}
+}
+
+func TestDirtyHandlesSpacesAndForeignLinks(t *testing.T) {
+	root, wt := linkRepo(t)
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"my file.txt", "a b"} {
+		if !linked(t, root, wt, rel) {
+			t.Errorf("%s was not linked", rel)
+		}
+	}
+	if Dirty(wt, root) {
+		t.Error("linked paths with spaces count as uncommitted changes")
+	}
+	os.Symlink(filepath.Join(filepath.Dir(root), "outside"), filepath.Join(wt, "elsewhere"))
+	if !Dirty(wt, root) {
+		t.Error("a symlink out of the checkout is not dirty")
+	}
+	os.Remove(filepath.Join(wt, "elsewhere"))
+	os.Symlink("notes.txt", filepath.Join(wt, "relative"))
+	if !Dirty(wt, root) {
+		t.Error("a relative symlink is not dirty")
+	}
+}
+
+func TestLinkFilesKeepsExistingAndDirtyIgnoresLinks(t *testing.T) {
+	root, wt := linkRepo(t)
+	os.WriteFile(filepath.Join(wt, "notes.txt"), []byte("mine"), 0o644)
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(wt, "notes.txt")); string(b) != "mine" {
+		t.Errorf("notes.txt = %q, want it kept", b)
+	}
+	os.Remove(filepath.Join(wt, "notes.txt"))
+	if Dirty(wt, root) {
+		t.Error("links count as uncommitted changes")
 	}
 	os.WriteFile(filepath.Join(wt, "config", "tracked.json"), []byte("{\"edited\":1}"), 0o644)
-	if !Dirty(wt, paths...) {
-		t.Error("an edit to a tracked file under a copied path is not dirty")
+	if !Dirty(wt, root) {
+		t.Error("an edit to a tracked file next to a link is not dirty")
 	}
 	git(t, wt, "checkout", "--", "config/tracked.json")
-	os.WriteFile(filepath.Join(wt, "notes.txt"), []byte("x"), 0o644)
-	if !Dirty(wt, paths...) {
-		t.Error("a new file outside the copied paths is not dirty")
+	os.WriteFile(filepath.Join(wt, "scratch.txt"), []byte("x"), 0o644)
+	if !Dirty(wt, root) {
+		t.Error("a new real file is not dirty")
 	}
 }
 

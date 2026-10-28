@@ -31,7 +31,9 @@ type Board struct {
 	DefaultModel          string        `json:"defaultModel,omitempty"`
 	WorktreesDir          string        `json:"worktreesDir,omitempty"`
 	ArchiveDoneAfter      string        `json:"archiveDoneAfter,omitempty"`
-	CopyFiles             []string      `json:"copyFiles,omitempty"`
+	LinkUntracked         bool          `json:"linkUntracked,omitempty"`
+	LinkFiles             []string      `json:"linkFiles,omitempty"`
+	LinkExclude           []string      `json:"linkExclude,omitempty"`
 	InitScript            string        `json:"initScript,omitempty"`
 	MaxConcurrent         int           `json:"maxConcurrent,omitempty"`
 	IdleTimeoutMinutes    int           `json:"idleTimeoutMinutes,omitempty"`

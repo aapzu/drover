@@ -202,11 +202,18 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   worktree, and archiving the card removes it, asking first if there are
   uncommitted changes. Branches are never deleted, except the unused one of a
   new session left empty.
-- **Worktree setup.** `copyFiles` lists paths git doesn't track, such as
-  `.env`, to copy from the main checkout into each new worktree. They never
-  count as uncommitted changes. `initScript` then runs with `sh -c` in the new
-  worktree before the agent starts, for example `pnpm install`. If it fails,
-  so does the move, and the next start runs it again.
+- **Worktree setup.** With `"linkUntracked": true`, each new worktree gets
+  symlinks to what git doesn't track in the main checkout, gitignored files
+  such as `.env` included, so edits show in both places. `linkFiles` limits
+  that to the paths it lists, and then `linkExclude` is ignored; otherwise
+  everything is linked except the paths in `linkExclude`. `.claude`,
+  `.drover`, the worktrees directory, every `node_modules` and any directory
+  holding a `.git`, such as another tool's worktree, are never linked. The
+  links never count as uncommitted changes, but links to files git doesn't
+  ignore show as untracked there, so stage by path rather than with
+  `git add -A`. `initScript` then runs with `sh -c` in the new worktree before
+  the agent starts, for example `pnpm i`. If it fails, so does the move, and
+  the next start runs it again.
 - **Keeping up with the base branch.** `u` fetches the card's base branch and
   fast-forwards the worktree to it. When the branch has commits of its own,
   a running agent is asked to merge it instead. `u` refuses while the agent

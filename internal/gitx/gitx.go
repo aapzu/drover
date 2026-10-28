@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -15,9 +14,17 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 func run(dir string, args ...string) (string, error) {
+	out, err := runRaw(dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// runRaw is run without trimming, for NUL-separated output whose first entry
+// may start with a space.
+func runRaw(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stderr bytes.Buffer
@@ -30,7 +37,7 @@ func run(dir string, args ...string) (string, error) {
 		}
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), msg)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 func Toplevel(dir string) (string, error) { return run(dir, "rev-parse", "--show-toplevel") }
@@ -168,20 +175,7 @@ func CreateWorktree(root, worktrees, folder, branch, base string) (string, error
 	if _, err := os.Stat(filepath.Join(path, ".claude", "commands")); err == nil {
 		run(path, "sparse-checkout", "set", "--no-cone", "/*", "!/.claude/commands/")
 	}
-	linkNodeModules(root, path)
 	return path, nil
-}
-
-func linkNodeModules(root, worktree string) {
-	src := filepath.Join(root, "node_modules")
-	dst := filepath.Join(worktree, "node_modules")
-	if _, err := os.Stat(src); err != nil {
-		return
-	}
-	if _, err := os.Lstat(dst); err == nil {
-		return
-	}
-	os.Symlink(src, dst)
 }
 
 func RemoveWorktree(root, path string) error {
@@ -201,89 +195,172 @@ func RemoveWorktree(root, path string) error {
 	return nil
 }
 
-// CopyFiles copies files and directories that git doesn't track, such as
-// .env, from root into a new worktree. Symlinks are copied as the files they
-// point to. Missing paths and paths outside root are skipped, and so is
-// .claude/, which Claude already finds in the main checkout.
-func CopyFiles(root, worktree string, paths []string) error {
-	for _, p := range paths {
-		p = filepath.Clean(p)
-		if !filepath.IsLocal(p) || p == ".claude" || strings.HasPrefix(p, ".claude"+string(filepath.Separator)) {
-			continue
+// LinkFiles symlinks files and directories that git doesn't track, gitignored
+// ones included, from root into a new worktree. With only set it links just
+// those paths and ignores except, otherwise everything except the except
+// paths. Tracked files, missing paths and paths outside root are skipped, and
+// so are .claude, which Claude already finds in the main checkout, .drover,
+// the worktrees directory, node_modules and any directory holding a .git, such
+// as another tool's worktree. Untracked files inside a listed tracked
+// directory are linked. A gitignored directory becomes a real directory of
+// links, since an ignore rule ending in a slash no longer matches a symlink and
+// git add -A would stage it.
+func LinkFiles(root, worktree, worktreesDir string, only, except []string) error {
+	out, err := runRaw(root, "ls-files", "--others", "--directory", "--no-empty-directory", "-z")
+	if err != nil {
+		return err
+	}
+	var candidates []string
+	for c := range strings.SplitSeq(out, "\x00") {
+		if c = strings.TrimSuffix(c, "/"); c != "" {
+			candidates = append(candidates, c)
 		}
-		src := filepath.Join(root, p)
-		if _, err := os.Stat(src); errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return err
-		}
-		err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
+	}
+	l := linker{root: root, worktree: worktree, skip: []string{".claude", ".drover"}}
+	if rel, err := filepath.Rel(root, worktreesDir); err == nil && rel != "." && filepath.IsLocal(rel) {
+		l.skip = append(l.skip, filepath.ToSlash(rel))
+	}
+	targets := candidates
+	if len(only) == 0 {
+		l.skip = append(l.skip, cleanPaths(except)...)
+	} else {
+		targets = nil
+		for _, p := range cleanPaths(only) {
+			for _, c := range candidates {
+				switch {
+				case c == p || under(p, c):
+					targets = append(targets, p)
+				case under(c, p):
+					targets = append(targets, c)
+				}
 			}
-			rel, _ := filepath.Rel(root, path)
-			return copyFile(path, filepath.Join(worktree, rel))
-		})
-		if err != nil {
-			return fmt.Errorf("copy %s: %w", p, err)
+		}
+	}
+	for _, t := range targets {
+		if err := l.link(t, false); err != nil {
+			return fmt.Errorf("link %s: %w", t, err)
 		}
 	}
 	return nil
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
+// under reports whether rel lies inside dir.
+func under(rel, dir string) bool { return strings.HasPrefix(rel, dir+"/") }
+
+func cleanPaths(paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		if p = filepath.Clean(p); filepath.IsLocal(p) {
+			out = append(out, filepath.ToSlash(p))
+		}
+	}
+	return out
+}
+
+type linker struct {
+	root, worktree string
+	skip           []string
+}
+
+func (l *linker) skipped(rel string) bool {
+	if parts := strings.Split(rel, "/"); slices.Contains(parts, "node_modules") || slices.Contains(parts, ".git") {
+		return true
+	}
+	return slices.ContainsFunc(l.skip, func(p string) bool { return rel == p || under(rel, p) })
+}
+
+// link symlinks rel into the worktree unless it is skipped, missing or already
+// there. A directory holding a skipped path is not linked whole; its entries
+// are linked one by one instead, and so are the entries of a gitignored one,
+// unless it is itself inside such a directory.
+func (l *linker) link(rel string, underIgnored bool) error {
+	if l.skipped(rel) {
+		return nil
+	}
+	src := filepath.Join(l.root, rel)
+	info, err := os.Lstat(src)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
 		return err
 	}
-	defer in.Close()
-	info, err := in.Stat()
-	if err != nil {
-		return err
+	if info.IsDir() {
+		if _, err := os.Lstat(filepath.Join(src, ".git")); err == nil {
+			return nil
+		}
+		ignored := !underIgnored && l.ignored(rel)
+		if ignored || l.holdsSkipped(src, rel) {
+			entries, err := os.ReadDir(src)
+			if errors.Is(err, fs.ErrPermission) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := l.link(rel+"/"+e.Name(), underIgnored || ignored); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	dst := filepath.Join(l.worktree, rel)
+	if _, err := os.Lstat(dst); err == nil {
+		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+		return skipIfTaken(err)
 	}
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
+	return skipIfTaken(os.Symlink(src, dst))
+}
+
+func (l *linker) ignored(rel string) bool {
+	_, err := run(l.root, "check-ignore", "-q", rel)
+	return err == nil
+}
+
+// skipIfTaken drops the error of a path the worktree's branch already uses for
+// something else, such as a tracked file where the main checkout has a directory.
+func skipIfTaken(err error) error {
+	if errors.Is(err, fs.ErrExist) || errors.Is(err, syscall.ENOTDIR) {
+		return nil
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	return err
+}
+
+func (l *linker) holdsSkipped(src, rel string) bool {
+	found := false
+	filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if sub, _ := filepath.Rel(src, path); err != nil || found || (sub != "." && l.skipped(rel+"/"+filepath.ToSlash(sub))) {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // Dirty reports uncommitted changes in the worktree, ignoring untracked
-// files under the node_modules link this package creates and the given
-// paths, such as the files CopyFiles brought in.
-func Dirty(path string, ignore ...string) bool {
+// symlinks to the same path in root, such as the ones LinkFiles creates.
+func Dirty(path, root string) bool {
 	if path == "" {
 		return false
 	}
-	out, err := run(path, "status", "--porcelain", "--untracked-files=all")
+	out, err := runRaw(path, "status", "--porcelain", "-z", "--untracked-files=all")
 	if err != nil {
 		return false
 	}
-	ignore = append(slices.Clip(ignore), "node_modules")
-	for _, line := range strings.Split(out, "\n") {
-		if len(line) > 3 && !(strings.HasPrefix(line, "?? ") && ignored(line[3:], ignore)) {
+	for entry := range strings.SplitSeq(out, "\x00") {
+		if len(entry) > 3 && !(strings.HasPrefix(entry, "?? ") && linksTo(filepath.Join(path, entry[3:]), filepath.Join(root, entry[3:]))) {
 			return true
 		}
 	}
 	return false
 }
 
-func ignored(path string, ignore []string) bool {
-	path = strings.TrimSuffix(path, "/")
-	for _, p := range ignore {
-		p = filepath.ToSlash(filepath.Clean(p))
-		if path == p || strings.HasPrefix(path, p+"/") {
-			return true
-		}
-	}
-	return false
+func linksTo(path, target string) bool {
+	got, err := os.Readlink(path)
+	return err == nil && got == target
 }
 
 func CurrentBranch(dir string) string {
