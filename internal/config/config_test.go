@@ -253,6 +253,48 @@ func TestPRFlow(t *testing.T) {
 	}
 }
 
+func TestChangesRequestedMode(t *testing.T) {
+	cases := []struct {
+		name    string
+		flow    PRFlow
+		propose bool
+		message string
+	}{
+		{"unset proposes", PRFlow{}, true, proposeChangesMessage},
+		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposeChangesMessage},
+		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fixChangesMessage},
+		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: "mine"}, false, "mine"},
+		{"own message with propose mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "propose"}, true, "mine"},
+	}
+	for _, c := range cases {
+		if got := c.flow.Proposes(); got != c.propose {
+			t.Errorf("%s: Proposes() = %v", c.name, got)
+		}
+		if got := c.flow.ChangesMessage(); got != c.message {
+			t.Errorf("%s: ChangesMessage() = %q", c.name, got)
+		}
+	}
+	if !Default().PRFlow.Proposes() {
+		t.Error("default board does not propose")
+	}
+	var nilFlow *PRFlow
+	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
+		t.Error("a missing prFlow does not propose")
+	}
+	dir := t.TempDir()
+	for mode, valid := range map[string]bool{"propose": true, "fix": true, "auto": false} {
+		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"}],
+		  "prFlow":{"changesRequestedMode":"`+mode+`"}}`), 0o644)
+		board, _, err := Load(dir)
+		if valid != (err == nil) {
+			t.Fatalf("mode %q: err = %v", mode, err)
+		}
+		if valid && board.PRFlow.ChangesRequestedMode != mode {
+			t.Errorf("mode %q loaded as %q", mode, board.PRFlow.ChangesRequestedMode)
+		}
+	}
+}
+
 func TestKeepAgent(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {

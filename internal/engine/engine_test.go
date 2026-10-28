@@ -1216,6 +1216,56 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	})
 }
 
+func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{
+  "columns": [
+    {"id":"backlog","name":"Backlog"},
+    {"id":"exec","name":"Executing","autoSpawn":true},
+    {"id":"review","name":"In review"},
+    {"id":"done","name":"Done","role":"done"}
+  ],
+  "prFlow": {"opened": "review", "changesRequested": "exec"}
+}`), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
+	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
+	t.Setenv("FAKE_GH", ghFile)
+	pr := func(head, reviews string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":"OPEN","headRefOid":%q,
+		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, head, reviews)), 0o644)
+	}
+	pr("aaa", "")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	runEngine(t, e)
+
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the PR to ship to In review", func(t *store.Task) bool { return t.ColumnID == "review" })
+
+	review := `{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`
+	pr("aaa", review)
+	waitFor(t, e, "the card to go back to Executing", func(t *store.Task) bool { return t.ColumnID == "exec" })
+	waitFor(t, e, "the proposal message", func(*store.Task) bool {
+		data, _ := os.ReadFile(log)
+		return strings.Contains(string(data), "Don't change anything")
+	})
+	if !hasLog(e.Snapshot().Tasks[0], "propose fixes") {
+		t.Error("the card's log doesn't say the agent was asked to propose")
+	}
+	pr("bbb", review)
+	time.Sleep(600 * time.Millisecond)
+	if c := e.Snapshot().Tasks[0]; c.ColumnID != "exec" {
+		t.Errorf("card went to %s after a push the proposal didn't ask for", c.ColumnID)
+	}
+}
+
 type mergedRig struct {
 	e       *Engine
 	task    *store.Task

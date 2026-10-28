@@ -77,9 +77,48 @@ type PRFlow struct {
 	Opened                  string `json:"opened,omitempty"`
 	ChangesRequested        string `json:"changesRequested,omitempty"`
 	ChangesRequestedMessage string `json:"changesRequestedMessage,omitempty"`
+	ChangesRequestedMode    string `json:"changesRequestedMode,omitempty"`
 	Merged                  string `json:"merged,omitempty"`
 	Released                string `json:"released,omitempty"`
 	ReleaseBranch           string `json:"releaseBranch,omitempty"`
+}
+
+const (
+	ChangesModePropose = "propose"
+	ChangesModeFix     = "fix"
+)
+
+const (
+	readReviewComments = "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` " +
+		"and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`"
+	proposeChangesMessage = readReviewComments + ". Don't change anything, push or reply yet: " +
+		"list each issue with the fix you would make, and ask me which to apply."
+	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
+)
+
+// Proposes reports whether the agent presents review fixes before applying them.
+func (f *PRFlow) Proposes() bool {
+	if f == nil {
+		return true
+	}
+	switch f.ChangesRequestedMode {
+	case ChangesModePropose:
+		return true
+	case ChangesModeFix:
+		return false
+	}
+	return f.ChangesRequestedMessage == ""
+}
+
+// ChangesMessage is what the agent is sent when a review requests changes.
+func (f *PRFlow) ChangesMessage() string {
+	if f != nil && f.ChangesRequestedMessage != "" {
+		return f.ChangesRequestedMessage
+	}
+	if f.Proposes() {
+		return proposeChangesMessage
+	}
+	return fixChangesMessage
 }
 
 type Column struct {
@@ -326,6 +365,9 @@ func (b *Board) validate() error {
 		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
 			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
 		}
+		if m := f.ChangesRequestedMode; m != "" && m != ChangesModePropose && m != ChangesModeFix {
+			return fmt.Errorf("%s: prFlow.changesRequestedMode must be %q or %q, not %q", FileName, ChangesModePropose, ChangesModeFix, m)
+		}
 	}
 	if f := b.ReviewFlow; f != nil {
 		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Updated, f.Done)
@@ -421,10 +463,8 @@ func Default() *Board {
 			Requested:        "waiting-for-me",
 			Opened:           "in-review",
 			ChangesRequested: "executing",
-			ChangesRequestedMessage: "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` " +
-				"and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",
-			Merged:   "done",
-			Released: "done",
+			Merged:           "done",
+			Released:         "done",
 		},
 	}
 }

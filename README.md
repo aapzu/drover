@@ -365,7 +365,7 @@ board uses:
   "requested": "waiting-for-me",
   "opened": "in-review",
   "changesRequested": "executing",
-  "changesRequestedMessage": "PR #{{prNumber}} got review comments…",
+  "changesRequestedMode": "propose",
   "merged": "done",
   "released": "done"
 }
@@ -379,8 +379,16 @@ board uses:
 - **opened:** where the session card goes once its first PR is open, and where
   each further PR's card starts.
 - **changesRequested:** a new review requesting changes moves a card from
-  `opened` here and sends the agent `changesRequestedMessage`. Once the agent
-  has pushed a new head and is idle, the card goes back to `opened`.
+  `opened` here and sends the agent a message about the review. In `fix` mode,
+  once the agent has pushed a new head and is idle, the card goes back to
+  `opened`.
+- **changesRequestedMode:** `propose` (the default) has the agent list each
+  review issue with the fix it would make and ask you which to apply, without
+  changing, pushing or replying. Turn-end automations such as moving to
+  Waiting for me run as usual, and the card stays where you leave it. `fix`
+  has it address the comments, push and reply on its own.
+  **changesRequestedMessage** replaces the built-in message in either mode; a
+  board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
 - **released:** once the merge commit reaches `releaseBranch` on origin

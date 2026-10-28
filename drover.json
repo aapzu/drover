@@ -95,7 +95,7 @@
     "requested": "waiting-for-me",
     "opened": "in-review",
     "changesRequested": "executing",
-    "changesRequestedMessage": "PR #{{prNumber}} ({{prUrl}}) got review comments. Read them with `gh pr view {{prUrl}} --comments` and the inline ones with `gh api repos/{owner}/{repo}/pulls/{{prNumber}}/comments`, address them, push, and reply to each.",
+    "changesRequestedMode": "propose",
     "merged": "done"
   }
 }
