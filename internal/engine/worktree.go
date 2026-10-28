@@ -53,7 +53,6 @@ func (e *Engine) UpdateFromBase(id string) (string, error) {
 	}
 	e.mu.Lock()
 	path, base, fallback := owner.WorktreePath, owner.BaseBranch, e.board.DefaultBaseBranch
-	copied := e.board.CopyFiles
 	s := owner.Sessions[store.MainSession]
 	running := s != nil && s.Status == store.StatusRunning
 	working := running && s.Activity != store.ActivityIdle
@@ -64,7 +63,7 @@ func (e *Engine) UpdateFromBase(id string) (string, error) {
 	if working {
 		return "", errors.New("the agent is working; update once it's idle")
 	}
-	if gitx.Dirty(path, copied...) {
+	if gitx.Dirty(path, e.Root) {
 		return "", errors.New("the worktree has uncommitted changes")
 	}
 	base, err := gitx.ResolveBase(e.Root, base, fallback)

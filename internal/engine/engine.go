@@ -466,9 +466,9 @@ func (e *Engine) DiscardSilent(id string) error {
 	e.mu.Lock()
 	s := t.Sessions[store.MainSession]
 	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && t.ColumnID == e.board.FirstColumn().ID && !e.talkedTo(t, store.MainSession)
-	path, copied := t.WorktreePath, e.board.CopyFiles
+	path := t.WorktreePath
 	e.mu.Unlock()
-	if !silent || gitx.Dirty(path, copied...) {
+	if !silent || gitx.Dirty(path, e.Root) {
 		return nil
 	}
 	return e.discardCard(t, owner)
@@ -634,9 +634,8 @@ func (e *Engine) WorktreeDirty(id string) bool {
 	if t != nil {
 		path = e.owner(t).WorktreePath
 	}
-	ignore := e.board.CopyFiles
 	e.mu.Unlock()
-	return gitx.Dirty(path, ignore...)
+	return gitx.Dirty(path, e.Root)
 }
 
 type MoveOptions struct {
@@ -931,7 +930,7 @@ func (e *Engine) ensureWorktree(t *store.Task, col config.Column, busyID string)
 	path, branch, base := t.WorktreePath, t.Branch, t.BaseBranch
 	title, id, number := t.Title, t.ID, t.Number
 	defaultBase := e.board.DefaultBaseBranch
-	copyFiles, initScript := e.board.CopyFiles, e.board.InitScript
+	board := e.board
 	imported, rootBound := false, true
 	for _, s := range t.Sessions {
 		imported = imported || s.Imported
@@ -963,12 +962,14 @@ func (e *Engine) ensureWorktree(t *store.Task, col config.Column, busyID string)
 	e.setBusy(busyID, "creating worktree")
 	path, err = gitx.CreateWorktree(e.Root, e.worktreesDir(), fmt.Sprintf("%s%d", worktreeFolderPrefix, number), branch, resolved)
 	if err == nil {
-		err = gitx.CopyFiles(e.Root, path, copyFiles)
+		if board.LinkUntracked {
+			err = gitx.LinkFiles(e.Root, path, e.worktreesDir(), board.LinkFiles, board.LinkExclude)
+		}
 	}
-	if err == nil && initScript != "" {
+	if err == nil && board.InitScript != "" {
 		e.setBusy(busyID, "running init script")
 		env := []string{"DROVER_PROJECTPATH=" + e.Root, "DROVER_WORKTREEPATH=" + path, "DROVER_BRANCHNAME=" + branch}
-		if err = runShell(e.stopping, path, initScript, env, 10*time.Minute); err != nil {
+		if err = runShell(e.stopping, path, board.InitScript, env, 10*time.Minute); err != nil {
 			err = fmt.Errorf("init script: %w", err)
 		}
 	}
@@ -1130,12 +1131,12 @@ func (e *Engine) freeWorktree(owner, pending *store.Task, force bool) error {
 	for _, m := range store.Members(e.state.Tasks, owner) {
 		idle = idle && (m.Archived || m == pending)
 	}
-	path, copied := owner.WorktreePath, e.board.CopyFiles
+	path := owner.WorktreePath
 	e.mu.Unlock()
 	if !idle || path == "" || !e.isRepo || !e.ownsWorktree(path) {
 		return nil
 	}
-	if !force && gitx.Dirty(path, copied...) {
+	if !force && gitx.Dirty(path, e.Root) {
 		return ErrDirty
 	}
 	return e.removeWorktree(owner)

@@ -61,6 +61,8 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.ArchiveDoneAfter }},
 	{name: "Init script", path: []string{"initScript"}, kind: optText, shared: true,
 		get: func(b *config.Board) any { return b.InitScript }},
+	{name: "Symlink untracked files", path: []string{"linkUntracked"}, kind: optToggle, shared: true,
+		get: func(b *config.Board) any { return b.LinkUntracked }},
 }
 
 func defaultConfigLayer(opt configOption) config.Layer {

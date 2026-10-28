@@ -227,7 +227,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 	board := config.Default()
 	board.DefaultBaseBranch, board.DefaultPermissionMode, board.DefaultModel = "main", "auto", "opus"
 	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
-	board.MaxConcurrent, board.IdleTimeoutMinutes = 4, 5
+	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked = 4, 5, true
 	data, err := json.Marshal(board)
 	if err != nil {
 		t.Fatal(err)
