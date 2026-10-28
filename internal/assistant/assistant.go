@@ -330,7 +330,7 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"Run `add` only after the user agrees to the card.\n" +
 		"`" + cmd + " list --json` shows every card: number, title, column, branch, worktree, issue, pull request and what its agent is doing. " +
 		"Run it before every answer that depends on the cards. The board changes while you talk, so never rely on an earlier run.\n" +
-		"A card's `pr` has the `url`, `number`, `state` (open, merged, closed or unknown), `reviewDecision` (approved or changes requested), `released` (the merge reached the release branch), `reviewing` (a pull request you were asked to review, not one you opened) and `error` of its pull request. " +
+		"A card's `pr` has the `url`, `number`, `state` (open, merged, closed or unknown), `reviewDecision` (approved or changes requested), `inMergeQueue` (waiting in the merge queue), `released` (the merge reached the release branch), `reviewing` (a pull request you were asked to review, not one you opened) and `error` of its pull request. " +
 		"A card without `pr` has no pull request the board has seen. " +
 		"It is as the board last saw it: the board polls open pull requests about once a minute while it runs, and never polls a merged or closed one again, nor any card in a done column. " +
 		"It is the only source for whether a pull request is merged or closed: never answer that from git history or merge commits, never run `gh`, and never ask the user to. " +

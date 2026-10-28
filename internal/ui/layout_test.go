@@ -342,9 +342,10 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 		t.Errorf("owner card:\n%s", ownerCard)
 	}
 	for pr, want := range map[store.PR]string{
-		{Number: 12, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}: "✗ changes PR #12",
-		{Number: 13, State: "MERGED", Released: true}:                    "PR #13 released",
-		{Number: 14, State: "OPEN", Error: "gh pr view: timed out"}:      "⚠ gh PR #14",
+		{Number: 12, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}:            "✗ changes PR #12",
+		{Number: 15, State: "OPEN", ReviewDecision: "APPROVED", InMergeQueue: true}: "⇉ queued PR #15",
+		{Number: 13, State: "MERGED", Released: true}:                               "PR #13 released",
+		{Number: 14, State: "OPEN", Error: "gh pr view: timed out"}:                 "⚠ gh PR #14",
 	} {
 		card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0", PR: &pr}
 		if got := ansi.Strip(m.renderCard(card, 60, false, false)); !strings.Contains(got, want) {

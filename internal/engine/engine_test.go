@@ -1118,6 +1118,59 @@ const flowBoard = `{
     "merged": "verify", "released": "done", "releaseBranch": "main"}
 }`
 
+func TestPRCardShowsTheMergeQueue(t *testing.T) {
+	root, _ := setupProject(t)
+	tmp := filepath.Dir(root)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(flowBoard), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncase \"$1\" in\n  api) cat \"$FAKE_QUEUE\";;\n  *) cat \"$FAKE_GH\";;\nesac\n"), 0o755)
+	ghFile, queueFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "queue")
+	t.Setenv("FAKE_GH", ghFile)
+	t.Setenv("FAKE_QUEUE", queueFile)
+	pr := func(title, state string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":%q,"headRefName":"one","state":%q,"headRefOid":"aaa","reviewDecision":"","latestReviews":[],"mergeCommit":null}`, title, state)), 0o644)
+	}
+	pr("PR one", "OPEN")
+	os.WriteFile(queueFile, []byte("false\n"), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	runEngine(t, e)
+
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	queued := func(want bool) func([]*store.Task) bool {
+		return func(tasks []*store.Task) bool {
+			return len(tasks) == 1 && tasks[0].PR != nil && tasks[0].PR.Title == "PR one" && tasks[0].PR.InMergeQueue == want
+		}
+	}
+	waitForAll(t, e, "the PR is polled and not queued", queued(false))
+	os.WriteFile(queueFile, []byte("true\n"), 0o644)
+	waitForAll(t, e, "the PR enters the merge queue", queued(true))
+	os.WriteFile(queueFile, []byte("false\n"), 0o644)
+	waitForAll(t, e, "the PR leaves the merge queue", queued(false))
+
+	os.WriteFile(queueFile, []byte("true\n"), 0o644)
+	waitForAll(t, e, "the PR is queued again", queued(true))
+	os.WriteFile(queueFile, []byte("boom\n"), 0o644)
+	pr("PR renamed", "OPEN")
+	waitForAll(t, e, "a failed queue lookup still refreshes the PR but drops the badge", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR.Title == "PR renamed" && tasks[0].PR.Error == "" && !tasks[0].PR.InMergeQueue
+	})
+	os.WriteFile(queueFile, []byte("true\n"), 0o644)
+	waitForAll(t, e, "the PR is queued once more", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR.Title == "PR renamed" && tasks[0].PR.InMergeQueue
+	})
+	pr("PR renamed", "MERGED")
+	waitForAll(t, e, "a merged PR is no longer queued", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR.State == "MERGED" && !tasks[0].PR.InMergeQueue
+	})
+}
+
 func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	root, log := setupProject(t)
 	tmp := filepath.Dir(root)

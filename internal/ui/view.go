@@ -516,6 +516,8 @@ func (m Model) cardRef(t *store.Task) string {
 		case t.PR.State != "OPEN":
 		case t.PR.Review:
 			badge = reviewBadge(t.PR)
+		case t.PR.InMergeQueue:
+			badge = thinking.Render("⇉ queued") + " "
 		case t.PR.ReviewDecision == "APPROVED":
 			badge = idle.Render("✓ approved") + " "
 		case t.PR.ReviewDecision == "CHANGES_REQUESTED":

@@ -1,6 +1,9 @@
 package gh
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,5 +41,40 @@ func TestChangesRequestedAt(t *testing.T) {
 	}
 	if (PR{}).MergeOID() != "" {
 		t.Error("MergeOID without a merge commit")
+	}
+}
+
+func TestInMergeQueueRejectsAnythingButAPullRequestURL(t *testing.T) {
+	if _, err := InMergeQueue("", "https://github.com/acme/widgets/pull/42/files"); err == nil {
+		t.Error("a URL that isn't a pull request should be an error")
+	}
+}
+
+func TestInMergeQueueAsksGraphQLAndReadsTheAnswer(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\necho \"$@\" > \"$FAKE_ARGS\"\ncat \"$FAKE_OUT\"\n"), 0o755)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_ARGS", args)
+	out := filepath.Join(dir, "out")
+	t.Setenv("FAKE_OUT", out)
+	for answer, want := range map[string]bool{"true\n": true, "false\n": false} {
+		os.WriteFile(out, []byte(answer), 0o644)
+		got, err := InMergeQueue(dir, "https://ghe.example.com/acme/widgets/pull/42")
+		if err != nil || got != want {
+			t.Errorf("answer %q: got %v, %v", answer, got, err)
+		}
+	}
+	argv, _ := os.ReadFile(args)
+	for _, want := range []string{"api graphql", "--hostname ghe.example.com", "o=acme", "r=widgets", "n=42", "isInMergeQueue"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("gh was run with %q, which lacks %q", argv, want)
+		}
+	}
+	for _, answer := range []string{"", "null\n", "maybe\n"} {
+		os.WriteFile(out, []byte(answer), 0o644)
+		if _, err := InMergeQueue(dir, "https://github.com/acme/widgets/pull/42"); err == nil {
+			t.Errorf("answer %q should be an error", answer)
+		}
 	}
 }

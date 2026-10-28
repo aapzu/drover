@@ -114,6 +114,31 @@ func Me(dir string) (string, error) {
 
 var number = regexp.MustCompile(`/pull/(\d+)$`)
 
+var prURL = regexp.MustCompile(`^https?://([^/]+)/([^/]+)/([^/]+)/pull/\d+$`)
+
+const mergeQueueQuery = `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){isInMergeQueue}}}`
+
+// InMergeQueue reports whether the pull request at url waits in its
+// repository's merge queue.
+func InMergeQueue(dir, url string) (bool, error) {
+	m := prURL.FindStringSubmatch(url)
+	if m == nil {
+		return false, fmt.Errorf("gh api graphql: %q is not a pull request URL", url)
+	}
+	out, err := run(dir, "gh api graphql", "api", "graphql", "--hostname", m[1],
+		"-f", "query="+mergeQueueQuery, "-f", "o="+m[2], "-f", "r="+m[3], "-F", "n="+strconv.Itoa(Number(url)),
+		"--jq", ".data.repository.pullRequest.isInMergeQueue")
+	if err != nil {
+		return false, err
+	}
+	switch got := strings.TrimSpace(string(out)); got {
+	case "true", "false":
+		return got == "true", nil
+	default:
+		return false, fmt.Errorf("gh api graphql: unexpected isInMergeQueue %q", got)
+	}
+}
+
 // Number returns the PR number at the end of a pull request URL.
 func Number(url string) int {
 	m := number.FindStringSubmatch(url)

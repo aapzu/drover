@@ -151,13 +151,14 @@ type cardPR struct {
 	Number         int    `json:"number,omitempty"`
 	State          string `json:"state"`
 	ReviewDecision string `json:"reviewDecision,omitempty"`
+	InMergeQueue   bool   `json:"inMergeQueue,omitempty"`
 	Released       bool   `json:"released,omitempty"`
 	Reviewing      bool   `json:"reviewing,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 
 func prInfo(p *store.PR) *cardPR {
-	c := &cardPR{URL: p.URL, Number: p.Number, State: "unknown", Released: p.Released, Reviewing: p.IsReview(), Error: errorLine(p.Error)}
+	c := &cardPR{URL: p.URL, Number: p.Number, State: "unknown", InMergeQueue: p.InMergeQueue, Released: p.Released, Reviewing: p.IsReview(), Error: errorLine(p.Error)}
 	switch p.State {
 	case "OPEN", "MERGED", "CLOSED":
 		c.State = strings.ToLower(p.State)
