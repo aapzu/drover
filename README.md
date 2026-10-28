@@ -361,7 +361,8 @@ and so on, and the marker has the same color on every card of the group.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
 - `gh pr view` refreshes every open PR's card once a minute. Cards
-  show `✓ approved`, `✗ changes`, `merged` and `released`.
+  show `✓ approved`, `✗ changes`, `⇉ queued` (in the merge queue), `merged`
+  and `released`.
 
 ### Following a PR to release
 
@@ -531,7 +532,8 @@ drover ask "which cards are waiting on review?"
   `suspended`, `exited`), left out when empty. Cards that share one agent report the same three.
 - `list --json` gives a card's pull request as `pr`: its `url`, `number`,
   `state` (`open`, `merged`, `closed`, or `unknown` until gh has answered),
-  `reviewDecision` (`approved` or `changes requested`), `released`, `reviewing`
+  `reviewDecision` (`approved` or `changes requested`), `inMergeQueue`,
+  `released`, `reviewing`
   for a PR you were asked to review, and `error` when a lookup failed. It is the state the board last saved: it polls open
   pull requests about once a minute while it runs, and never polls a merged or
   closed one again, or a card in Done.

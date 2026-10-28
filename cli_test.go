@@ -165,6 +165,7 @@ func TestCardsReportThePRState(t *testing.T) {
 		"not polled":  {&store.PR{URL: url}, &cardPR{URL: url, State: "unknown"}},
 		"approved":    {&store.PR{URL: url, State: "OPEN", ReviewDecision: "APPROVED"}, &cardPR{URL: url, State: "open", ReviewDecision: "approved"}},
 		"changes":     {&store.PR{URL: url, State: "OPEN", ReviewDecision: "CHANGES_REQUESTED"}, &cardPR{URL: url, State: "open", ReviewDecision: "changes requested"}},
+		"queued":      {&store.PR{URL: url, State: "OPEN", InMergeQueue: true}, &cardPR{URL: url, State: "open", InMergeQueue: true}},
 		"undecided":   {&store.PR{URL: url, State: "OPEN", ReviewDecision: "REVIEW_REQUIRED"}, &cardPR{URL: url, State: "open"}},
 		"gh failed":   {&store.PR{URL: url, State: "MERGED", Error: "gh: boom"}, &cardPR{URL: url, State: "merged", Error: "gh: boom"}},
 		"reviewing":   {&store.PR{URL: url, State: "OPEN", Review: true}, &cardPR{URL: url, State: "open", Reviewing: true}},

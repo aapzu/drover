@@ -40,3 +40,9 @@ func TestChangesRequestedAt(t *testing.T) {
 		t.Error("MergeOID without a merge commit")
 	}
 }
+
+func TestInMergeQueueRejectsAnythingButAPullRequestURL(t *testing.T) {
+	if _, err := InMergeQueue("", "https://github.com/acme/widgets/pull/42/files"); err == nil {
+		t.Error("a URL that isn't a pull request should be an error")
+	}
+}

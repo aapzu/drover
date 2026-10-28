@@ -153,6 +153,7 @@ type PR struct {
 	Branch           string    `json:"branch,omitempty"`
 	State            string    `json:"state,omitempty"`
 	ReviewDecision   string    `json:"reviewDecision,omitempty"`
+	InMergeQueue     bool      `json:"inMergeQueue,omitempty"`
 	MergeCommit      string    `json:"mergeCommit,omitempty"`
 	ChangesSeenAt    time.Time `json:"changesSeenAt,omitzero"`
 	FixFrom          string    `json:"fixFrom,omitempty"`
