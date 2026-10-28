@@ -1158,8 +1158,12 @@ func TestPRCardShowsTheMergeQueue(t *testing.T) {
 	waitForAll(t, e, "the PR is queued again", queued(true))
 	os.WriteFile(queueFile, []byte("boom\n"), 0o644)
 	pr("PR renamed", "OPEN")
-	waitForAll(t, e, "a failed queue lookup still refreshes the PR and keeps the badge", func(tasks []*store.Task) bool {
-		return len(tasks) == 1 && tasks[0].PR.Title == "PR renamed" && tasks[0].PR.Error == "" && tasks[0].PR.InMergeQueue
+	waitForAll(t, e, "a failed queue lookup still refreshes the PR but drops the badge", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR.Title == "PR renamed" && tasks[0].PR.Error == "" && !tasks[0].PR.InMergeQueue
+	})
+	os.WriteFile(queueFile, []byte("true\n"), 0o644)
+	waitForAll(t, e, "the PR is queued once more", func(tasks []*store.Task) bool {
+		return len(tasks) == 1 && tasks[0].PR.Title == "PR renamed" && tasks[0].PR.InMergeQueue
 	})
 	pr("PR renamed", "MERGED")
 	waitForAll(t, e, "a merged PR is no longer queued", func(tasks []*store.Task) bool {

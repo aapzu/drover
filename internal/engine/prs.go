@@ -231,10 +231,11 @@ func (e *Engine) refreshPR(id string) {
 		e.mu.Unlock()
 		return
 	}
-	url, review, queued := t.PR.URL, t.PR.Review, t.PR.InMergeQueue
+	url, review := t.PR.URL, t.PR.Review
 	e.mu.Unlock()
 	info, err := gh.View(e.Root, url)
 	var me string
+	queued := false
 	if err == nil && review {
 		if me, err = e.login(); err != nil {
 			err = fmt.Errorf("can't tell whether it is yours, so the card stays put: %w", err)
@@ -270,7 +271,7 @@ func (e *Engine) refreshPR(id string) {
 		pr.Error = ""
 		pr.Title, pr.Branch, pr.State = info.Title, info.Branch, info.State
 		pr.ReviewDecision, pr.MergeCommit, pr.HeadSHA = info.ReviewDecision, info.MergeOID(), info.HeadSHA
-		pr.InMergeQueue = queued && info.State == "OPEN"
+		pr.InMergeQueue = queued
 		if pr.Review {
 			pr.Author = info.Author.Login
 			confirmed = info.State == "OPEN"
