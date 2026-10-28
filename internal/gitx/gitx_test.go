@@ -123,7 +123,7 @@ func linkRepo(t *testing.T) (root, wt string) {
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte(body), 0o644)
 	}
-	write(".gitignore", "dist/\n.env\nnode_modules/\n")
+	write(".gitignore", "dist/\n-cache/\n.env\nnode_modules/\n")
 	write("config/tracked.json", "{}")
 	write("q", "1")
 	git(t, root, "add", ".")
@@ -137,7 +137,11 @@ func linkRepo(t *testing.T) (root, wt string) {
 	write("tools/node_modules/pkg/index.js", "x")
 	write("tools/run.sh", "x")
 	write("trees/1/file", "x")
+	write("-cache/a", "x")
+	write(".kangentic/config.json", "x")
 	write(".kangentic/worktrees/3/f.txt", "x")
+	write("vendor-repo/.env", "x")
+	write("vendor-repo/.git", "gitdir: elsewhere")
 	write(".kangentic/worktrees/3/.git", "gitdir: elsewhere")
 	write("my file.txt", "x")
 	write("a b/c d.txt", "x")
@@ -168,18 +172,20 @@ func TestLinkFilesEverythingExceptSkipped(t *testing.T) {
 	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{".env", "notes.txt", "dist/app.js", "dist/cache", "config/local", "tools/run.sh"} {
+	for _, rel := range []string{".env", "notes.txt", "dist/app.js", "dist/cache", "-cache/a", ".kangentic/config.json", "config/local", "tools/run.sh"} {
 		if !linked(t, root, wt, rel) {
 			t.Errorf("%s was not linked", rel)
 		}
 	}
-	if linked(t, root, wt, "dist") {
-		t.Error("gitignored dist was linked whole, so a dist/ rule no longer matches it")
+	for _, rel := range []string{"dist", "-cache"} {
+		if linked(t, root, wt, rel) {
+			t.Errorf("gitignored %s was linked whole, so its ignore rule no longer matches it", rel)
+		}
 	}
 	if out := git(t, wt, "status", "--porcelain", "--untracked-files=all"); strings.Contains(out, "dist") {
 		t.Errorf("git status in the worktree lists the links under an ignored directory:\n%s", out)
 	}
-	for _, rel := range []string{"node_modules", "tools/node_modules", ".claude", ".drover", ".kangentic", "config/tracked.json", "../outside"} {
+	for _, rel := range []string{"node_modules", "tools/node_modules", ".claude", ".drover", ".kangentic/worktrees", "vendor-repo", "config/tracked.json", "../outside"} {
 		if fi, err := os.Lstat(filepath.Join(wt, rel)); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			t.Errorf("%s was linked", rel)
 		}
@@ -241,6 +247,79 @@ func TestDirtyKeepsAOneLetterFirstEntry(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "q"), []byte("2"), 0o644)
 	if !Dirty(root, root) {
 		t.Error("an edit to a tracked file named q is not dirty")
+	}
+}
+
+func TestLinkFilesWhitelist(t *testing.T) {
+	worktrees := func(root string) string { return filepath.Join(root, ".drover", "worktrees") }
+	exists := func(wt, rel string) bool {
+		_, err := os.Lstat(filepath.Join(wt, rel))
+		return err == nil
+	}
+
+	t.Run("an unusable whitelist links nothing", func(t *testing.T) {
+		root, wt := linkRepo(t)
+		if err := LinkFiles(root, wt, worktrees(root), []string{"../outside", "missing"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		for _, rel := range []string{".env", "notes.txt", "dist"} {
+			if exists(wt, rel) {
+				t.Errorf("%s was linked", rel)
+			}
+		}
+	})
+
+	t.Run("an ignored directory is a real directory of links", func(t *testing.T) {
+		root, wt := linkRepo(t)
+		if err := LinkFiles(root, wt, worktrees(root), []string{"dist"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if linked(t, root, wt, "dist") || !linked(t, root, wt, "dist/app.js") || !linked(t, root, wt, "dist/cache") {
+			t.Error("dist was not recreated as a directory of links")
+		}
+	})
+
+	t.Run("a path inside an ignored directory keeps its siblings out", func(t *testing.T) {
+		root, wt := linkRepo(t)
+		if err := LinkFiles(root, wt, worktrees(root), []string{"dist/cache"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if linked(t, root, wt, "dist") || exists(wt, "dist/app.js") || !linked(t, root, wt, "dist/cache/big.bin") {
+			t.Error("only dist/cache/big.bin should be linked")
+		}
+	})
+
+	t.Run("a nested repo stays out even by name", func(t *testing.T) {
+		root, wt := linkRepo(t)
+		if err := LinkFiles(root, wt, worktrees(root), []string{"vendor-repo/.env", ".kangentic/worktrees/3/f.txt"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if exists(wt, "vendor-repo") || exists(wt, ".kangentic") {
+			t.Error("a path inside a nested repo was linked")
+		}
+	})
+}
+
+func TestRemovingALinkedWorktreeKeepsTheSources(t *testing.T) {
+	root, wt := linkRepo(t)
+	if err := LinkFiles(root, wt, filepath.Join(root, ".drover", "worktrees"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveWorktree(root, wt); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".env", "dist/app.js", "config/local/dev.json", "notes.txt"} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("%s was removed with the worktree: %v", rel, err)
+		}
+	}
+}
+
+func TestDirtyIgnoresAnOldNodeModulesLink(t *testing.T) {
+	root, wt := linkRepo(t)
+	os.Symlink(filepath.Join(root, "node_modules"), filepath.Join(wt, "node_modules"))
+	if Dirty(wt, root) {
+		t.Error("the node_modules link older drover versions made counts as a change")
 	}
 }
 

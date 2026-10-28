@@ -211,9 +211,11 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   holding a `.git`, such as another tool's worktree, are never linked. The
   links never count as uncommitted changes, but links to files git doesn't
   ignore show as untracked there, so stage by path rather than with
-  `git add -A`. `initScript` then runs with `sh -c` in the new worktree before
-  the agent starts, for example `pnpm i`. If it fails, so does the move, and
-  the next start runs it again.
+  `git add -A`. Build output and caches are linked too, so a build in one
+  worktree writes into the main checkout; list them in `linkExclude`.
+  `initScript` then runs with `sh -c` in the new worktree before the agent
+  starts, for example `pnpm i`. If it fails, so does the move, and the next
+  start runs it again.
 - **Keeping up with the base branch.** `u` fetches the card's base branch and
   fast-forwards the worktree to it. When the branch has commits of its own,
   a running agent is asked to merge it instead. `u` refuses while the agent

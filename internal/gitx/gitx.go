@@ -237,6 +237,9 @@ func LinkFiles(root, worktree, worktreesDir string, only, except []string) error
 		}
 	}
 	for _, t := range targets {
+		if l.inNestedRepo(t) {
+			continue
+		}
 		if err := l.link(t, false); err != nil {
 			return fmt.Errorf("link %s: %w", t, err)
 		}
@@ -269,10 +272,10 @@ func (l *linker) skipped(rel string) bool {
 	return slices.ContainsFunc(l.skip, func(p string) bool { return rel == p || under(rel, p) })
 }
 
-// link symlinks rel into the worktree unless it is skipped, missing or already
-// there. A directory holding a skipped path is not linked whole; its entries
-// are linked one by one instead, and so are the entries of a gitignored one,
-// unless it is itself inside such a directory.
+// link symlinks rel into the worktree unless it is skipped, missing, already
+// there or a directory holding a .git. A directory holding a skipped path is
+// not linked whole; its entries are linked one by one instead, and so are the
+// entries of a gitignored one, unless it is itself inside such a directory.
 func (l *linker) link(rel string, underIgnored bool) error {
 	if l.skipped(rel) {
 		return nil
@@ -288,7 +291,12 @@ func (l *linker) link(rel string, underIgnored bool) error {
 		if _, err := os.Lstat(filepath.Join(src, ".git")); err == nil {
 			return nil
 		}
-		ignored := !underIgnored && l.ignored(rel)
+		ignored := false
+		if !underIgnored {
+			if ignored, err = l.ignored(rel); err != nil {
+				return err
+			}
+		}
 		if ignored || l.holdsSkipped(src, rel) {
 			entries, err := os.ReadDir(src)
 			if errors.Is(err, fs.ErrPermission) {
@@ -314,9 +322,30 @@ func (l *linker) link(rel string, underIgnored bool) error {
 	return skipIfTaken(os.Symlink(src, dst))
 }
 
-func (l *linker) ignored(rel string) bool {
-	_, err := run(l.root, "check-ignore", "-q", rel)
-	return err == nil
+// ignored reports whether git ignores rel in root. check-ignore exits 1 for a
+// path that isn't, and anything else is a failure.
+func (l *linker) ignored(rel string) (bool, error) {
+	cmd := exec.Command("git", "check-ignore", "-q", "--", rel)
+	cmd.Dir = l.root
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("git check-ignore %s: %w", rel, err)
+	}
+	return true, nil
+}
+
+// inNestedRepo reports whether a directory above rel holds a .git.
+func (l *linker) inNestedRepo(rel string) bool {
+	for dir := filepath.Dir(rel); dir != "."; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(l.root, dir, ".git")); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // skipIfTaken drops the error of a path the worktree's branch already uses for
@@ -341,7 +370,8 @@ func (l *linker) holdsSkipped(src, rel string) bool {
 }
 
 // Dirty reports uncommitted changes in the worktree, ignoring untracked
-// symlinks to the same path in root, such as the ones LinkFiles creates.
+// symlinks whose target is the absolute path of the same file under root, such
+// as the ones LinkFiles creates.
 func Dirty(path, root string) bool {
 	if path == "" {
 		return false

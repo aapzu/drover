@@ -44,6 +44,27 @@ func TestNewWorktreeGetsLinkedFilesAndInitScript(t *testing.T) {
 	}
 }
 
+func TestNewWorktreeLinksNothingByDefault(t *testing.T) {
+	e := startWithBoard(t, worktreeBoard(`"linkFiles":[".env"],`))
+	os.WriteFile(filepath.Join(e.Root, ".env"), []byte("TOKEN=1\n"), 0o600)
+	os.MkdirAll(filepath.Join(e.Root, "node_modules", "pkg"), 0o755)
+	os.WriteFile(filepath.Join(e.Root, "node_modules", "pkg", "x.js"), []byte("x"), 0o644)
+
+	task := e.CreateTask("Plain", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	wt := e.Snapshot().Tasks[0].WorktreePath
+	for _, rel := range []string{".env", "node_modules"} {
+		if _, err := os.Lstat(filepath.Join(wt, rel)); err == nil {
+			t.Errorf("%s was linked without linkUntracked", rel)
+		}
+	}
+	if e.WorktreeDirty(task.ID) {
+		t.Error("a fresh worktree is dirty")
+	}
+}
+
 func TestFailingInitScriptFailsTheMove(t *testing.T) {
 	e := startWithBoard(t, worktreeBoard(`"initScript":"echo nope; exit 1",`))
 	task := e.CreateTask("Broken setup", "")
