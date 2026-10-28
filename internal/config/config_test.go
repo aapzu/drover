@@ -72,13 +72,6 @@ func TestAutomationConditional(t *testing.T) {
 	}
 }
 
-func TestLoadMissingUsesDefault(t *testing.T) {
-	board, found, err := Load(t.TempDir())
-	if err != nil || found || len(board.Columns) == 0 {
-		t.Fatalf("got found=%v err=%v cols=%d", found, err, len(board.Columns))
-	}
-}
-
 func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	plan := Column{PermissionMode: "plan"}
 	for _, tc := range []struct {
@@ -152,81 +145,6 @@ func TestWorktreesDirMustNotContainRoot(t *testing.T) {
 		if _, _, err := Load(dir); err == nil {
 			t.Errorf("worktreesDir %q accepted", bad)
 		}
-	}
-}
-
-func TestDefaultExecutingWaitsForYouWhenReplyAsks(t *testing.T) {
-	col, _, ok := Default().Column("executing")
-	if !ok || len(col.Automations.OnTurnEnd) != 1 {
-		t.Fatalf("default executing column has no turn-end rule: %+v", col)
-	}
-	row := col.Automations.OnTurnEnd[0]
-	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
-		t.Fatalf("default turn-end rule: %+v", row)
-	}
-}
-
-func TestExistingExecutingGetsWaitingForYou(t *testing.T) {
-	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
-	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
-	for _, tc := range []struct {
-		name, columns, wantName string
-		wantRows                int
-	}{
-		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", 0},
-		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "Apply", 1},
-		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "Waiting for me", 1},
-		{"no waiting-for-me", executing + `}`, "", 0},
-	} {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[`+tc.columns+`]}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		board, _, err := Load(root)
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		col, _, _ := board.Column("executing")
-		if got := len(col.Automations.OnTurnEnd); got != tc.wantRows {
-			t.Errorf("%s: turn-end rows = %d, want %d", tc.name, got, tc.wantRows)
-		}
-		if tc.wantRows > 0 && col.Automations.OnTurnEnd[0].Name != tc.wantName {
-			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, col.Automations.OnTurnEnd[0].Name, tc.wantName)
-		}
-	}
-}
-
-func TestLocalOverlayKeepsWaitingForYou(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, LocalFileName), []byte(`{"maxConcurrent":2}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	board, _, err := Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	col, _, _ := board.Column("executing")
-	if len(col.Automations.OnTurnEnd) != 1 {
-		t.Errorf("turn-end rows = %+v, want the default row alongside a local overlay", col.Automations.OnTurnEnd)
-	}
-}
-
-func TestMigratedWaitingForYouMatchesDefault(t *testing.T) {
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"executing","name":"Executing","autoSpawn":true},{"id":"waiting-for-me","name":"Waiting for me"}]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	board, _, err := Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _, _ := board.Column("executing")
-	want, _, _ := Default().Column("executing")
-	if !reflect.DeepEqual(got.Automations.OnTurnEnd, want.Automations.OnTurnEnd) {
-		t.Errorf("migrated turn-end rows = %+v, want %+v", got.Automations.OnTurnEnd, want.Automations.OnTurnEnd)
 	}
 }
 
@@ -383,24 +301,6 @@ func TestLegacyTodoColumnDropped(t *testing.T) {
 	}
 }
 
-func TestDefaultBoardStartsInPlanning(t *testing.T) {
-	board, _, err := Load(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first := board.FirstColumn(); first.ID != "planning" || !first.IsAgent() {
-		t.Errorf("first column = %+v, want the Planning agent column", first)
-	}
-	if !slices.Equal(board.LegacyTodo, []string{"todo"}) {
-		t.Errorf("default board's legacy ids = %v, want just the old default id", board.LegacyTodo)
-	}
-	for _, c := range board.Columns {
-		if want := c.ID == "planning"; c.NoWorktree != want {
-			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
-		}
-	}
-}
-
 func TestLoadNoWorktreeColumn(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[
@@ -445,88 +345,266 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 	}
 }
 
-func TestLocalOverridesPersonalSettings(t *testing.T) {
+// loadJSON loads a board from a drover.json holding shared and, when they are
+// not empty, a drover.local.json holding local. An empty shared leaves
+// drover.json out, so the default board loads.
+func loadJSON(t *testing.T, shared, local string) (*Board, error) {
+	t.Helper()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"maxConcurrent":4,"notifications":{"turnDone":false},
-	  "columns":[{"id":"first","name":"First"}]}`), 0o644)
-	board, _, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{FileName: shared, LocalFileName: local} {
+		if content == "" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	want := DefaultNotifications()
-	want.TurnDone = false
-	if board.Notifications != want || board.Limit() != 4 || !board.AutoName {
-		t.Errorf("shared board: notifications=%+v limit=%d", board.Notifications, board.Limit())
+	board, _, err := Load(dir)
+	return board, err
+}
+
+func TestDefaultBoard(t *testing.T) {
+	board, found, err := Load(t.TempDir())
+	if err != nil || found || len(board.Columns) == 0 {
+		t.Fatalf("got found=%v err=%v cols=%d", found, err, len(board.Columns))
+	}
+	if first := board.FirstColumn(); first.ID != "planning" || !first.IsAgent() {
+		t.Errorf("first column = %+v, want the Planning agent column", first)
+	}
+	if !slices.Equal(board.LegacyTodo, []string{"todo"}) {
+		t.Errorf("default board's legacy ids = %v, want just the old default id", board.LegacyTodo)
+	}
+	for _, c := range board.Columns {
+		if want := c.ID == "planning"; c.NoWorktree != want {
+			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
+		}
+	}
+	if err := Default().validate(); err != nil {
+		t.Errorf("default board: %v", err)
 	}
 
-	before := Stamp(dir)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":2,"idleTimeoutMinutes":30,
-	  "notifications":{"exited":false,"cooldownSeconds":60}}`), 0o644)
-	if Stamp(dir) == before {
-		t.Error("stamp ignores drover.local.json")
+	col, _, ok := Default().Column("executing")
+	if !ok || len(col.Automations.OnTurnEnd) != 1 {
+		t.Fatalf("default executing column has no turn-end rule: %+v", col)
 	}
-	board, _, err = Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want.Exited, want.CooldownSeconds = false, 60
-	if board.Notifications != want || board.Limit() != 2 || board.IdleTimeoutMinutes != 30 {
-		t.Errorf("local overrides: notifications=%+v limit=%d idle=%d", board.Notifications, board.Limit(), board.IdleTimeoutMinutes)
+	row := col.Automations.OnTurnEnd[0]
+	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
+		t.Errorf("default turn-end rule: %+v", row)
 	}
 }
 
-func TestLocalOverridesApplyToDefaultBoard(t *testing.T) {
+func TestExecutingWaitsForYou(t *testing.T) {
+	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
+	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
+	cases := []struct {
+		name, columns, local, wantName string
+		wantRows                       int
+		matchesDefault                 bool
+	}{
+		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", "", 0, false},
+		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "", "Apply", 1, false},
+		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "", "Waiting for me", 1, false},
+		{"no waiting-for-me", executing + `}`, "", "", 0, false},
+		{"unset gets the default row", executing + `}, ` + waitingForMe, "", "Waiting for me", 1, true},
+		{"a local overlay keeps it", executing + `}, ` + waitingForMe, `{"maxConcurrent":2}`, "Waiting for me", 1, true},
+	}
+	for _, tc := range cases {
+		board, err := loadJSON(t, `{"columns":[`+tc.columns+`]}`, tc.local)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		col, _, _ := board.Column("executing")
+		rows := col.Automations.OnTurnEnd
+		if len(rows) != tc.wantRows {
+			t.Errorf("%s: turn-end rows = %d, want %d", tc.name, len(rows), tc.wantRows)
+		}
+		if tc.wantRows > 0 && rows[0].Name != tc.wantName {
+			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, rows[0].Name, tc.wantName)
+		}
+		if want, _, _ := Default().Column("executing"); tc.matchesDefault && !reflect.DeepEqual(rows, want.Automations.OnTurnEnd) {
+			t.Errorf("%s: turn-end rows = %+v, want the default %+v", tc.name, rows, want.Automations.OnTurnEnd)
+		}
+	}
+}
+
+func TestLocalOverlay(t *testing.T) {
+	const done = `{"columns":[{"id":"done","name":"Done","role":"done"}]}`
+	cases := []struct {
+		name, shared, local string
+		check               func(t *testing.T, b *Board)
+	}{
+		{"shared settings without a local file",
+			`{"maxConcurrent":4,"notifications":{"turnDone":false},"columns":[{"id":"first","name":"First"}]}`, "",
+			func(t *testing.T, b *Board) {
+				want := DefaultNotifications()
+				want.TurnDone = false
+				if b.Notifications != want || b.Limit() != 4 || !b.AutoName {
+					t.Errorf("notifications=%+v limit=%d", b.Notifications, b.Limit())
+				}
+			}},
+		{"personal settings override the shared file",
+			`{"maxConcurrent":4,"notifications":{"turnDone":false},"columns":[{"id":"first","name":"First"}]}`,
+			`{"maxConcurrent":2,"idleTimeoutMinutes":30,"notifications":{"exited":false,"cooldownSeconds":60}}`,
+			func(t *testing.T, b *Board) {
+				want := DefaultNotifications()
+				want.TurnDone, want.Exited, want.CooldownSeconds = false, false, 60
+				if b.Notifications != want || b.Limit() != 2 || b.IdleTimeoutMinutes != 30 {
+					t.Errorf("notifications=%+v limit=%d idle=%d", b.Notifications, b.Limit(), b.IdleTimeoutMinutes)
+				}
+			}},
+		{"overrides apply to the default board", "", `{"notifications":{"needsYou":false},"autoName":false}`,
+			func(t *testing.T, b *Board) {
+				if b.Notifications.NeedsYou || !b.Notifications.TurnDone || b.Limit() != DefaultMaxConcurrent || b.AutoName {
+					t.Errorf("notifications=%+v limit=%d", b.Notifications, b.Limit())
+				}
+			}},
+		{"splitByPR is on for the default board", "", "",
+			func(t *testing.T, b *Board) {
+				if !b.SplitByPR {
+					t.Error("default board does not split by PR")
+				}
+			}},
+		{"splitByPR is on when drover.json omits it", done, "",
+			func(t *testing.T, b *Board) {
+				if !b.SplitByPR {
+					t.Error("drover.json without splitByPR turns splitting off")
+				}
+			}},
+		{"shared splitByPR false is kept", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
+			func(t *testing.T, b *Board) {
+				if b.SplitByPR {
+					t.Error("shared splitByPR:false is ignored")
+				}
+			}},
+		{"local splitByPR true overrides the shared file", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"splitByPR":true}`,
+			func(t *testing.T, b *Board) {
+				if !b.SplitByPR {
+					t.Error("local splitByPR:true does not override the shared file")
+				}
+			}},
+		{"a broken local file is an error", "", `{"maxConcurrent":`, nil},
+		{"a bad local notifications value is an error", "", `{"notifications":5}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			board, err := loadJSON(t, tc.shared, tc.local)
+			if tc.check == nil {
+				if err == nil {
+					t.Error("want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, board)
+		})
+	}
+}
+
+func TestStamp(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"notifications":{"needsYou":false},"autoName":false}`), 0o644)
+	empty := Stamp(dir)
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	shared := Stamp(dir)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":2}`), 0o644)
+	both := Stamp(dir)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":20}`), 0o644)
+	resized := Stamp(dir)
+	if empty == shared || shared == both || both == resized {
+		t.Errorf("stamps should all differ: %q %q %q %q", empty, shared, both, resized)
+	}
+	if Stamp(dir) != resized {
+		t.Error("stamp changed without the files changing")
+	}
+}
+
+func TestIsDone(t *testing.T) {
+	for role, want := range map[string]bool{"done": true, "": false, "todo": false, "Done": false} {
+		if got := (Column{Role: role}).IsDone(); got != want {
+			t.Errorf("Column{Role: %q}.IsDone() = %v, want %v", role, got, want)
+		}
+	}
+}
+
+func TestFind(t *testing.T) {
+	board := &Board{Columns: []Column{
+		{ID: "a", Name: "Backlog"},
+		{ID: "in-review", Name: "In Review"},
+		{ID: "x", Name: "a"},
+	}}
+	for _, tc := range []struct {
+		ref, wantID string
+	}{
+		{"in-review", "in-review"},
+		{"In Review", "in-review"},
+		{"in review", "in-review"},
+		{"BACKLOG", "a"},
+		{"a", "a"},
+		{"missing", ""},
+		{"", ""},
+	} {
+		col, ok := board.Find(tc.ref)
+		if col.ID != tc.wantID || ok != (tc.wantID != "") {
+			t.Errorf("Find(%q) = %q, %v, want %q", tc.ref, col.ID, ok, tc.wantID)
+		}
+	}
+}
+
+func TestSave(t *testing.T) {
+	dir := t.TempDir()
+	if err := Default().Save(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, FileName))
+	if err != nil || !strings.HasSuffix(string(data), "}\n") {
+		t.Fatalf("saved file = %q, err %v", data, err)
+	}
 	board, found, err := Load(dir)
-	if err != nil || found {
-		t.Fatalf("found=%v err=%v", found, err)
+	if err != nil || !found {
+		t.Fatalf("saved board does not load: found=%v err=%v", found, err)
 	}
-	if board.Notifications.NeedsYou || !board.Notifications.TurnDone || board.Limit() != DefaultMaxConcurrent || board.AutoName {
-		t.Errorf("default board: notifications=%+v limit=%d", board.Notifications, board.Limit())
+	var ids []string
+	for _, c := range board.Columns {
+		ids = append(ids, c.ID)
 	}
-}
-
-func TestSplitByPRDefaultsOnAndLocalCanTurnItOff(t *testing.T) {
-	dir := t.TempDir()
-	board, _, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
+	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done"}) || board.PRFlow == nil || board.ArchiveDoneAfter != "7d" {
+		t.Errorf("round trip lost data: ids=%v flow=%+v archive=%q", ids, board.PRFlow, board.ArchiveDoneAfter)
 	}
-	if !board.SplitByPR {
-		t.Error("default board does not split by PR")
-	}
-
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
-	if board, _, err = Load(dir); err != nil {
-		t.Fatal(err)
-	}
-	if !board.SplitByPR {
-		t.Error("drover.json without splitByPR turns splitting off")
-	}
-
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"splitByPR":false,
-	  "columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
-	if board, _, err = Load(dir); err != nil {
-		t.Fatal(err)
-	}
-	if board.SplitByPR {
-		t.Error("shared splitByPR:false is ignored")
-	}
-
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"splitByPR":true}`), 0o644)
-	if board, _, err = Load(dir); err != nil {
-		t.Fatal(err)
-	}
-	if !board.SplitByPR {
-		t.Error("local splitByPR:true does not override the shared file")
+	if err := Default().Save(filepath.Join(dir, "missing")); err == nil {
+		t.Error("saving into a missing directory succeeded")
 	}
 }
 
-func TestBrokenLocalFileIsAnError(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":`), 0o644)
-	if _, _, err := Load(dir); err == nil {
-		t.Error("want a parse error for drover.local.json")
+func TestLoadRejectsAnInvalidBoard(t *testing.T) {
+	cases := []struct {
+		name, shared, wantErr string
+	}{
+		{"not json", `{"columns":`, "parse drover.json"},
+		{"no columns", `{"columns":[]}`, "has no columns"},
+		{"missing columns key", `{}`, "has no columns"},
+		{"column without an id", `{"columns":[{"name":"First"}]}`, "needs an id and a name"},
+		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
+		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
+		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
+	}
+	for _, tc := range cases {
+		if _, err := loadJSON(t, tc.shared, ""); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+			t.Errorf("%s: err = %v, want it to mention %q", tc.name, err, tc.wantErr)
+		}
+	}
+
+	// Nothing requires a Done column.
+	if board, err := loadJSON(t, `{"columns":[{"id":"a","name":"A"}]}`, ""); err != nil || len(board.Columns) != 1 {
+		t.Errorf("a board without a done column: %+v, %v", board, err)
+	}
+
+	for _, name := range []string{FileName, LocalFileName} {
+		dir := t.TempDir()
+		os.Mkdir(filepath.Join(dir, name), 0o755)
+		if _, _, err := Load(dir); err == nil {
+			t.Errorf("an unreadable %s loaded", name)
+		}
 	}
 }

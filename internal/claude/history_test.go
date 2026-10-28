@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -155,5 +156,138 @@ func TestMoveTranscript(t *testing.T) {
 	}
 	if moved, err := MoveTranscript(TranscriptPath("missing", "/repo"), "/elsewhere"); err != nil || moved {
 		t.Errorf("missing transcript: moved=%v err=%v", moved, err)
+	}
+}
+
+func TestPromptText(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		text    string
+		command bool
+	}{
+		{"plain string", `{"content":"  fix it \n"}`, "fix it", false},
+		{"text block", `{"content":[{"type":"text","text":"fix it"}]}`, "fix it", false},
+		{"first text block wins", `{"content":[{"type":"image"},{"type":"text","text":"one"},{"type":"text","text":"two"}]}`, "one", false},
+		{"tool result only", `{"content":[{"type":"tool_result","content":"x"}]}`, "", false},
+		{"system wrapper", `{"content":"<system-reminder>x</system-reminder>"}`, "", false},
+		{"slash command", `{"content":"<command-name>/review</command-name>\n<command-args>PR 12</command-args>"}`, "/review PR 12", true},
+		{"slash command without a leading slash or args", `{"content":"<command-name>clear</command-name>"}`, "/clear", true},
+		{"content of the wrong type", `{"content":5}`, "", false},
+		{"not an object", `"text"`, "", false},
+		{"invalid json", `{`, "", false},
+	}
+	for _, c := range cases {
+		text, command := promptText(json.RawMessage(c.raw))
+		if text != c.text || command != c.command {
+			t.Errorf("%s: promptText = %q, %v, want %q, %v", c.name, text, command, c.text, c.command)
+		}
+	}
+}
+
+func TestTagValue(t *testing.T) {
+	cases := []struct {
+		name, in, tag, value string
+		ok                   bool
+	}{
+		{"present", "<a> x </a>", "a", "x", true},
+		{"surrounded", "pre <a>x</a> post", "a", "x", true},
+		{"other tag", "<b>x</b>", "a", "", false},
+		{"unclosed", "<a>x", "a", "x", false},
+		{"empty", "<a></a>", "a", "", true},
+	}
+	for _, c := range cases {
+		value, ok := tagValue(c.in, c.tag)
+		if value != c.value || ok != c.ok {
+			t.Errorf("%s: tagValue(%q, %q) = %q, %v", c.name, c.in, c.tag, value, ok)
+		}
+	}
+}
+
+func TestFirstLine(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	cases := []struct{ name, in, want string }{
+		{"single line", "hello", "hello"},
+		{"takes the first line", "one\ntwo", "one"},
+		{"trims first", "\n  one\ntwo\n", "one"},
+		{"exactly 80", long[:80], long[:80]},
+		{"truncates", long, long[:77] + "…"},
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		if got := FirstLine(c.in); got != c.want {
+			t.Errorf("%s: FirstLine = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestWithin(t *testing.T) {
+	cases := []struct {
+		root, path string
+		want       bool
+	}{
+		{"/a/b", "/a/b", true},
+		{"/a/b", "/a/b/c", true},
+		{"/a/b", "/a/b/c/d", true},
+		{"/a/b", "/a/bc", false},
+		{"/a/b", "/a", false},
+		{"/a/b", "/x/a/b", false},
+	}
+	for _, c := range cases {
+		if got := Within(c.root, c.path); got != c.want {
+			t.Errorf("Within(%q, %q) = %v, want %v", c.root, c.path, got, c.want)
+		}
+	}
+}
+
+func TestShortID(t *testing.T) {
+	for in, want := range map[string]string{
+		"11111111-2222-3333": "11111111",
+		"12345678":           "12345678",
+		"abc":                "abc",
+		"":                   "",
+	} {
+		if got := ShortID(in); got != want {
+			t.Errorf("ShortID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLiveBackground(t *testing.T) {
+	for kind, want := range map[string]bool{"bg": true, "": false, "interactive": false} {
+		if got := (Live{Kind: kind}).Background(); got != want {
+			t.Errorf("Live{Kind: %q}.Background() = %v, want %v", kind, got, want)
+		}
+	}
+}
+
+func TestProcessAliveAndTerminate(t *testing.T) {
+	if ProcessAlive(0) || ProcessAlive(-1) {
+		t.Error("a non-positive pid is not alive")
+	}
+	if !ProcessAlive(os.Getpid()) {
+		t.Error("the test process is alive")
+	}
+
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() { cmd.Wait(); close(reaped) }()
+	t.Cleanup(func() { cmd.Process.Kill() })
+
+	if !ProcessAlive(cmd.Process.Pid) {
+		t.Fatal("the sleep process is not alive")
+	}
+	if err := Terminate(cmd.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+	<-reaped
+	if ProcessAlive(cmd.Process.Pid) {
+		t.Error("the process survived Terminate")
+	}
+	if err := Terminate(cmd.Process.Pid); err != nil {
+		t.Errorf("terminating a gone process: %v", err)
 	}
 }

@@ -78,3 +78,77 @@ func TestInMergeQueueAsksGraphQLAndReadsTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+func fakeGh(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestNumber(t *testing.T) {
+	for url, want := range map[string]int{
+		"https://github.com/acme/widgets/pull/42":       42,
+		"https://ghe.example.com/acme/widgets/pull/7":   7,
+		"https://github.com/acme/widgets/pull/42/files": 0,
+		"https://github.com/acme/widgets/issues/42":     0,
+		"https://github.com/acme/widgets/pull/":         0,
+		"":                                              0,
+	} {
+		if got := Number(url); got != want {
+			t.Errorf("Number(%q) = %d, want %d", url, got, want)
+		}
+	}
+}
+
+func TestViewParsesThePullRequest(t *testing.T) {
+	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+		t.Errorf("View = %+v", pr)
+	}
+}
+
+func TestViewAndMeErrors(t *testing.T) {
+	url := "https://github.com/acme/widgets/pull/1"
+	for _, tc := range []struct {
+		name    string
+		script  string
+		call    func() error
+		wantErr string
+	}{
+		{"view carries stderr", "echo 'no such PR' >&2; exit 1", func() error { _, err := View(t.TempDir(), url); return err }, "gh pr view: no such PR"},
+		{"view with bad JSON", "echo 'not json'", func() error { _, err := View(t.TempDir(), url); return err }, "invalid"},
+		{"me carries stderr", "echo 'not logged in' >&2; exit 1", func() error { _, err := Me(t.TempDir()); return err }, "gh api user: not logged in"},
+		{"me without a login", "echo", func() error { _, err := Me(t.TempDir()); return err }, "gh api user: no login"},
+		{"silent failure keeps the exit error", "exit 3", func() error { _, err := Me(t.TempDir()); return err }, "exit status 3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeGh(t, tc.script)
+			err := tc.call()
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestMeTrimsTheLogin(t *testing.T) {
+	fakeGh(t, `echo ' octocat '`)
+	got, err := Me(t.TempDir())
+	if err != nil || got != "octocat" {
+		t.Errorf("Me = %q, %v", got, err)
+	}
+}
+
+func TestRunWithoutGhInstalled(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, err := Me(t.TempDir()); err == nil {
+		t.Error("Me succeeded without gh on PATH")
+	}
+}

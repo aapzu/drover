@@ -90,3 +90,110 @@ func TestParseKey(t *testing.T) {
 		t.Errorf("ParseKey accepted junk")
 	}
 }
+
+func clientFor(t *testing.T, h http.HandlerFunc) *Client {
+	t.Helper()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return &Client{Key: "lin_api_test", Endpoint: srv.URL, HTTP: srv.Client()}
+}
+
+func TestFromEnv(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "")
+	if c, ok := FromEnv(); ok || c != nil {
+		t.Errorf("FromEnv without a key = %+v, %v", c, ok)
+	}
+	t.Setenv("LINEAR_API_KEY", "lin_api_x")
+	c, ok := FromEnv()
+	if !ok || c.Key != "lin_api_x" || c.Endpoint != Endpoint || c.HTTP == nil {
+		t.Errorf("FromEnv = %+v, %v", c, ok)
+	}
+}
+
+func TestSyncEnabled(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "0": false, "true": false, "1": true} {
+		t.Setenv("DROVER_LINEAR_SYNC", value)
+		if got := SyncEnabled(); got != want {
+			t.Errorf("DROVER_LINEAR_SYNC=%q: SyncEnabled = %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestDoErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		body    string
+		wantErr string
+	}{
+		{"GraphQL errors win over the data", 200, `{"data":{"issue":null},"errors":[{"message":"Entity not found"},{"message":"second"}]}`, "linear: Entity not found"},
+		{"GraphQL errors on a failing status", 400, `{"errors":[{"message":"bad query"}]}`, "linear: bad query"},
+		{"a non-200 status", 502, `{"data":{}}`, "linear: HTTP 502"},
+		{"an unreadable body", 500, `<html>oops</html>`, "linear: HTTP 500"},
+		{"a missing key", 401, `{"errors":[{"message":"Authentication required"}]}`, "linear: Authentication required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				w.Write([]byte(tc.body))
+			})
+			_, err := c.MyIssues(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDoRequestFailures(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {})
+	c.Endpoint = "http://127.0.0.1:1"
+	if _, err := c.MyIssues(context.Background()); err == nil || !strings.HasPrefix(err.Error(), "linear: ") {
+		t.Errorf("unreachable endpoint: %v", err)
+	}
+	c.Endpoint = "://bad"
+	if _, err := c.MyIssues(context.Background()); err == nil {
+		t.Error("an invalid endpoint is not an error")
+	}
+}
+
+func TestIssueNotFoundWithoutAnError(t *testing.T) {
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"issue":null}}`))
+	})
+	if _, err := c.Issue(context.Background(), "DX-9"); err == nil || !strings.Contains(err.Error(), "DX-9 not found") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestStartFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, states, update, wantErr string
+	}{
+		{"no started state", `[{"id":"s1","name":"Done","type":"completed","position":1}]`, "", "no started state"},
+		{"a rejected update", `[{"id":"s1","name":"Doing","type":"started","position":1}]`, `{"data":{"issueUpdate":{"success":false}}}`, "update was rejected"},
+		{"a failing update", `[{"id":"s1","name":"Doing","type":"started","position":1}]`, `{"errors":[{"message":"forbidden"}]}`, "forbidden"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+				var req struct{ Query string }
+				json.NewDecoder(r.Body).Decode(&req)
+				if strings.Contains(req.Query, "issueUpdate") {
+					w.Write([]byte(tc.update))
+					return
+				}
+				w.Write([]byte(`{"data":{"issue":{"state":{"type":"backlog"},"team":{"states":{"nodes":` + tc.states + `}}}}}`))
+			})
+			if _, err := c.Start(context.Background(), "i1"); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("err = %v, want one containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"errors":[{"message":"nope"}]}`))
+	})
+	if _, err := c.Start(context.Background(), "i1"); err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Errorf("lookup failure: %v", err)
+	}
+}

@@ -532,7 +532,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case sessionStartedMsg:
 		m.applySnap(msg.snap)
-		m.selectTask(msg.task)
+		if msg.task != nil {
+			m.selectTask(msg.task)
+		}
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil

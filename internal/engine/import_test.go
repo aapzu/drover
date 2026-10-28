@@ -1,13 +1,18 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,5 +199,230 @@ func TestDiscoverSessionsSkipsTheAssistantsConversation(t *testing.T) {
 	found, _ := e.DiscoverSessions(40)
 	if len(found) != 1 || found[0].SessionID != "abcdef12-other" {
 		t.Fatalf("discover = %+v; the assistant's own conversation must not be offered for import", found)
+	}
+}
+
+// linearServer answers the queries LinearIssues and syncIssueStarted send and
+// records the issue updates.
+func linearServer(t *testing.T) (*linear.Client, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var updates []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		switch {
+		case strings.Contains(req.Query, "assignedIssues"):
+			w.Write([]byte(`{"data":{"viewer":{"assignedIssues":{"nodes":[
+			  {"id":"i1","identifier":"DX-1","title":"On the board","state":{"name":"Todo","type":"unstarted"},"team":{"id":"t1","key":"DX"}},
+			  {"id":"i2","identifier":"DX-2","title":"Not yet","state":{"name":"Todo","type":"unstarted"},"team":{"id":"t1","key":"DX"}}]}}}}`))
+		case strings.Contains(req.Query, "issueUpdate"):
+			mu.Lock()
+			updates = append(updates, req.Variables["id"].(string)+"="+req.Variables["state"].(string))
+			mu.Unlock()
+			w.Write([]byte(`{"data":{"issueUpdate":{"success":true}}}`))
+		default:
+			w.Write([]byte(`{"data":{"issue":{"state":{"type":"unstarted"},"team":{"states":{"nodes":[{"id":"s-progress","name":"In Progress","type":"started","position":1}]}}}}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	client := &linear.Client{Key: "lin_api_test", Endpoint: srv.URL, HTTP: srv.Client()}
+	return client, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(updates)
+	}
+}
+
+func TestLinearIssuesSkipsTheOnesOnTheBoard(t *testing.T) {
+	e := bareEngine(t)
+	if e.HasLinear() {
+		t.Error("HasLinear without a client")
+	}
+	if _, err := e.LinearIssues(context.Background()); err == nil || !strings.Contains(err.Error(), "LINEAR_API_KEY") {
+		t.Errorf("LinearIssues without a key = %v", err)
+	}
+
+	e.linear, _ = linearServer(t)
+	e.state.Tasks = []*store.Task{{ID: "a", Issue: &store.Issue{Provider: "linear", ID: "i1"}}, {ID: "b"}}
+	issues, err := e.LinearIssues(context.Background())
+	if !e.HasLinear() || err != nil || len(issues) != 1 || issues[0].Identifier != "DX-2" {
+		t.Errorf("HasLinear = %v, LinearIssues = %+v, %v, want only DX-2", e.HasLinear(), issues, err)
+	}
+}
+
+func TestSyncIssueStartedMovesTheLinearIssue(t *testing.T) {
+	linearCard := func() *store.Task {
+		return &store.Task{ID: "a", Number: 1, Issue: &store.Issue{Provider: "linear", ID: "i1", Key: "DX-1", State: "Todo"}}
+	}
+	for name, tc := range map[string]struct {
+		sync    string
+		card    *store.Task
+		noKey   bool
+		updates []string
+	}{
+		"opted in":         {sync: "1", card: linearCard(), updates: []string{"i1=s-progress"}},
+		"not opted in":     {card: linearCard()},
+		"no API key":       {sync: "1", card: linearCard(), noKey: true},
+		"no issue":         {sync: "1", card: &store.Task{ID: "a"}},
+		"another provider": {sync: "1", card: &store.Task{ID: "a", Issue: &store.Issue{Provider: "jira", ID: "i1"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("DROVER_LINEAR_SYNC", tc.sync)
+			e := bareEngine(t)
+			e.state.Tasks = []*store.Task{tc.card}
+			var updates func() []string
+			if !tc.noKey {
+				e.linear, updates = linearServer(t)
+			}
+			e.syncIssueStarted(tc.card)
+			if len(tc.updates) == 0 {
+				time.Sleep(200 * time.Millisecond)
+				if updates != nil && len(updates()) != 0 {
+					t.Errorf("updated Linear anyway: %v", updates())
+				}
+				return
+			}
+			moved := func() bool {
+				e.mu.Lock()
+				defer e.mu.Unlock()
+				return hasLog(tc.card, "Linear: moved DX-1 to In Progress")
+			}
+			for deadline := time.Now().Add(5 * time.Second); !moved() && time.Now().Before(deadline); {
+				time.Sleep(20 * time.Millisecond)
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if !hasLog(tc.card, "Linear: moved DX-1 to In Progress") || tc.card.Issue.State != "In Progress" || !slices.Equal(updates(), tc.updates) {
+				t.Errorf("issue state %q, log %v, updates %v", tc.card.Issue.State, tc.card.Log, updates())
+			}
+		})
+	}
+}
+
+func TestExecutableIsAResolvedPath(t *testing.T) {
+	exe, err := Executable()
+	if err != nil || !filepath.IsAbs(exe) {
+		t.Fatalf("Executable = %q, %v", exe, err)
+	}
+	if resolved, _ := filepath.EvalSymlinks(exe); resolved != exe {
+		t.Errorf("Executable = %q, want symlinks resolved to %q", exe, resolved)
+	}
+}
+
+// registerLive lists a conversation held by this process in Claude Code's
+// session registry, so it reads as running in another terminal.
+func registerLive(t *testing.T, sessionID, status string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	os.MkdirAll(filepath.Join(dir, "sessions"), 0o755)
+	entry, _ := json.Marshal(claude.Live{PID: os.Getpid(), SessionID: sessionID, Status: status})
+	os.WriteFile(filepath.Join(dir, "sessions", "1.json"), entry, 0o644)
+}
+
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestPollExternalMirrorsTheOtherTerminal(t *testing.T) {
+	e := bareEngine(t)
+	s := &store.Session{Status: store.StatusExternal, Activity: store.ActivityIdle, AgentSessionID: "sid"}
+	card := &store.Task{ID: "a", Number: 1, Sessions: map[string]*store.Session{store.MainSession: s}}
+	e.state.Tasks = []*store.Task{card, {ID: "b", Number: 2}}
+
+	registerLive(t, "sid", "busy")
+	if followUps := e.pollExternal(); len(followUps) != 0 || s.Activity != store.ActivityThinking || s.PID != os.Getpid() {
+		t.Fatalf("a busy agent: activity %q, pid %d, %d follow-ups", s.Activity, s.PID, len(followUps))
+	}
+
+	registerLive(t, "sid", "idle")
+	followUps := e.pollExternal()
+	if s.Activity != store.ActivityIdle || len(followUps) != 1 {
+		t.Fatalf("the agent's turn ended: activity %q, %d follow-ups, want one reading its reply", s.Activity, len(followUps))
+	}
+	followUps[0]()
+
+	registerLive(t, "cleared", "idle")
+	e.pollExternal()
+	if s.AgentSessionID != "cleared" {
+		t.Errorf("a /clear in the other terminal left the old id: %q", s.AgentSessionID)
+	}
+}
+
+func TestPollExternalReleasesAnAgentWhoseProcessIsGone(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pid      int
+		updated  time.Time
+		released bool
+	}{
+		"process gone":              {deadPID(t), time.Now().Add(-time.Hour), true},
+		"process alive":             {os.Getpid(), time.Now().Add(-time.Hour), false},
+		"just backgrounded, no pid": {0, time.Now(), false},
+		"no pid for a while":        {0, time.Now().Add(-time.Hour), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e := bareEngine(t)
+			s := &store.Session{Status: store.StatusExternal, Activity: store.ActivityThinking, AgentSessionID: "sid", PID: tc.pid, UpdatedAt: tc.updated}
+			card := &store.Task{ID: "a", Number: 1, Sessions: map[string]*store.Session{store.MainSession: s}}
+			e.state.Tasks = []*store.Task{card}
+
+			followUps := e.pollExternal()
+			if tc.released {
+				if s.Status != store.StatusSuspended || s.Activity != store.ActivityIdle || len(followUps) != 1 || !hasLog(card, "Agent exited in its own terminal") || !strings.Contains(notice(e), "#1 exited in its terminal") {
+					t.Errorf("not released: %+v, %d follow-ups, log %v", s, len(followUps), card.Log)
+				}
+				return
+			}
+			if s.Status != store.StatusExternal || len(followUps) != 0 {
+				t.Errorf("released too early: %+v, %d follow-ups", s, len(followUps))
+			}
+		})
+	}
+
+	e := bareEngine(t)
+	e.state.Tasks = []*store.Task{{ID: "a"}}
+	if followUps := e.pollExternal(); followUps != nil {
+		t.Errorf("a board without external agents polled %d follow-ups", len(followUps))
+	}
+}
+
+func TestExternalCheckRefusesAConversationRunningElsewhere(t *testing.T) {
+	registerLive(t, "sid", "idle")
+	e := bareEngine(t)
+	imported := func(status store.SessionStatus, id string) *store.Task {
+		return &store.Task{ID: "a", Number: 3, Sessions: map[string]*store.Session{store.MainSession: {Imported: true, Status: status, AgentSessionID: id}}}
+	}
+
+	card := imported(store.StatusSuspended, "sid")
+	var ext *ExternalError
+	if err := e.externalCheck(card); !errors.As(err, &ext) || ext.Number != 3 || ext.PID != os.Getpid() || card.Sessions[store.MainSession].Status != store.StatusExternal || !hasLog(card, "running in another terminal") {
+		t.Errorf("externalCheck = %v, session %+v", err, card.Sessions[store.MainSession])
+	}
+	if err := e.externalCheck(card); !errors.As(err, &ext) {
+		t.Errorf("a second check = %v", err)
+	}
+	if n := strings.Count(logText(card), "running in another terminal"); n != 1 {
+		t.Errorf("the discovery was logged %d times", n)
+	}
+
+	for name, c := range map[string]*store.Task{
+		"not in the registry":        imported(store.StatusSuspended, "other"),
+		"running on the board":       imported(store.StatusRunning, "sid"),
+		"never imported":             {ID: "b", Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusSuspended, AgentSessionID: "sid"}}},
+		"external whose pid is gone": {ID: "c", Sessions: map[string]*store.Session{store.MainSession: {Imported: true, Status: store.StatusExternal, AgentSessionID: "other", PID: deadPID(t)}}},
+	} {
+		if err := e.externalCheck(c); err != nil {
+			t.Errorf("%s: externalCheck = %v", name, err)
+		}
 	}
 }

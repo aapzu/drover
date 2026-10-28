@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -192,5 +193,46 @@ func TestPermissionRequestsAlertOncePerCooldown(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if got := desktopNotified(prefix)[before:]; fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("notifications = %q, want %q", got, want)
+	}
+}
+
+func TestEnabledPicksTheNotificationForTheKind(t *testing.T) {
+	kinds := map[string]alertKind{"turn done": alertTurnDone, "needs you": alertNeedsYou, "plan ready": alertPlanReady, "exited": alertExited}
+	only := map[alertKind]config.Notifications{
+		alertTurnDone:  {TurnDone: true},
+		alertNeedsYou:  {NeedsYou: true},
+		alertPlanReady: {PlanReady: true},
+		alertExited:    {Exited: true},
+	}
+	for name, kind := range kinds {
+		if enabled(config.Notifications{}, kind) {
+			t.Errorf("%s: enabled with every notification off", name)
+		}
+		for otherName, other := range kinds {
+			if got := enabled(only[other], kind); got != (other == kind) {
+				t.Errorf("%s with only %s on = %v", name, otherName, got)
+			}
+		}
+	}
+}
+
+func TestIdleFor(t *testing.T) {
+	idleSince := func(ago time.Duration) *store.Session {
+		return &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, UpdatedAt: time.Now().Add(-ago)}
+	}
+	busy := idleSince(time.Hour)
+	busy.Activity = store.ActivityThinking
+	for name, tc := range map[string]struct {
+		s    *store.Session
+		want bool
+	}{
+		"nil":           {nil, false},
+		"idle long":     {idleSince(time.Hour), true},
+		"idle just now": {idleSince(time.Second), false},
+		"working":       {busy, false},
+	} {
+		if got := idleFor(tc.s, time.Minute); got != tc.want {
+			t.Errorf("%s: idleFor = %v, want %v", name, got, tc.want)
+		}
 	}
 }

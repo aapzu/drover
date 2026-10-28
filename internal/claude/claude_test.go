@@ -1,9 +1,9 @@
 package claude
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -310,61 +310,75 @@ func TestInterrupted(t *testing.T) {
 	}
 }
 
-func TestScanUsage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "t.jsonl")
-	line := func(id, model string, in, write, read, out int) string {
-		return fmt.Sprintf(`{"type":"assistant","message":{"id":%q,"model":%q,"usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,"output_tokens":%d}}}`+"\n", id, model, in, write, read, out)
+// fakeClaude puts a `claude` executable on PATH that records its arguments and
+// working directory and answers with reply, exiting with status.
+func fakeClaude(t *testing.T, reply string, status int) (argsFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	argsFile = filepath.Join(dir, "args")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$PWD\" \"$@\" > %s\nprintf '%%s' %s\nexit %d\n", ShellQuote(argsFile), ShellQuote(reply), status)
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	os.WriteFile(path, []byte(
-		`{"type":"user","message":{"content":"hi"}}`+"\n"+
-			line("a", "claude-opus-5-5", 1_000_000, 0, 0, 0)+
-			line("b", "claude-opus-5-5", 0, 1_000_000, 0, 10)+
-			line("b", "claude-opus-5-5", 0, 1_000_000, 0, 1_000_000)+
-			`{"type":"assistant","message":{"id":"c","model":"<synthetic>","usage":{"input_tokens":5}}}`+"\n"), 0o644)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return argsFile
+}
 
-	var u Usage
-	offset, err := ScanUsage(path, 0, &u)
+func TestAskHaiku(t *testing.T) {
+	argsFile := fakeClaude(t, "  an answer\n", 0)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := 4.0 + 5 + 20; math.Abs(u.Cost-want) > 1e-9 {
-		t.Errorf("cost = %v, want %v", u.Cost, want)
+	got, err := AskHaiku(context.Background(), dir, "what?")
+	if err != nil || got != "an answer" {
+		t.Fatalf("got %q, err %v", got, err)
 	}
-	if u.Context != 1_000_000 || u.Model != "claude-opus-5-5" || ContextWindow(u.Model) != 1_000_000 {
-		t.Errorf("usage = %+v", u)
-	}
-
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(line("d", "claude-haiku-4-5-20251001", 0, 0, 150_000, 0))
-	f.WriteString(line("e", "claude-unknown-9", 100, 0, 0, 100))
-	f.Close()
-	if _, err := ScanUsage(path, offset, &u); err != nil {
-		t.Fatal(err)
-	}
-	if want := 29 + 0.015; math.Abs(u.Cost-want) > 1e-9 {
-		t.Errorf("cost after more turns = %v, want %v", u.Cost, want)
-	}
-	if u.Context != 100 || ContextWindow(u.Model) != 0 {
-		t.Errorf("unknown model: %+v", u)
+	recorded, _ := os.ReadFile(argsFile)
+	want := strings.Join([]string{dir, "-p", "--no-session-persistence", "--model", "haiku", "--permission-mode", "plan", "what?"}, "\n") + "\n"
+	if string(recorded) != want {
+		t.Errorf("claude ran with:\n%s\nwant:\n%s", recorded, want)
 	}
 }
 
-func TestScanUsageSkipsHistoryAForkCopies(t *testing.T) {
-	dir := t.TempDir()
-	line := func(id, at string) string {
-		return `{"type":"assistant","timestamp":"` + at + `","message":{"id":"` + id + `","model":"claude-opus-5-5","usage":{"input_tokens":1000000}}}` + "\n"
+func TestAskHaikuFailure(t *testing.T) {
+	fakeClaude(t, "", 3)
+	if _, err := AskHaiku(context.Background(), t.TempDir(), "what?"); err == nil {
+		t.Error("a failing claude must return an error")
 	}
-	old := line("a", "2026-10-21T10:00:00.000Z")
-	os.WriteFile(filepath.Join(dir, "old.jsonl"), []byte(old), 0o644)
-	os.WriteFile(filepath.Join(dir, "fork.jsonl"), []byte(old+line("b", "2026-10-21T11:00:00.000Z")), 0o644)
+}
 
-	var u Usage
-	for _, name := range []string{"old.jsonl", "fork.jsonl"} {
-		if _, err := ScanUsage(filepath.Join(dir, name), 0, &u); err != nil {
-			t.Fatal(err)
+func TestEvalCondition(t *testing.T) {
+	cases := []struct {
+		answer string
+		want   bool
+	}{
+		{"YES", true},
+		{"yes, it does", true},
+		{"  Yes\n", true},
+		{"NO", false},
+		{"not really", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		argsFile := fakeClaude(t, c.answer, 0)
+		got, err := EvalCondition(context.Background(), t.TempDir(), "tests pass", "all green")
+		if err != nil || got != c.want {
+			t.Errorf("answer %q: got %v, err %v, want %v", c.answer, got, err, c.want)
+		}
+		recorded, _ := os.ReadFile(argsFile)
+		for _, part := range []string{"Condition: tests pass", "<message>\nall green\n</message>"} {
+			if !strings.Contains(string(recorded), part) {
+				t.Errorf("prompt is missing %q:\n%s", part, recorded)
+			}
 		}
 	}
-	if math.Abs(u.Cost-8) > 1e-9 {
-		t.Errorf("cost = %v, want $8 for two messages", u.Cost)
+}
+
+func TestEvalConditionFailure(t *testing.T) {
+	fakeClaude(t, "YES", 1)
+	got, err := EvalCondition(context.Background(), t.TempDir(), "c", "r")
+	if err == nil || got || !strings.Contains(err.Error(), "condition check failed") {
+		t.Errorf("got %v, err %v", got, err)
 	}
 }

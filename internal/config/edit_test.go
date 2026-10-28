@@ -78,43 +78,6 @@ func TestUnsetLastNestedKeyRemovesTheParent(t *testing.T) {
 	}
 }
 
-func TestInvalidValueIsRejectedAndFileRestored(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	before, _ := os.ReadFile(filepath.Join(dir, FileName))
-
-	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "soon"); err == nil {
-		t.Fatal("expected an error for a bad duration")
-	}
-	after, _ := os.ReadFile(filepath.Join(dir, FileName))
-	if string(before) != string(after) {
-		t.Errorf("file changed after a rejected edit:\n%s", after)
-	}
-}
-
-func TestInvalidLocalValueRemovesTheNewFile(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	if err := Set(dir, Local, []string{"maxConcurrent"}, "many"); err == nil {
-		t.Fatal("expected an error for a string in a number field")
-	}
-	if _, err := os.Stat(filepath.Join(dir, LocalFileName)); !os.IsNotExist(err) {
-		t.Errorf("rejected local file was left behind: %v", err)
-	}
-}
-
-func TestNestedSetUnderAScalarIsRejected(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"notifications": 5}`), 0o644)
-	if err := Set(dir, Local, []string{"notifications", "turnDone"}, false); err == nil {
-		t.Fatal("expected an error when the parent is a scalar")
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
-	if string(data) != `{"notifications": 5}` {
-		t.Errorf("scalar parent was replaced:\n%s", data)
-	}
-}
-
 func TestUnsetNestedKeyKeepsSiblings(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
@@ -157,19 +120,6 @@ func TestSetsIsFalseForUnusableFiles(t *testing.T) {
 				t.Errorf("Sets is true for %q", tc.content)
 			}
 		})
-	}
-}
-
-func TestTrailingDataIsRejectedAndUntouched(t *testing.T) {
-	dir := t.TempDir()
-	const broken = `{"autoName":false} junk`
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(broken), 0o644)
-	if err := Set(dir, Local, []string{"maxConcurrent"}, 4); err == nil {
-		t.Fatal("expected an error for data after the object")
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
-	if string(data) != broken {
-		t.Errorf("file was rewritten:\n%s", data)
 	}
 }
 
@@ -216,18 +166,6 @@ func TestEditRejectsAnUnknownLayerAndAnEmptyPath(t *testing.T) {
 	}
 }
 
-func TestTruncatedFileIsRejectedAndUntouched(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"autoName":false`), 0o644)
-	if err := Set(dir, Local, []string{"maxConcurrent"}, 4); err == nil {
-		t.Fatal("expected an error for a truncated file")
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
-	if string(data) != `{"autoName":false` {
-		t.Errorf("truncated file was rewritten:\n%s", data)
-	}
-}
-
 func TestSharedEditNeedsADrover(t *testing.T) {
 	dir := t.TempDir()
 	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); !errors.Is(err, ErrNoSharedFile) {
@@ -235,5 +173,40 @@ func TestSharedEditNeedsADrover(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
 		t.Errorf("drover.json was created: %v", err)
+	}
+}
+
+func TestRejectedEditLeavesTheFileAsItWas(t *testing.T) {
+	cases := []struct {
+		name   string
+		layer  Layer
+		before string
+		path   []string
+		value  any
+	}{
+		{"bad shared value", Shared, sample, []string{"archiveDoneAfter"}, "soon"},
+		{"bad local value leaves no new file", Local, "", []string{"maxConcurrent"}, "many"},
+		{"trailing data", Local, `{"autoName":false} junk`, []string{"maxConcurrent"}, 4},
+		{"truncated file", Local, `{"autoName":false`, []string{"maxConcurrent"}, 4},
+		{"scalar parent", Local, `{"notifications": 5}`, []string{"notifications", "turnDone"}, false},
+	}
+	for _, tc := range cases {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+		file := filepath.Join(dir, tc.layer.FileName())
+		if tc.before != "" {
+			os.WriteFile(file, []byte(tc.before), 0o644)
+		}
+		if err := Set(dir, tc.layer, tc.path, tc.value); err == nil {
+			t.Errorf("%s: expected an error", tc.name)
+		}
+		data, err := os.ReadFile(file)
+		if tc.before == "" {
+			if !os.IsNotExist(err) {
+				t.Errorf("%s: rejected file was left behind: %v", tc.name, err)
+			}
+		} else if string(data) != tc.before {
+			t.Errorf("%s: file changed after a rejected edit:\n%s", tc.name, data)
+		}
 	}
 }

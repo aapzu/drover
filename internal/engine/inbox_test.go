@@ -337,3 +337,15 @@ func TestBoardHoldsTheLockWhileRunning(t *testing.T) {
 		t.Error("the lock outlived Run")
 	}
 }
+
+func TestFindColumn(t *testing.T) {
+	e := &Engine{board: groupBoard()}
+	for ref, want := range map[string]string{"exec": "exec", "Executing": "exec", "executing": "exec"} {
+		if col, err := e.findColumn(ref); err != nil || col.ID != want {
+			t.Errorf("findColumn(%q) = %q, %v, want %q", ref, col.ID, err, want)
+		}
+	}
+	if _, err := e.findColumn("nowhere"); err == nil || err.Error() != `unknown column "nowhere"` {
+		t.Errorf("findColumn(nowhere) = %v", err)
+	}
+}

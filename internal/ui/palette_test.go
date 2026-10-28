@@ -71,6 +71,7 @@ func TestPaletteRunsTheChosenCommand(t *testing.T) {
 		{"delete task", 0, modeConfirm, false},
 		{"next column", 0, modeBoard, true},
 		{"quit", 1, modeBoard, true},
+		{"zzz", 0, modePalette, false},
 	}
 	for _, tt := range tests {
 		m := typeInPalette(openedPalette(t), tt.search)
@@ -150,15 +151,6 @@ func TestPaletteClosesAndReopensEmpty(t *testing.T) {
 		}
 	}
 }
-
-func TestPaletteEnterWithNoMatchStaysOpen(t *testing.T) {
-	m := typeInPalette(openedPalette(t), "zzz")
-	next, cmd := m.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := next.(Model).mode; got != modePalette || cmd != nil {
-		t.Errorf("enter with no match: mode %v, cmd %v, want the palette left open", got, cmd)
-	}
-}
-
 func TestPaletteKeysAreUnique(t *testing.T) {
 	seen := map[string]bool{}
 	for _, c := range paletteCommands {

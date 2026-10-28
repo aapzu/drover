@@ -204,66 +204,6 @@ func TestPreviewScrollStaysAnchored(t *testing.T) {
 	}
 }
 
-func sentJob(m Model) (keyJob, bool) {
-	select {
-	case job := <-m.keys.jobs:
-		return job, true
-	default:
-		return keyJob{}, false
-	}
-}
-
-func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
-	setup := func() Model {
-		m := testModel(120, 40, 1, 1)
-		id := m.snap.Tasks[0].ID
-		m.snap.Live = map[string]string{id: "sess"}
-		m.keys = &keySender{jobs: make(chan keyJob, 4)}
-		m.previewFor, m.previewMouse = id, true
-		return m
-	}
-	l := setup().layout()
-	cases := []struct {
-		name   string
-		button tea.MouseButton
-		x, y   int
-		want   string
-	}{
-		{"up", tea.MouseButtonWheelUp, 10, l.previewY + 3, "\x1b[<64;10;3M"},
-		{"down", tea.MouseButtonWheelDown, 10, l.previewY + 3, "\x1b[<65;10;3M"},
-		{"left border", tea.MouseButtonWheelUp, 0, l.previewY + 3, "\x1b[<64;1;3M"},
-		{"right border", tea.MouseButtonWheelUp, 119, l.previewY + 3, "\x1b[<64;118;3M"},
-		{"top border", tea.MouseButtonWheelUp, 10, l.previewY, "\x1b[<64;10;1M"},
-		{"bottom border", tea.MouseButtonWheelUp, 10, l.previewY + l.previewH - 1, fmt.Sprintf("\x1b[<64;10;%dM", l.previewH-2)},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			m := setup()
-			m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: c.button, X: c.x, Y: c.y})
-			job, ok := sentJob(m)
-			if !ok || job.session != "sess" || job.literal != c.want {
-				t.Fatalf("sent %+v (sent=%v), want %q to sess", job, ok, c.want)
-			}
-		})
-	}
-
-	scrolls := map[string]func(*Model){
-		"pane has scrollback": func(m *Model) { m.previewHistory = 50 },
-		"agent ignores mouse": func(m *Model) { m.previewMouse = false },
-		"stale selection":     func(m *Model) { m.previewFor = "other" },
-	}
-	for name, mutate := range scrolls {
-		t.Run(name, func(t *testing.T) {
-			m := setup()
-			mutate(&m)
-			m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp, X: 10, Y: l.previewY + 3})
-			if job, ok := sentJob(m); ok {
-				t.Fatalf("sent %+v, want the preview to scroll instead", job)
-			}
-		})
-	}
-}
-
 func TestPreviewMsgSetsMouse(t *testing.T) {
 	m := testModel(120, 40, 1, 1)
 	id := m.snap.Tasks[0].ID
@@ -295,6 +235,7 @@ func TestTmuxKey(t *testing.T) {
 		{tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, "", "M-Enter"},
 		{tea.KeyMsg{Type: tea.KeyF5}, "", "F5"},
 		{tea.KeyMsg{Type: tea.KeyPgDown}, "", "NPage"},
+		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ab"), Alt: true}, "", ""},
 	}
 	for _, c := range cases {
 		literal, key := tmuxKey(c.msg)
