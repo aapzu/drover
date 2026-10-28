@@ -241,7 +241,6 @@ func (e *Engine) refreshPR(id string) {
 		}
 	}
 	if err == nil && !review && info.State == "OPEN" {
-		// A failed lookup keeps the last answer rather than dropping what gh pr view found.
 		if q, qerr := gh.InMergeQueue(e.Root, url); qerr == nil {
 			queued = q
 		}
