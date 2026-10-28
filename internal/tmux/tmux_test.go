@@ -80,7 +80,7 @@ func TestResizeWaitsForDetach(t *testing.T) {
 		return strings.TrimSpace(out)
 	}
 
-	AttachCommand(name)
+	AttachCommand(name, "")
 	defer Detached(name)
 	before := size()
 	if err := Resize(name, 50, 12); err != nil {
@@ -96,6 +96,38 @@ func TestResizeWaitsForDetach(t *testing.T) {
 	}
 	if got := size(); got != "50x12" {
 		t.Fatalf("window is %s after detach, want 50x12", got)
+	}
+}
+
+func TestAttachShowsFilterInStatusBar(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+
+	name := "filtered"
+	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	statusRight := func() string {
+		out, err := run("display-message", "-p", "-t", "="+name+":", "#{T:status-right}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	AttachCommand(name, "#{session_name} #(echo hi) 50%d")
+	Detached(name)
+	if got := statusRight(); !strings.Contains(got, "filter: #{session_name} #(echo hi) 50%d") || !strings.Contains(got, "Ctrl-q") {
+		t.Fatalf("status-right is %q, want the filter and the Ctrl-q hint", got)
+	}
+
+	AttachCommand(name, "")
+	Detached(name)
+	if got := statusRight(); strings.Contains(got, "filter") || !strings.Contains(got, "Ctrl-q") {
+		t.Fatalf("status-right is %q after clearing the filter, want the default", got)
 	}
 }
 
