@@ -1127,7 +1127,10 @@ func TestPRCardShowsTheMergeQueue(t *testing.T) {
 	ghFile, queueFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "queue")
 	t.Setenv("FAKE_GH", ghFile)
 	t.Setenv("FAKE_QUEUE", queueFile)
-	os.WriteFile(ghFile, []byte(`{"title":"PR one","headRefName":"one","state":"OPEN","headRefOid":"aaa","reviewDecision":"","latestReviews":[],"mergeCommit":null}`), 0o644)
+	pr := func(title, state string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":%q,"headRefName":"one","state":%q,"headRefOid":"aaa","reviewDecision":"","latestReviews":[],"mergeCommit":null}`, title, state)), 0o644)
+	}
+	pr("PR one", "OPEN")
 	os.WriteFile(queueFile, []byte("false\n"), 0o644)
 	e, err := New(root)
 	if err != nil {
@@ -1153,9 +1156,6 @@ func TestPRCardShowsTheMergeQueue(t *testing.T) {
 
 	os.WriteFile(queueFile, []byte("true\n"), 0o644)
 	waitForAll(t, e, "the PR is queued again", queued(true))
-	pr := func(title, state string) {
-		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":%q,"headRefName":"one","state":%q,"headRefOid":"aaa","reviewDecision":"","latestReviews":[],"mergeCommit":null}`, title, state)), 0o644)
-	}
 	os.WriteFile(queueFile, []byte("boom\n"), 0o644)
 	pr("PR renamed", "OPEN")
 	waitForAll(t, e, "a failed queue lookup still refreshes the PR and keeps the badge", func(tasks []*store.Task) bool {
