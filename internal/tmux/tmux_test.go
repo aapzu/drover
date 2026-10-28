@@ -27,7 +27,7 @@ func TestTypingIntoDetachedSession(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
 
 	name := "typing"
@@ -65,7 +65,7 @@ func TestResizeWaitsForDetach(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
 
 	name := "attached"
@@ -103,7 +103,7 @@ func TestAttachShowsFilterInStatusBar(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
 
 	name := "filtered"
@@ -135,7 +135,7 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
 
 	name := "history"
@@ -162,7 +162,7 @@ func TestCaptureReportsMouseTracking(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d", os.Getpid())
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
 
 	cases := []struct {
