@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Socket names the private tmux server; DROVER_TMUX_SOCKET overrides it.
@@ -31,11 +33,24 @@ func SafeName(s string) string { return nonName.ReplaceAllString(s, "-") }
 // DetachKey returns from an attached session to the board.
 const DetachKey = "C-q"
 
-// statusEscaper stops tmux expanding formats and strftime codes in a status
-// string.
+// statusEscaper makes tmux show text literally instead of expanding #{formats},
+// running #(commands), applying #[styles] or substituting strftime codes.
 var statusEscaper = strings.NewReplacer("#", "##", "%", "%%")
 
 const backHint = "#[fg=#9ca3af]Ctrl-q: back to board "
+
+// maxStatusFilter is the widest filter, in cells, that leaves room for backHint
+// within status-right-length.
+const maxStatusFilter = 30
+
+// statusRight is the status bar's right side: the filter, when set, then backHint.
+func statusRight(filter string) string {
+	if filter == "" {
+		return backHint
+	}
+	filter = ansi.Truncate(filter, maxStatusFilter, "…")
+	return "#[bold]filter: " + statusEscaper.Replace(filter) + "#[nobold] · " + backHint
+}
 
 const conf = `set -g status on
 set -g status-style "bg=#1f2937,fg=#e5e7eb"
@@ -257,12 +272,7 @@ func AttachCommand(name, filter string) *exec.Cmd {
 	attached[name] = true
 	// Undo Resize so the window follows the attached terminal.
 	run("set-option", "-w", "-t", "="+name+":", "window-size", "latest")
-	if filter == "" {
-		run("set-option", "-u", "-t", "="+name+":", "status-right")
-	} else {
-		run("set-option", "-t", "="+name+":", "status-right",
-			"#[bold]filter: "+statusEscaper.Replace(filter)+"#[nobold] · "+backHint)
-	}
+	run("set-option", "-t", "="+name+":", "status-right", statusRight(filter))
 	return command("attach-session", "-t", "="+name)
 }
 

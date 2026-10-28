@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func waitFor(t *testing.T, name, want string) string {
@@ -23,12 +26,19 @@ func waitFor(t *testing.T, name, want string) string {
 	return ""
 }
 
+// useSocket gives the test its own tmux server, so one test's server shutting
+// down can't break the next test's startup.
+func useSocket(t *testing.T) {
+	t.Helper()
+	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), SafeName(t.Name()))
+	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+}
+
 func TestTypingIntoDetachedSession(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
-	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	useSocket(t)
 
 	name := "typing"
 	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
@@ -65,8 +75,7 @@ func TestResizeWaitsForDetach(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
-	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	useSocket(t)
 
 	name := "attached"
 	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
@@ -99,18 +108,42 @@ func TestResizeWaitsForDetach(t *testing.T) {
 	}
 }
 
+func TestStatusRight(t *testing.T) {
+	prefix, suffix := "#[bold]filter: ", "#[nobold] · "+backHint
+	cases := []struct{ name, filter, want string }{
+		{"empty", "", backHint},
+		{"at the limit", strings.Repeat("x", maxStatusFilter), prefix + strings.Repeat("x", maxStatusFilter) + suffix},
+		{"over the limit", strings.Repeat("x", maxStatusFilter+1), prefix + strings.Repeat("x", maxStatusFilter-1) + "…" + suffix},
+		{"hashes escape after the cut", strings.Repeat("#", 40), prefix + strings.Repeat("##", maxStatusFilter-1) + "…" + suffix},
+		{"percents escape after the cut", strings.Repeat("%", 40), prefix + strings.Repeat("%%", maxStatusFilter-1) + "…" + suffix},
+		{"style codes stay literal", "#[fg=red]x #", prefix + "##[fg=red]x ##" + suffix},
+	}
+	for _, c := range cases {
+		if got := statusRight(c.filter); got != c.want {
+			t.Errorf("%s: statusRight(%q) = %q, want %q", c.name, c.filter, got, c.want)
+		}
+	}
+
+	for _, filter := range []string{strings.Repeat("ä", 40), strings.Repeat("漢", 40)} {
+		got := statusRight(filter)
+		shown := strings.TrimSuffix(strings.TrimPrefix(got, prefix), suffix)
+		if !utf8.ValidString(got) || ansi.StringWidth(shown) > maxStatusFilter || !strings.HasSuffix(shown, "…") {
+			t.Errorf("statusRight(%.4q…) = %q, want valid UTF-8 cut to at most %d cells", filter, got, maxStatusFilter)
+		}
+	}
+}
+
 func TestAttachShowsFilterInStatusBar(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
-	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	useSocket(t)
 
 	name := "filtered"
 	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	statusRight := func() string {
+	shown := func() string {
 		out, err := run("display-message", "-p", "-t", "="+name+":", "#{T:status-right}")
 		if err != nil {
 			t.Fatal(err)
@@ -118,15 +151,21 @@ func TestAttachShowsFilterInStatusBar(t *testing.T) {
 		return out
 	}
 
-	AttachCommand(name, "#{session_name} #(echo hi) 50%d")
+	AttachCommand(name, "#{session_name} #(echo hi) %d")
 	Detached(name)
-	if got := statusRight(); !strings.Contains(got, "filter: #{session_name} #(echo hi) 50%d") || !strings.Contains(got, "Ctrl-q") {
+	if got := shown(); !strings.Contains(got, "filter: #{session_name} #(echo hi) %d") || !strings.Contains(got, "Ctrl-q") {
 		t.Fatalf("status-right is %q, want the filter and the Ctrl-q hint", got)
+	}
+
+	AttachCommand(name, strings.Repeat("x", 100))
+	Detached(name)
+	if got := shown(); !strings.Contains(got, "filter: xxx") || strings.Contains(got, strings.Repeat("x", maxStatusFilter+1)) || !strings.Contains(got, "Ctrl-q") {
+		t.Fatalf("status-right is %q, want the long filter cut short and the Ctrl-q hint kept", got)
 	}
 
 	AttachCommand(name, "")
 	Detached(name)
-	if got := statusRight(); strings.Contains(got, "filter") || !strings.Contains(got, "Ctrl-q") {
+	if got := shown(); strings.Contains(got, "filter") || !strings.Contains(got, "Ctrl-q") {
 		t.Fatalf("status-right is %q after clearing the filter, want the default", got)
 	}
 }
@@ -135,8 +174,7 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
-	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	useSocket(t)
 
 	name := "history"
 	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "seq 1 100; cat"}, nil); err != nil {
@@ -162,8 +200,7 @@ func TestCaptureReportsMouseTracking(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
-	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), t.Name())
-	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	useSocket(t)
 
 	cases := []struct {
 		name, setup string
