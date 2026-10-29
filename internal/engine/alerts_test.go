@@ -194,3 +194,27 @@ func TestPermissionRequestsAlertOncePerCooldown(t *testing.T) {
 		t.Errorf("notifications = %q, want %q", got, want)
 	}
 }
+
+func TestStopFailureAlerts(t *testing.T) {
+	e := startWithBoard(t, fmt.Sprintf(lifecycleBoard, `"notifications":{"turnDone":false,"needsYou":true,"planReady":true,"cooldownSeconds":0},`))
+	task := startIdleAgent(t, e, "Hits errors")
+	prefix := fmt.Sprintf("#%d Hits errors:", task.Number)
+	before := len(desktopNotified(prefix))
+	var dir string
+	e.with(func() { dir = e.sessionDir(e.find(task.ID), store.MainSession) })
+	events, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events.WriteString(`{"hook_event_name":"StopFailure","error":"rate_limit"}` + "\n")
+	events.Close()
+
+	want := []string{prefix + " turn failed: rate_limit"}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(desktopNotified(prefix))-before < len(want) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := desktopNotified(prefix)[before:]; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("notifications = %q, want %q", got, want)
+	}
+}

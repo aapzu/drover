@@ -69,7 +69,7 @@ func BoardPrompt(exe string) string {
 
 var hookEvents = []string{
 	"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-	"Notification", "PermissionRequest", "Stop",
+	"Notification", "PermissionRequest", "Stop", "StopFailure",
 }
 
 // WriteSettings writes a settings file whose hooks append every event to
@@ -134,6 +134,7 @@ type Event struct {
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	PermissionMode       string `json:"permission_mode"`
+	Error                string `json:"error"`
 	ToolInput            struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`

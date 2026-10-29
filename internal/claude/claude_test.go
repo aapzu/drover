@@ -34,6 +34,26 @@ func TestWriteSettingsAllowsEnterWorktree(t *testing.T) {
 	}
 }
 
+func TestWriteSettingsRegistersStopFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := WriteSettings(path, "/bin/drover", "/tmp/events.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Hooks map[string]any `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got.Hooks["StopFailure"]; !ok {
+		t.Errorf("hooks = %v, want StopFailure", got.Hooks)
+	}
+}
+
 func TestReadEventsKeepsPartialLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	RecordHook(path, strings.NewReader(`{"hook_event_name":"UserPromptSubmit"}`))

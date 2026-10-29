@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -171,6 +172,18 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if ev.NotificationType == "permission_prompt" {
 				s.Activity = store.ActivityPermission
 			}
+		case "StopFailure":
+			s.Activity = store.ActivityIdle
+			s.Started = true
+			s.TurnInVisit = false
+			s.TurnEndRow = ""
+			reason := cmp.Or(ev.Error, "unknown error")
+			t.AddLog("Turn failed: " + reason)
+			e.alert(t, alertNeedsYou, "turn failed: "+reason)
+			out = append(out, func() {
+				e.respawnPending(taskID, key)
+				e.flushPending(e.taskByID(taskID), key)
+			})
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true
