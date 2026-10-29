@@ -339,8 +339,7 @@ func (e *Engine) planTarget(taskID string, visit int) (t, card *store.Task, targ
 }
 
 // prebuildWorktree builds the worktree the agent moves into once the plan is
-// approved while you review the plan, so the approval doesn't leave the
-// interrupted agent waiting for it.
+// approved while you review the plan.
 func (e *Engine) prebuildWorktree(taskID string, visit int) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
@@ -348,27 +347,25 @@ func (e *Engine) prebuildWorktree(taskID string, visit int) {
 	if !ok || target.NoWorktree || !e.isRepo {
 		return
 	}
+	defer e.setBusy(card.ID, "")
 	if _, err := e.ensureWorktree(t, target, card.ID); err != nil {
-		e.logf(card, "Worktree failed: %v", err)
+		e.logf(card, "Prebuilding the worktree failed, retrying once the plan is approved: %v", err)
 	}
 }
 
 // planExit moves the card the agent works for out of a plan-mode column once
 // the agent leaves plan mode, to the column's planExitTarget.
 func (e *Engine) planExit(taskID string, visit int) {
-	unlock := e.lockTask(taskID)
-	defer unlock()
-	t, card, target, ok := e.planTarget(taskID, visit)
+	t, _, target, ok := e.planTarget(taskID, visit)
 	if !ok {
 		return
 	}
-	e.logf(card, "Plan approved, moving to %s", target.Name)
 	// The agent is already editing in the project root, so stop it before the
-	// worktree is built.
+	// worktree is built, without waiting for a prebuild that holds the task lock.
 	var name string
 	e.with(func() {
 		s := t.Sessions[store.MainSession]
-		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && t.WorktreePath == "" && !target.NoWorktree && e.isRepo {
+		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && !target.NoWorktree && e.isRepo {
 			name = s.Tmux
 		}
 	})
@@ -378,6 +375,13 @@ func (e *Engine) planExit(taskID string, visit int) {
 			e.logf(t, "Couldn't interrupt the agent before creating its worktree: %v", err)
 		}
 	}
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	t, card, target, ok := e.planTarget(taskID, visit)
+	if !ok {
+		return
+	}
+	e.logf(card, "Plan approved, moving to %s", target.Name)
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(card, "Plan-exit move failed: %v", err)
 		return
