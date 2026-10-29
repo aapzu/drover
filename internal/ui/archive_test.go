@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,28 +18,53 @@ func archiveModel(t *testing.T) Model {
 	return m
 }
 
-func TestArchivedCardsAreHiddenUntilShown(t *testing.T) {
-	m := archiveModel(t)
+func TestOffBoardCardsAreHiddenUntilShown(t *testing.T) {
+	tests := []struct {
+		name    string
+		col     int
+		setup   func(m *Model)
+		reveal  func(m Model) Model
+		visible int
+		off     int
+		header  string
+	}{
+		{"archived", 1, func(*Model) {}, func(m Model) Model {
+			m.prefs.ShowArchived = true
+			return m
+		}, 1, 2, " 1 +2"},
+		{"hidden", 0, func(m *Model) { m.snap.Tasks[0].Hidden = true }, func(m Model) Model {
+			next, _ := m.updateBoard(key("B"))
+			return next.(Model)
+		}, 2, 1, " 2 +1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := archiveModel(t)
+			tt.setup(&m)
+			col := m.columns()[tt.col].ID
+			box := colBox{index: tt.col, width: 40, slots: 5}
 
-	if got := m.tasksIn("c1"); len(got) != 1 {
-		t.Errorf("column lists %d cards, want the 1 unarchived", len(got))
-	}
-	if got := m.offBoardIn("c1"); got != 2 {
-		t.Errorf("offBoardIn = %d, want 2", got)
-	}
-	if out := m.renderColumn(colBox{index: 1, width: 40, slots: 5}, 20, false); !strings.Contains(out, " 1 +2") {
-		t.Errorf("header doesn't show the hidden count:\n%s", out)
-	}
+			if got := m.tasksIn(col); len(got) != tt.visible {
+				t.Errorf("column lists %d cards, want the %d on the board", len(got), tt.visible)
+			}
+			if got := m.offBoardIn(col); got != tt.off {
+				t.Errorf("offBoardIn = %d, want %d", got, tt.off)
+			}
+			if out := m.renderColumn(box, 20, false); !strings.Contains(out, tt.header) {
+				t.Errorf("header doesn't show the hidden count:\n%s", out)
+			}
 
-	m.prefs.ShowArchived = true
-	if got := m.tasksIn("c1"); len(got) != 3 {
-		t.Errorf("column lists %d cards with archived shown, want 3", len(got))
-	}
-	if got := m.offBoardIn("c1"); got != 0 {
-		t.Errorf("offBoardIn = %d while archived cards are shown, want 0", got)
-	}
-	if out := m.renderColumn(colBox{index: 1, width: 40, slots: 5}, 20, false); strings.Contains(out, "+2") {
-		t.Errorf("header still shows a hidden count:\n%s", out)
+			m = tt.reveal(m)
+			if got := m.tasksIn(col); len(got) != 3 {
+				t.Errorf("column lists %d cards with them shown, want 3", len(got))
+			}
+			if got := m.offBoardIn(col); got != 0 {
+				t.Errorf("offBoardIn = %d while they are shown, want 0", got)
+			}
+			if out := m.renderColumn(box, 20, false); strings.Contains(out, fmt.Sprintf("+%d", tt.off)) {
+				t.Errorf("header still shows a hidden count:\n%s", out)
+			}
+		})
 	}
 }
 
@@ -82,31 +108,6 @@ func TestArchiveKeys(t *testing.T) {
 	next, _ = m.updateBoard(key("v"))
 	if !next.(Model).prefs.ShowArchived {
 		t.Error("v didn't show archived cards")
-	}
-}
-
-func TestHiddenCardsAreHiddenUntilShown(t *testing.T) {
-	m := archiveModel(t)
-	m.snap.Tasks[0].Hidden = true
-
-	col := m.columns()[0].ID
-	if got := m.tasksIn(col); len(got) != 2 {
-		t.Errorf("column lists %d cards, want the 2 visible", len(got))
-	}
-	if got := m.offBoardIn(col); got != 1 {
-		t.Errorf("offBoardIn = %d, want 1", got)
-	}
-	if out := m.renderColumn(colBox{index: 0, width: 40, slots: 5}, 20, false); !strings.Contains(out, " 2 +1") {
-		t.Errorf("header doesn't show the hidden count:\n%s", out)
-	}
-
-	next, _ := m.updateBoard(key("B"))
-	m = next.(Model)
-	if got := m.tasksIn(col); len(got) != 3 {
-		t.Errorf("column lists %d cards with hidden shown, want 3", len(got))
-	}
-	if got := m.offBoardIn(col); got != 0 {
-		t.Errorf("offBoardIn = %d while hidden cards are shown, want 0", got)
 	}
 }
 

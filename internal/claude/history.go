@@ -396,8 +396,8 @@ func tagValue(s, tag string) (string, bool) {
 
 func FirstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	if len(line) > 80 {
-		line = line[:77] + "…"
+	if r := []rune(line); len(r) > 80 {
+		line = string(r[:77]) + "…"
 	}
 	return line
 }
