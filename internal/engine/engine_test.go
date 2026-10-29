@@ -651,62 +651,109 @@ func readFile(path string) string {
 	return string(b)
 }
 
-// After the plan is approved the agent keeps going in the same turn; that
-// turn's end must run the target column's automations.
-func TestPlanExitHandsTurnToTarget(t *testing.T) {
-	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+func TestPlanExit(t *testing.T) {
+	for name, tc := range map[string]struct {
+		board string
+		wait  func(*store.Task) bool
+		check func(t *testing.T, root string, got *store.Task)
+	}{
+		"hands the turn to the target": {
+			`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits",
 	   "automations":{"onTurnEnd":[{"type":"move_to_column","targetColumn":"Done"}]}},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
-
-	task := e.CreateTask("PLAN the refactor", "")
-	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	done := waitFor(t, e, "plan exit then turn end to reach Done", func(t *store.Task) bool {
-		return t.ColumnID == "done"
-	})
-	var moves []string
-	for _, l := range done.Log {
-		if strings.HasPrefix(l.Text, "Moved") {
-			moves = append(moves, l.Text)
-		}
-	}
-	if want := []string{"Moved Backlog → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
-		t.Errorf("moves = %v, want %v", moves, want)
-	}
-}
-
-func TestPlanExitRestartsTheAgentInAWorktree(t *testing.T) {
-	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"done","name":"Done","role":"done"}]}`,
+			func(t *store.Task) bool { return t.ColumnID == "done" },
+			func(t *testing.T, _ string, done *store.Task) {
+				var moves []string
+				for _, l := range done.Log {
+					if strings.HasPrefix(l.Text, "Moved") {
+						moves = append(moves, l.Text)
+					}
+				}
+				if want := []string{"Moved Backlog → Planning", "Moved Planning → Executing", "Moved Executing → Done"}; strings.Join(moves, "|") != strings.Join(want, "|") {
+					t.Errorf("moves = %v, want %v", moves, want)
+				}
+			},
+		},
+		"restarts the agent in a worktree": {
+			`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
-	e, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runEngine(t, e)
+	  {"id":"done","name":"Done","role":"done"}]}`,
+			func(t *store.Task) bool { return t.ColumnID == "exec" && inWorktree(t) },
+			func(t *testing.T, root string, got *store.Task) {
+				if got.WorktreePath == root {
+					t.Errorf("worktree is the project root %s", root)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _ := setupProject(t)
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(tc.board), 0o644)
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
 
-	task := e.CreateTask("PLAN the refactor", "")
+			task := e.CreateTask("PLAN the refactor", "")
+			if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, root, waitFor(t, e, "the plan exit to finish", tc.wait))
+		})
+	}
+}
+
+func TestPlanReadyBuildsTheWorktreeBeforeApproval(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := e.CreateTask("Draft the refactor", "")
 	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	got := waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
+	waitFor(t, e, "the planning agent to finish its turn", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && idle(s)
+	})
+	var dir string
+	e.with(func() { dir = e.sessionDir(e.find(task.ID), store.MainSession) })
+	appendEvent := func(event string) {
+		f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		f.WriteString(event + "\n")
+	}
+
+	appendEvent(`{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`)
+	got := waitFor(t, e, "the worktree to be built while the plan awaits approval", func(t *store.Task) bool {
+		return t.WorktreePath != ""
+	})
+	if got.ColumnID != "plan" {
+		t.Errorf("column = %s, want plan until the plan is approved", got.ColumnID)
+	}
+
+	appendEvent(`{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}`)
+	got = waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
 		return t.ColumnID == "exec" && inWorktree(t)
 	})
-	if got.WorktreePath == root {
-		t.Errorf("worktree is the project root %s", root)
+	built := 0
+	for _, l := range got.Log {
+		if strings.HasPrefix(l.Text, "Worktree ready") {
+			built++
+		}
+	}
+	if built != 1 {
+		t.Errorf("worktree built %d times, want once", built)
 	}
 }
 

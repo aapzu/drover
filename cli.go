@@ -41,7 +41,7 @@ time it opens.
 var ask = assistant.Ask
 
 // waitForBoard is how long a command waits for the open board to answer.
-const waitForBoard = 2 * time.Minute
+var waitForBoard = 2 * time.Minute
 
 var cliCommands = map[string]func(root string, args []string) error{
 	"list": cmdList,

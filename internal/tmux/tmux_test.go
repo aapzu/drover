@@ -265,3 +265,150 @@ func TestPaneOfFindsPaneByAncestor(t *testing.T) {
 		t.Error("a process outside the server matched a pane")
 	}
 }
+
+func TestCommandEscapesTrailingSemicolonsAndDropsTmuxEnv(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	t.Setenv("KEEP_ME", "yes")
+	cmd := command("send-keys", "a;", "b", ";")
+	args := strings.Join(cmd.Args[1:], " ")
+	if !strings.HasPrefix(args, "-L "+Socket+" -f ") || !strings.HasSuffix(args, `send-keys a\; b \;`) {
+		t.Errorf("args = %q", args)
+	}
+	if !strings.Contains(strings.Join(cmd.Env, "\n"), "KEEP_ME=yes") {
+		t.Error("the rest of the environment was dropped")
+	}
+}
+
+func TestWithoutTmuxEnv(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1/default,1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	t.Setenv("TMUX_PLUGIN_MANAGER_PATH", "/plugins")
+	env := strings.Join(withoutTmuxEnv(), "\n")
+	for _, gone := range []string{"TMUX=", "TMUX_PANE="} {
+		if strings.Contains("\n"+env, "\n"+gone) {
+			t.Errorf("%s survived", gone)
+		}
+	}
+	if !strings.Contains(env, "TMUX_PLUGIN_MANAGER_PATH=/plugins") {
+		t.Error("an unrelated TMUX_ variable was dropped")
+	}
+}
+
+func TestEnsureConfWritesAndRepairsTheConfig(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("HOME", cache)
+	t.Setenv("XDG_CACHE_HOME", cache)
+	path := ensureConf()
+	if got, _ := os.ReadFile(path); string(got) != conf {
+		t.Fatalf("conf = %q", got)
+	}
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if ensureConf() != path {
+		t.Error("the config path moved")
+	}
+	if got, _ := os.ReadFile(path); string(got) != conf {
+		t.Errorf("stale conf kept: %q", got)
+	}
+}
+
+func TestAttachPaneCommand(t *testing.T) {
+	old := UserServer
+	t.Cleanup(func() { UserServer = old })
+	UserServer = []string{"-L", "mine"}
+	for _, tc := range []struct{ tmuxEnv, show string }{
+		{"", "attach-session"},
+		{"/tmp/tmux-1/default,1,0", "switch-client"},
+	} {
+		t.Setenv("TMUX", tc.tmuxEnv)
+		cmd := AttachPaneCommand("%3")
+		want := "-L mine select-window -t %3 ; select-pane -t %3 ; " + tc.show + " -t %3"
+		if got := strings.Join(cmd.Args[1:], " "); got != want {
+			t.Errorf("TMUX=%q: args = %q, want %q", tc.tmuxEnv, got, want)
+		}
+	}
+}
+
+func TestListStopAndKill(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	if got := List(); len(got) != 0 {
+		t.Errorf("List on a server that isn't running = %v", got)
+	}
+	for _, name := range []string{"one", "two"} {
+		if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := List(); len(got) != 2 || !got["one"] || !got["two"] {
+		t.Errorf("List = %v", got)
+	}
+
+	Stop("one")
+	if Has("one") {
+		t.Error("Stop left the session running")
+	}
+	Stop("one")
+	if err := Kill("one"); err != nil {
+		t.Errorf("killing a missing session: %v", err)
+	}
+	if err := Kill("two"); err != nil || Has("two") {
+		t.Errorf("Kill = %v, still there: %v", err, Has("two"))
+	}
+}
+
+func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	if err := NewSession("stubborn", t.TempDir(), []string{"sh", "-c", "trap '' INT; while :; do sleep 1; done"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	Stop("stubborn")
+	if Has("stubborn") {
+		t.Error("Stop left the session running")
+	}
+}
+
+func TestSendTextAndScreen(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "send"
+	if err := NewSession(name, t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SendText(name, "short line"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "short line\nshort line")
+	if err := SendText(name, "first\nsecond"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "secondfirst")
+	screen, err := Screen(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(screen, "short line") || strings.Contains(screen, "\x1b") {
+		t.Errorf("Screen = %q", screen)
+	}
+	if _, err := Screen("missing"); err == nil {
+		t.Error("Screen of a missing session is not an error")
+	}
+	if err := SendText("missing", "x"); err == nil {
+		t.Error("SendText to a missing session is not an error")
+	}
+	if err := SendText("missing", strings.Repeat("x", 300)); err == nil {
+		t.Error("pasting into a missing session is not an error")
+	}
+}

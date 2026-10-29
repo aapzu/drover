@@ -1,12 +1,15 @@
 package ui
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 func TestStateStaysInTempDir(t *testing.T) {
@@ -16,7 +19,7 @@ func TestStateStaysInTempDir(t *testing.T) {
 	}
 }
 
-// TestMain keeps the tests' state out of the real state directory.
+// TestMain keeps the tests' state and tmux server out of the real ones.
 func TestMain(m *testing.M) {
 	state, err := os.MkdirTemp("", "drover-ui-state")
 	if err != nil {
@@ -25,7 +28,9 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("XDG_STATE_HOME", state); err != nil {
 		panic(err)
 	}
+	tmux.Socket = fmt.Sprintf("kt-ui-test-%d", os.Getpid())
 	code := m.Run()
+	exec.Command("tmux", "-L", tmux.Socket, "kill-server").Run()
 	os.RemoveAll(state)
 	os.Exit(code)
 }
