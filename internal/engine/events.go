@@ -349,7 +349,7 @@ func (e *Engine) prebuildWorktree(taskID string, visit int) {
 	}
 	defer e.setBusy(card.ID, "")
 	if _, err := e.ensureWorktree(t, target, card.ID); err != nil {
-		e.logf(card, "Prebuilding the worktree failed, retrying once the plan is approved: %v", err)
+		e.logf(card, "Prebuilding the worktree failed, it is built again if the plan is approved: %v", err)
 	}
 }
 
@@ -373,12 +373,16 @@ func (e *Engine) planExit(taskID string, visit int) {
 	if interrupted {
 		if err := e.interrupt(name); err != nil {
 			e.logf(t, "Couldn't interrupt the agent before creating its worktree: %v", err)
+			interrupted = false
 		}
 	}
 	unlock := e.lockTask(taskID)
 	defer unlock()
 	t, card, target, ok := e.planTarget(taskID, visit)
 	if !ok {
+		if interrupted {
+			e.logf(t, "Interrupted the agent for the plan exit, but the card moved before it could follow")
+		}
 		return
 	}
 	e.logf(card, "Plan approved, moving to %s", target.Name)
