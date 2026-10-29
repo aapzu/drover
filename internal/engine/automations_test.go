@@ -288,3 +288,96 @@ func TestInitialPromptKeepsGatedMessageRow(t *testing.T) {
 		}
 	}
 }
+
+func TestRowName(t *testing.T) {
+	for name, tc := range map[string]struct {
+		row  config.Automation
+		want string
+	}{
+		"named":   {config.Automation{Name: "Review", Type: "send_message"}, "Review"},
+		"unnamed": {config.Automation{Type: "run_shell"}, "run_shell"},
+	} {
+		if got := rowName(tc.row); got != tc.want {
+			t.Errorf("%s: rowName = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestTruncatePrompt(t *testing.T) {
+	long := strings.Repeat("é", 4001)
+	for name, tc := range map[string]struct{ in, want string }{
+		"short":      {"fix it", "fix it"},
+		"at the cap": {strings.Repeat("é", 4000), strings.Repeat("é", 4000)},
+		"over":       {long, strings.Repeat("é", 4000)},
+	} {
+		if got := truncatePrompt(tc.in); got != tc.want {
+			t.Errorf("%s: truncatePrompt cut to %d runes, want %d", name, len([]rune(got)), len([]rune(tc.want)))
+		}
+	}
+}
+
+func TestMoveTarget(t *testing.T) {
+	board := &config.Board{Columns: []config.Column{{ID: "a", Name: "Alpha"}, {ID: "b", Name: "Beta"}, {ID: "c", Name: "Gamma"}}}
+	for name, tc := range map[string]struct {
+		ref     string
+		current int
+		want    string
+	}{
+		"next column":      {"", 0, "b"},
+		"last has no next": {"", 2, ""},
+		"by id":            {"c", 0, "c"},
+		"by name":          {"beta", 2, "b"},
+		"unknown":          {"nowhere", 0, ""},
+	} {
+		col, ok := moveTarget(board, tc.ref, tc.current)
+		if col.ID != tc.want || ok != (tc.want != "") {
+			t.Errorf("%s: moveTarget = %q, %v, want %q", name, col.ID, ok, tc.want)
+		}
+	}
+}
+
+func TestRenderFillsPlaceholders(t *testing.T) {
+	owner := &store.Task{ID: "o1", Number: 4, WorktreePath: "/wt/4", Branch: "feat/x", BaseBranch: "develop"}
+	card := &store.Task{ID: "c1", Number: 5, Title: "Fix it", Prompt: "it's broken", GroupID: "o1",
+		Issue: &store.Issue{Key: "DX-1", URL: "https://linear/DX-1"},
+		PR:    &store.PR{URL: "https://gh/pr/9", Number: 9, Title: "PR title", Branch: "pr-branch"}}
+	e := &Engine{Root: "/repo", ProjectName: "repo", state: &store.State{Tasks: []*store.Task{owner, card}}, board: &config.Board{DefaultBaseBranch: "trunk"}}
+	gc := groupContext{from: config.Column{Name: "Plan"}, to: config.Column{Name: "Exec"}, trigger: "enter", reply: "done; rm -rf /"}
+
+	for name, tc := range map[string]struct {
+		tpl   string
+		shell bool
+		want  string
+	}{
+		"plain":                {"#{{taskNumber}} {{ title }} -> {{toColumn}} from {{fromColumn}}", false, "#5 Fix it -> Exec from Plan"},
+		"owner's worktree":     {"{{worktreePath}} {{projectPath}} {{projectName}}", false, "/wt/4 /repo repo"},
+		"PR branch wins":       {"{{branchName}} {{prBranch}} {{prNumber}} {{prUrl}}", false, "pr-branch pr-branch 9 https://gh/pr/9"},
+		"issue":                {"{{issueKey}} {{issueUrl}}", false, "DX-1 https://linear/DX-1"},
+		"owner's base":         {"{{baseBranch}}", false, "develop"},
+		"agent reply":          {"{{agentReply}} ({{trigger}})", false, "done; rm -rf / (enter)"},
+		"unknown":              {"{{reply}} {{nope}}", false, "{{reply}} {{nope}}"},
+		"shell quoting":        {"echo {{description}} {{agentReply}}", true, `echo 'it'\''s broken' 'done; rm -rf /'`},
+		"shell leaves unknown": {"echo {{nope}}", true, "echo {{nope}}"},
+	} {
+		if got := e.render(card, tc.tpl, gc, tc.shell); got != tc.want {
+			t.Errorf("%s: render = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestVarsFallBackWithoutAWorktreePRorBase(t *testing.T) {
+	card := &store.Task{ID: "c1", Number: 2, Branch: "own-branch"}
+	for name, tc := range map[string]struct {
+		board *config.Board
+		base  string
+	}{
+		"board default": {&config.Board{DefaultBaseBranch: "trunk"}, "trunk"},
+		"main":          {&config.Board{}, "main"},
+	} {
+		e := &Engine{Root: "/repo", state: &store.State{Tasks: []*store.Task{card}}, board: tc.board}
+		v := e.vars(card, groupContext{})
+		if v["worktreePath"] != "/repo" || v["branchName"] != "own-branch" || v["baseBranch"] != tc.base || v["prUrl"] != "" || v["prNumber"] != "" || v["issueKey"] != "" {
+			t.Errorf("%s: vars = %v", name, v)
+		}
+	}
+}

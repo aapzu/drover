@@ -372,6 +372,9 @@ func (m Model) selectedIndex() int {
 }
 
 func (m *Model) selectTask(t *store.Task) {
+	if t == nil {
+		return
+	}
 	for i, c := range m.columns() {
 		if c.ID == m.columnOf(t) {
 			m.col = i
