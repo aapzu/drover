@@ -667,6 +667,54 @@ func TestPlanExit(t *testing.T) {
 	}
 }
 
+func TestPlanReadyBuildsTheWorktreeBeforeApproval(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+	task := e.CreateTask("Draft the refactor", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning agent to finish its turn", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && idle(s)
+	})
+	var dir string
+	e.with(func() { dir = e.sessionDir(e.find(task.ID), store.MainSession) })
+	appendEvent := func(event string) {
+		f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		f.WriteString(event + "\n")
+	}
+
+	appendEvent(`{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`)
+	got := waitFor(t, e, "the worktree to be built while the plan awaits approval", func(t *store.Task) bool {
+		return t.WorktreePath != ""
+	})
+	if got.ColumnID != "plan" {
+		t.Errorf("column = %s, want plan until the plan is approved", got.ColumnID)
+	}
+
+	appendEvent(`{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}`)
+	got = waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
+		return t.ColumnID == "exec" && inWorktree(t)
+	})
+	built := 0
+	for _, l := range got.Log {
+		if strings.HasPrefix(l.Text, "Worktree ready") {
+			built++
+		}
+	}
+	if built != 1 {
+		t.Errorf("worktree built %d times, want once", built)
+	}
+}
+
 func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	root, log := setupProject(t)

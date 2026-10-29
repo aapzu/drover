@@ -179,7 +179,7 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, activity: store.ActivityPermission,
 		},
 		"a plan ready for review": {
-			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`, activity: store.ActivityPermission,
+			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`, activity: store.ActivityPermission, followUps: 1,
 		},
 		"a permission notification": {
 			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"Notification","notification_type":"permission_prompt"}`, activity: store.ActivityPermission,

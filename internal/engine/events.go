@@ -164,6 +164,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityPermission
 			if ev.ToolName == "ExitPlanMode" {
 				e.alert(t, alertPlanReady, "has a plan ready for review")
+				out = append(out, func() { e.prebuildWorktree(taskID, visit) })
 			} else {
 				e.alert(t, alertNeedsYou, "needs you: permission requested")
 			}
@@ -321,32 +322,50 @@ func (e *Engine) taskByID(id string) *store.Task {
 	return &store.Task{}
 }
 
+// planTarget returns the card and the planExitTarget column of the plan-mode
+// column the task's card is in, if it is in one and visit is still current.
+func (e *Engine) planTarget(taskID string, visit int) (t, card *store.Task, target config.Column, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t = e.find(taskID)
+	if t == nil || t.Visit != visit {
+		return nil, nil, config.Column{}, false
+	}
+	card = store.Driver(e.state.Tasks, t)
+	col, _, _ := e.board.Column(card.ColumnID)
+	target, found := e.board.Find(col.PlanExitTarget)
+	ok = e.board.PermissionMode(col) == "plan" && col.PlanExitTarget != "" && found
+	return t, card, target, ok
+}
+
+// prebuildWorktree builds the worktree the agent moves into once the plan is
+// approved while you review the plan.
+func (e *Engine) prebuildWorktree(taskID string, visit int) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	t, card, target, ok := e.planTarget(taskID, visit)
+	if !ok || target.NoWorktree || !e.isRepo {
+		return
+	}
+	defer e.setBusy(card.ID, "")
+	if _, err := e.ensureWorktree(t, target, card.ID); err != nil {
+		e.logf(card, "Prebuilding the worktree failed, it is built again if the plan is approved: %v", err)
+	}
+}
+
 // planExit moves the card the agent works for out of a plan-mode column once
 // the agent leaves plan mode, to the column's planExitTarget.
 func (e *Engine) planExit(taskID string, visit int) {
-	unlock := e.lockTask(taskID)
-	defer unlock()
-	e.mu.Lock()
-	t := e.find(taskID)
-	if t == nil || t.Visit != visit {
-		e.mu.Unlock()
+	t, _, target, ok := e.planTarget(taskID, visit)
+	if !ok {
 		return
 	}
-	card := store.Driver(e.state.Tasks, t)
-	col, _, _ := e.board.Column(card.ColumnID)
-	target, ok := e.board.Find(col.PlanExitTarget)
-	planning := e.board.PermissionMode(col) == "plan"
-	e.mu.Unlock()
-	if !planning || col.PlanExitTarget == "" || !ok {
-		return
-	}
-	e.logf(card, "Plan approved, moving to %s", target.Name)
 	// The agent is already editing in the project root, so stop it before the
-	// worktree is built.
+	// worktree is built, without waiting for a prebuild that holds the task lock.
 	var name string
 	e.with(func() {
 		s := t.Sessions[store.MainSession]
-		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && t.WorktreePath == "" && !target.NoWorktree && e.isRepo {
+		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && !target.NoWorktree && e.isRepo {
 			name = s.Tmux
 		}
 	})
@@ -354,8 +373,19 @@ func (e *Engine) planExit(taskID string, visit int) {
 	if interrupted {
 		if err := e.interrupt(name); err != nil {
 			e.logf(t, "Couldn't interrupt the agent before creating its worktree: %v", err)
+			interrupted = false
 		}
 	}
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	t, card, target, ok := e.planTarget(taskID, visit)
+	if !ok {
+		if interrupted {
+			e.logf(t, "Interrupted the agent for the plan exit, but the card moved before it could follow")
+		}
+		return
+	}
+	e.logf(card, "Plan approved, moving to %s", target.Name)
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
 		e.logf(card, "Plan-exit move failed: %v", err)
 		return
