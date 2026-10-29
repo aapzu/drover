@@ -207,9 +207,10 @@ func TestStopFailureAlerts(t *testing.T) {
 		t.Fatal(err)
 	}
 	events.WriteString(`{"hook_event_name":"StopFailure","error":"rate_limit"}` + "\n")
+	events.WriteString(`{"hook_event_name":"StopFailure"}` + "\n")
 	events.Close()
 
-	want := []string{prefix + " turn failed: rate_limit"}
+	want := []string{prefix + " turn failed: rate_limit", prefix + " turn failed: unknown error"}
 	deadline := time.Now().Add(5 * time.Second)
 	for len(desktopNotified(prefix))-before < len(want) && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
