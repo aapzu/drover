@@ -178,12 +178,15 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.TurnInVisit = false
 			s.TurnEndRow = ""
 			reason := cmp.Or(ev.Error, "unknown error")
-			t.AddLog("Turn failed: " + reason)
+			msg := "Turn failed: " + reason
+			if n := len(s.Pending); n > 0 {
+				msg += fmt.Sprintf("; %d queued message(s) held", n)
+			}
+			t.AddLog(msg)
 			e.alert(t, alertNeedsYou, "turn failed: "+reason)
-			out = append(out, func() {
-				e.respawnPending(taskID, key)
-				e.flushPending(e.taskByID(taskID), key)
-			})
+			if s.RespawnPending {
+				out = append(out, func() { e.respawnPending(taskID, key) })
+			}
 		case "Stop":
 			s.Activity = store.ActivityIdle
 			s.Started = true

@@ -2098,12 +2098,15 @@ func TestStopFailureGoesIdle(t *testing.T) {
 		t.Fatalf("a message sent mid-turn should queue, got %v", got)
 	}
 	events.WriteString(`{"hook_event_name":"StopFailure","error":"unknown"}` + "\n")
-	task := waitFor(t, e, "failed turn to release the queue", func(t *store.Task) bool {
-		s := t.Sessions[store.MainSession]
-		return s.Activity != store.ActivityThinking || len(s.Pending) == 0
+	task := waitFor(t, e, "failed turn to go idle", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
 	})
-	if s := task.Sessions[store.MainSession]; len(s.Pending) != 0 || s.LastReply != "" {
-		t.Errorf("a failed turn should flush the queue and record no reply: pending=%v reply=%q", s.Pending, s.LastReply)
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession]; got.Activity != store.ActivityIdle || len(got.Pending) != 1 {
+		t.Errorf("a failed turn should hold the queue: activity=%s pending=%v", got.Activity, got.Pending)
+	}
+	if logs := task.Log; len(logs) == 0 || !strings.Contains(logs[len(logs)-1].Text, "1 queued message(s) held") {
+		t.Errorf("log should say the queue is held: %v", logs)
 	}
 }
 
