@@ -215,6 +215,7 @@ func (t *Task) Clone() *Task {
 	for k, s := range t.Sessions {
 		sc := *s
 		sc.Pending = append([]Pending(nil), s.Pending...)
+		sc.Background = slices.Clone(s.Background)
 		c.Sessions[k] = &sc
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)

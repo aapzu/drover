@@ -43,3 +43,12 @@ func TestSessionMovedFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestCloneDoesNotShareBackground(t *testing.T) {
+	task := &Task{Sessions: map[string]*Session{MainSession: {Background: []string{"a", "b"}}}}
+	clone := task.Clone()
+	clone.Sessions[MainSession].Background[0] = "x"
+	if got := task.Sessions[MainSession].Background[0]; got != "a" {
+		t.Errorf("clone wrote through to the original: %q", got)
+	}
+}

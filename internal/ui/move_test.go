@@ -580,3 +580,11 @@ func TestMovePickerEnterAdoptsOrphanCardIntoFirstColumn(t *testing.T) {
 		t.Errorf("busy column = %q after enter on an orphan card, want the move to c0", got)
 	}
 }
+
+func TestFailedSessionStartFlashesError(t *testing.T) {
+	m := testModel(120, 40, 2, 1)
+	next, _ := m.Update(sessionStartedMsg{err: errors.New("boom"), snap: m.snap})
+	if got := next.(Model).flash; !strings.Contains(got, "boom") {
+		t.Errorf("flash %q", got)
+	}
+}

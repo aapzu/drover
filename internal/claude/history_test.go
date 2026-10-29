@@ -157,3 +157,12 @@ func TestMoveTranscript(t *testing.T) {
 		t.Errorf("missing transcript: moved=%v err=%v", moved, err)
 	}
 }
+
+func TestFirstLineTruncatesOnRuneBoundary(t *testing.T) {
+	if got, want := FirstLine(strings.Repeat("ä", 100)+"\nsecond"), strings.Repeat("ä", 77)+"…"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if exact := strings.Repeat("ä", 80); FirstLine(exact) != exact {
+		t.Errorf("a line of exactly 80 runes was cut")
+	}
+}
