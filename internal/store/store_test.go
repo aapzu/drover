@@ -110,7 +110,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 func TestCloneDeepCopies(t *testing.T) {
 	orig := &Task{
 		ID:       "a",
-		Sessions: map[string]*Session{MainSession: {Key: MainSession, Pending: []Pending{{Text: "hi"}}}},
+		Sessions: map[string]*Session{MainSession: {Key: MainSession, Pending: []Pending{{Text: "hi"}}, Background: []string{"bg"}}},
 		Log:      []LogEntry{{Text: "started"}},
 		SeenPRs:  []string{"u1"},
 		Issue:    &Issue{Key: "DX-1"},
@@ -118,13 +118,14 @@ func TestCloneDeepCopies(t *testing.T) {
 	}
 	c := orig.Clone()
 	c.Sessions[MainSession].Pending[0].Text = "changed"
+	c.Sessions[MainSession].Background[0] = "changed"
 	c.Sessions["extra"] = &Session{}
 	c.Log[0].Text = "changed"
 	c.SeenPRs[0] = "changed"
 	c.Issue.Key = "changed"
 	c.PR.Number = 8
 
-	if orig.Sessions[MainSession].Pending[0].Text != "hi" || len(orig.Sessions) != 1 {
+	if got := orig.Sessions[MainSession]; got.Pending[0].Text != "hi" || got.Background[0] != "bg" || len(orig.Sessions) != 1 {
 		t.Errorf("sessions shared: %+v", orig.Sessions)
 	}
 	if orig.Log[0].Text != "started" || orig.SeenPRs[0] != "u1" || orig.Issue.Key != "DX-1" || orig.PR.Number != 7 {
