@@ -58,36 +58,33 @@ func TestConfigOpensFromTheBoard(t *testing.T) {
 }
 
 func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
-	root := t.TempDir()
-	m := configModel(t, root)
-	m = selectOption(t, m, "Auto-name cards")
+	tests := []struct {
+		option, key string
+		value       func(*config.Board) bool
+	}{
+		{"Auto-name cards", "autoName", func(b *config.Board) bool { return b.AutoName }},
+		{"Split PRs into cards", "splitByPR", func(b *config.Board) bool { return b.SplitByPR }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			root := t.TempDir()
+			m := configModel(t, root)
+			if !tt.value(m.snap.Board) {
+				t.Fatalf("%s is not on by default", tt.key)
+			}
+			m = selectOption(t, m, tt.option)
 
-	m = pressConfig(t, m, keyPress("enter"))
-	if m.snap.Board.AutoName {
-		t.Error("toggle didn't change the running board")
-	}
-	if !config.Sets(root, config.Local, []string{"autoName"}) {
-		t.Error("toggle wasn't saved to drover.local.json")
-	}
-	if !strings.Contains(m.renderConfig(), "local") {
-		t.Errorf("row doesn't show where the value comes from:\n%s", m.renderConfig())
-	}
-}
-
-func TestConfigSplitByPRToggleSavesToTheLocalFile(t *testing.T) {
-	root := t.TempDir()
-	m := configModel(t, root)
-	if !m.snap.Board.SplitByPR {
-		t.Fatal("splitByPR is not on by default")
-	}
-	m = selectOption(t, m, "Split PRs into cards")
-
-	m = pressConfig(t, m, keyPress("enter"))
-	if m.snap.Board.SplitByPR {
-		t.Error("toggle didn't change the running board")
-	}
-	if !config.Sets(root, config.Local, []string{"splitByPR"}) {
-		t.Error("toggle wasn't saved to drover.local.json")
+			m = pressConfig(t, m, keyPress("enter"))
+			if tt.value(m.snap.Board) {
+				t.Error("toggle didn't change the running board")
+			}
+			if !config.Sets(root, config.Local, []string{tt.key}) {
+				t.Error("toggle wasn't saved to drover.local.json")
+			}
+			if !strings.Contains(m.renderConfig(), "local") {
+				t.Errorf("row doesn't show where the value comes from:\n%s", m.renderConfig())
+			}
+		})
 	}
 }
 
@@ -184,26 +181,43 @@ func TestConfigSharedOnlyOptionGoesToDroverJSON(t *testing.T) {
 	}
 }
 
-func TestConfigResetRemovesTheLocalOverride(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Set(root, config.Local, []string{"autoName"}, false); err != nil {
-		t.Fatal(err)
+func TestConfigResetOfASingleLayer(t *testing.T) {
+	tests := []struct {
+		name   string
+		preset bool
+		flash  string
+	}{
+		{"removes the local override", true, "Reset"},
+		{"on a default row changes nothing", false, "already the default"},
 	}
-	m := configModel(t, root)
-	m = selectOption(t, m, "Auto-name cards")
-	if m.snap.Board.AutoName {
-		t.Fatal("setup: local override not loaded")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if tt.preset {
+				if err := config.Set(root, config.Local, []string{"autoName"}, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m := configModel(t, root)
+			m = selectOption(t, m, "Auto-name cards")
+			if tt.preset && m.snap.Board.AutoName {
+				t.Fatal("setup: local override not loaded")
+			}
 
-	m = pressConfig(t, m, key("x"))
-	if config.Sets(root, config.Local, []string{"autoName"}) {
-		t.Error("x didn't remove the local override")
-	}
-	if !m.snap.Board.AutoName {
-		t.Error("autoName did not fall back to the default")
-	}
-	if !strings.Contains(m.flash, "Reset") {
-		t.Errorf("flash=%q", m.flash)
+			m = pressConfig(t, m, key("x"))
+			if config.Sets(root, config.Local, []string{"autoName"}) {
+				t.Error("x didn't remove the local override")
+			}
+			if !m.snap.Board.AutoName {
+				t.Error("autoName did not fall back to the default")
+			}
+			if !strings.Contains(m.flash, tt.flash) {
+				t.Errorf("flash=%q", m.flash)
+			}
+			if _, err := os.Stat(filepath.Join(root, config.LocalFileName)); !tt.preset && !os.IsNotExist(err) {
+				t.Errorf("reset created drover.local.json: %v", err)
+			}
+		})
 	}
 }
 
@@ -317,58 +331,49 @@ func TestConfigResetWithBothLayersRemovesLocalFirst(t *testing.T) {
 	}
 }
 
-func TestConfigResetOnADefaultRowChangesNothing(t *testing.T) {
-	root := t.TempDir()
-	m := configModel(t, root)
-	m = selectOption(t, m, "Auto-name cards")
+func TestConfigEmptyPrompt(t *testing.T) {
+	path := []string{"defaultBaseBranch"}
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, root string)
+		input      string
+		flash      string
+		wantShared bool
+	}{
+		{"removes the key from the chosen layer", func(t *testing.T, root string) {
+			if err := config.Set(root, config.Local, path, "develop"); err != nil {
+				t.Fatal(err)
+			}
+		}, "", "Reset", false},
+		{"where nothing is set says so", func(t *testing.T, root string) {
+			if err := config.Default().Save(root); err != nil {
+				t.Fatal(err)
+			}
+			if err := config.Set(root, config.Shared, path, "main"); err != nil {
+				t.Fatal(err)
+			}
+		}, "  ", "is not set in drover.local.json", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			tt.setup(t, root)
+			m := configModel(t, root)
+			m = selectOption(t, m, "Default base branch")
 
-	m = pressConfig(t, m, key("x"))
-	if !strings.Contains(m.flash, "already the default") {
-		t.Errorf("flash=%q", m.flash)
-	}
-	if _, err := os.Stat(filepath.Join(root, config.LocalFileName)); !os.IsNotExist(err) {
-		t.Errorf("reset created drover.local.json: %v", err)
-	}
-}
-
-func TestConfigEmptyPromptRemovesTheKeyFromTheChosenLayer(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Set(root, config.Local, []string{"defaultBaseBranch"}, "develop"); err != nil {
-		t.Fatal(err)
-	}
-	m := configModel(t, root)
-	m = selectOption(t, m, "Default base branch")
-
-	m = pressConfig(t, m, keyPress("enter"))
-	m.configInput.SetValue("")
-	m = pressConfig(t, m, keyPress("enter"))
-	if config.Sets(root, config.Local, []string{"defaultBaseBranch"}) {
-		t.Error("an empty prompt didn't remove the local key")
-	}
-	if !strings.Contains(m.flash, "Reset") {
-		t.Errorf("flash=%q", m.flash)
-	}
-}
-
-func TestConfigEmptyPromptWhereNothingIsSetSaysSo(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
-		t.Fatal(err)
-	}
-	if err := config.Set(root, config.Shared, []string{"defaultBaseBranch"}, "main"); err != nil {
-		t.Fatal(err)
-	}
-	m := configModel(t, root)
-	m = selectOption(t, m, "Default base branch")
-
-	m = pressConfig(t, m, keyPress("enter"))
-	m.configInput.SetValue("  ")
-	m = pressConfig(t, m, keyPress("enter"))
-	if !strings.Contains(m.flash, "is not set in drover.local.json") {
-		t.Errorf("flash=%q", m.flash)
-	}
-	if !config.Sets(root, config.Shared, []string{"defaultBaseBranch"}) {
-		t.Error("an empty local prompt removed the shared value")
+			m = pressConfig(t, m, keyPress("enter"))
+			m.configInput.SetValue(tt.input)
+			m = pressConfig(t, m, keyPress("enter"))
+			if config.Sets(root, config.Local, path) {
+				t.Error("an empty prompt left the local key")
+			}
+			if config.Sets(root, config.Shared, path) != tt.wantShared {
+				t.Errorf("shared key set = %v, want %v", !tt.wantShared, tt.wantShared)
+			}
+			if !strings.Contains(m.flash, tt.flash) {
+				t.Errorf("flash=%q", m.flash)
+			}
+		})
 	}
 }
 

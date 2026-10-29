@@ -376,27 +376,6 @@ func TestStartingANewCardRunsTheFirstColumnsEnterAutomations(t *testing.T) {
 	}
 }
 
-func TestDiscardSilentKeepsASessionWhoseFirstPromptIsUnread(t *testing.T) {
-	e := newEngineWithClaudeDir(t)
-	task, err := e.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	card := e.Snapshot().Tasks[0]
-	events, err := os.OpenFile(filepath.Join(e.sessionDir(card, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"fix the typo"}` + "\n")
-	events.Close()
-	if err := e.DiscardSilent(task.ID); err != nil {
-		t.Fatal(err)
-	}
-	if len(e.Snapshot().Tasks) != 1 {
-		t.Error("a session that was already typed into was discarded")
-	}
-}
-
 func TestFailedNewSessionLeavesNothingBehind(t *testing.T) {
 	e := startWithBoard(t, `{"initScript":"exit 1","columns":[
 	  {"id":"planning","name":"Planning","autoSpawn":true},
@@ -546,21 +525,42 @@ func TestDiscardSilentDeletesTheBranchWhateverTheMainCheckoutHas(t *testing.T) {
 	}
 }
 
-func TestDiscardSilentKeepsAWorktreeWithUncommittedChanges(t *testing.T) {
-	e := newEngineWithClaudeDir(t)
-	task, err := e.NewSession()
-	if err != nil {
-		t.Fatal(err)
-	}
-	worktree := e.find(task.ID).WorktreePath
-	os.WriteFile(filepath.Join(worktree, "notes.txt"), []byte("kept"), 0o644)
-	if err := e.DiscardSilent(task.ID); err != nil {
-		t.Fatal(err)
-	}
-	if len(e.Snapshot().Tasks) != 1 {
-		t.Error("a card whose worktree has uncommitted changes was discarded")
-	}
-	if _, err := os.Stat(filepath.Join(worktree, "notes.txt")); err != nil {
-		t.Errorf("the uncommitted file is gone: %v", err)
+func TestDiscardSilentKeepsASessionYouTouched(t *testing.T) {
+	for name, tc := range map[string]struct {
+		touch func(t *testing.T, e *Engine, card *store.Task) (stillThere string)
+		want  string
+	}{
+		"first prompt still unread": {func(t *testing.T, e *Engine, card *store.Task) string {
+			events, err := os.OpenFile(filepath.Join(e.sessionDir(card, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"fix the typo"}` + "\n")
+			events.Close()
+			return ""
+		}, "a session that was already typed into was discarded"},
+		"worktree with uncommitted changes": {func(t *testing.T, e *Engine, card *store.Task) string {
+			file := filepath.Join(card.WorktreePath, "notes.txt")
+			os.WriteFile(file, []byte("kept"), 0o644)
+			return file
+		}, "a card whose worktree has uncommitted changes was discarded"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEngineWithClaudeDir(t)
+			task, err := e.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept := tc.touch(t, e, e.Snapshot().Tasks[0])
+			if err := e.DiscardSilent(task.ID); err != nil {
+				t.Fatal(err)
+			}
+			if len(e.Snapshot().Tasks) != 1 {
+				t.Error(tc.want)
+			}
+			if _, err := os.Stat(kept); kept != "" && err != nil {
+				t.Errorf("the uncommitted file is gone: %v", err)
+			}
+		})
 	}
 }

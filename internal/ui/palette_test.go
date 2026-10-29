@@ -34,7 +34,7 @@ func typeInPalette(m Model, s string) Model {
 }
 
 func pressInPalette(m Model, k tea.KeyType) Model {
-	next, _ := m.updatePalette(tea.KeyMsg{Type: k})
+	next, _ := m.updatePalette(special(k))
 	return next.(Model)
 }
 
@@ -71,6 +71,7 @@ func TestPaletteRunsTheChosenCommand(t *testing.T) {
 		{"delete task", 0, modeConfirm, false},
 		{"next column", 0, modeBoard, true},
 		{"quit", 1, modeBoard, true},
+		{"zzz", 0, modePalette, false},
 	}
 	for _, tt := range tests {
 		m := typeInPalette(openedPalette(t), tt.search)
@@ -148,14 +149,6 @@ func TestPaletteClosesAndReopensEmpty(t *testing.T) {
 		if m.paletteInput.Value() != "" || m.paletteSel != 0 {
 			t.Errorf("%v: reopened with %q at %d, want a blank search", k, m.paletteInput.Value(), m.paletteSel)
 		}
-	}
-}
-
-func TestPaletteEnterWithNoMatchStaysOpen(t *testing.T) {
-	m := typeInPalette(openedPalette(t), "zzz")
-	next, cmd := m.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := next.(Model).mode; got != modePalette || cmd != nil {
-		t.Errorf("enter with no match: mode %v, cmd %v, want the palette left open", got, cmd)
 	}
 }
 
