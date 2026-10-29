@@ -41,24 +41,9 @@
       "automations": {
         "onEnter": [
           {
-            "name": "Remove extra comments",
+            "name": "Prepare PR",
             "type": "send_message",
-            "message": "Run comment-destroyer subagent unless you already ran it on the current diff."
-          },
-          {
-            "name": "Simplify",
-            "type": "send_message",
-            "message": "Run /simplify unless you already ran it on the current diff."
-          },
-          {
-            "name": "Review",
-            "type": "send_message",
-            "message": "Run /pr-review-toolkit:review-pr unless you already ran it on the current diff."
-          },
-          {
-            "name": "Build",
-            "type": "run_script",
-            "script": "go build ./... && go vet ./..."
+            "message": "Run comment-destroyer subagent, /simplify and /pr-review-toolkit:review-pr, unless you already ran them on the current diff."
           },
           {
             "name": "Ping",
