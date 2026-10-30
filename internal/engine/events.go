@@ -164,7 +164,10 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityPermission
 			if ev.ToolName == "ExitPlanMode" {
 				e.alert(t, alertPlanReady, "has a plan ready for review")
-				out = append(out, func() { e.prebuildWorktree(taskID, visit) })
+				out = append(out, func() {
+					e.gatePlanExit(taskID, visit)
+					e.prebuildWorktree(taskID, visit)
+				})
 			} else {
 				e.alert(t, alertNeedsYou, "needs you: permission requested")
 			}
@@ -338,6 +341,43 @@ func (e *Engine) planTarget(taskID string, visit int) (t, card *store.Task, targ
 	return t, card, target, ok
 }
 
+// planGateHeldWait is how long planExit gives the agent's hook to start holding
+// at an open gate before it interrupts the agent instead.
+const planGateHeldWait = 2 * time.Second
+
+// rootAgent returns the tmux session of t's agent if it is running in the
+// project root of a repository and target wants its own worktree.
+func (e *Engine) rootAgent(t *store.Task, target config.Column) string {
+	var name string
+	e.with(func() {
+		s := t.Sessions[store.MainSession]
+		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && !target.NoWorktree && e.isRepo {
+			name = s.Tmux
+		}
+	})
+	return name
+}
+
+// planGate returns the plan gate file next to the events file of t's agent.
+func (e *Engine) planGate(t *store.Task) string {
+	var dir string
+	e.with(func() { dir = e.sessionDir(t, store.MainSession) })
+	return claude.PlanGatePath(filepath.Join(dir, "events.jsonl"))
+}
+
+// gatePlanExit opens the plan gate when the plan is ready for review, so an
+// agent in the project root is held in its ExitPlanMode hook after you approve,
+// until planExit has moved it into its worktree.
+func (e *Engine) gatePlanExit(taskID string, visit int) {
+	t, _, target, ok := e.planTarget(taskID, visit)
+	if !ok || e.rootAgent(t, target) == "" {
+		return
+	}
+	if err := claude.OpenPlanGate(e.planGate(t)); err != nil {
+		e.logf(t, "Couldn't hold the agent for the plan exit, it is interrupted instead: %v", err)
+	}
+}
+
 // prebuildWorktree builds the worktree the agent moves into once the plan is
 // approved while you review the plan.
 func (e *Engine) prebuildWorktree(taskID string, visit int) {
@@ -356,37 +396,47 @@ func (e *Engine) prebuildWorktree(taskID string, visit int) {
 // planExit moves the card the agent works for out of a plan-mode column once
 // the agent leaves plan mode, to the column's planExitTarget.
 func (e *Engine) planExit(taskID string, visit int) {
+	gate := e.planGate(e.taskByID(taskID))
+	defer func() {
+		if err := claude.ClosePlanGate(gate); err != nil {
+			e.logf(e.taskByID(taskID), "Couldn't release the agent held for the plan exit, it carries on by itself soon: %v", err)
+		}
+	}()
 	t, _, target, ok := e.planTarget(taskID, visit)
 	if !ok {
 		return
 	}
-	// The agent is already editing in the project root, so stop it before the
-	// worktree is built, without waiting for a prebuild that holds the task lock.
-	var name string
-	e.with(func() {
-		s := t.Sessions[store.MainSession]
-		if s != nil && s.Status == store.StatusRunning && s.Cwd == e.Root && !target.NoWorktree && e.isRepo {
-			name = s.Tmux
-		}
-	})
-	interrupted := name != ""
+	name := e.rootAgent(t, target)
+	gated := name != "" && claude.PlanGateHeld(gate, planGateHeldWait)
+	interrupted := name != "" && !gated
 	if interrupted {
 		if err := e.interrupt(name); err != nil {
 			e.logf(t, "Couldn't interrupt the agent before creating its worktree: %v", err)
 			interrupted = false
 		}
 	}
+	// Releasing a held agent lets it carry on in the project root.
+	stop := func() {
+		if !gated {
+			return
+		}
+		if err := e.interrupt(name); err != nil {
+			e.logf(t, "Couldn't interrupt the agent held for the plan exit: %v", err)
+		}
+	}
 	unlock := e.lockTask(taskID)
 	defer unlock()
-	t, card, target, ok := e.planTarget(taskID, visit)
+	_, card, target, ok := e.planTarget(taskID, visit)
 	if !ok {
-		if interrupted {
+		stop()
+		if interrupted || gated {
 			e.logf(t, "Interrupted the agent for the plan exit, but the card moved before it could follow")
 		}
 		return
 	}
 	e.logf(card, "Plan approved, moving to %s", target.Name)
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
+		stop()
 		e.logf(card, "Plan-exit move failed: %v", err)
 		return
 	}
@@ -407,7 +457,7 @@ func (e *Engine) planExit(taskID string, visit int) {
 		}
 	})
 	if moved {
-		if !interrupted {
+		if !interrupted && !gated {
 			if err := e.interrupt(name); err != nil {
 				e.logf(t, "Couldn't interrupt the agent to move it into its worktree: %v", err)
 			}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -72,18 +74,42 @@ var hookEvents = []string{
 	"Notification", "PermissionRequest", "Stop",
 }
 
+// planGateName is the file next to a session's events. While it exists, the
+// ExitPlanMode hook holds the agent until the engine has moved it to its
+// worktree.
+const planGateName = "plan-gate"
+
+// planGateTimeout is how long a held agent waits for the engine before it
+// carries on, in case drover is stuck.
+const planGateTimeout = 10 * time.Minute
+
+// PlanGatePath returns the plan gate file for the session whose events are at
+// eventsPath.
+func PlanGatePath(eventsPath string) string {
+	return filepath.Join(filepath.Dir(eventsPath), planGateName)
+}
+
 // WriteSettings writes a settings file whose hooks append every event to
-// eventsPath through `<exe> hook`. Claude merges it with the user's settings.
+// eventsPath through `<exe> hook`, and hold the agent after ExitPlanMode while
+// the plan gate exists. Claude merges it with the user's settings.
 func WriteSettings(settingsPath, exe, eventsPath string) error {
 	command := fmt.Sprintf("%s hook %s", ShellQuote(exe), ShellQuote(eventsPath))
 	hook := []map[string]any{{"type": "command", "command": command, "timeout": 10}}
+	gate := fmt.Sprintf("%s hook-gate %s", ShellQuote(exe), ShellQuote(PlanGatePath(eventsPath)))
 	hooks := map[string]any{}
 	for _, name := range hookEvents {
 		entry := map[string]any{"hooks": hook}
 		if name == "PreToolUse" || name == "PostToolUse" || name == "PermissionRequest" {
 			entry["matcher"] = "*"
 		}
-		hooks[name] = []any{entry}
+		entries := []any{entry}
+		if name == "PostToolUse" {
+			entries = append(entries, map[string]any{
+				"matcher": "ExitPlanMode",
+				"hooks":   []map[string]any{{"type": "command", "command": gate, "timeout": int(planGateTimeout / time.Second)}},
+			})
+		}
+		hooks[name] = entries
 	}
 	settings := map[string]any{
 		"hooks":       hooks,
@@ -120,6 +146,72 @@ func RecordHook(eventsPath string, stdin io.Reader) {
 	}
 	defer f.Close()
 	f.Write(line.Bytes())
+}
+
+// OpenPlanGate creates the plan gate at path, so the agent's next ExitPlanMode
+// hook waits in WaitPlanGate for as long as this process runs.
+func OpenPlanGate(path string) error {
+	os.Remove(heldPath(path))
+	return os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o644)
+}
+
+// ClosePlanGate releases an agent held in WaitPlanGate.
+func ClosePlanGate(path string) error {
+	os.Remove(heldPath(path))
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// heldPath is the file WaitPlanGate keeps while it holds an agent. The gate
+// alone doesn't prove it: the agent may predate the hook or have timed out.
+func heldPath(gate string) string { return gate + ".held" }
+
+// PlanGateHeld reports whether an agent is held by the plan gate at path,
+// waiting up to wait for its hook to start.
+func PlanGateHeld(path string, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+		if _, err := os.Stat(heldPath(path)); err == nil {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// WaitPlanGate is the body of `drover hook-gate <file>`: it returns once the
+// plan gate at path is gone or the process that opened it has exited, or after
+// planGateTimeout. It returns at once if the gate never existed.
+func WaitPlanGate(path string) { waitPlanGate(path, 100*time.Millisecond, planGateTimeout) }
+
+func waitPlanGate(path string, every, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	held := false
+	defer func() {
+		if held {
+			os.Remove(heldPath(path))
+		}
+	}()
+	for time.Now().Before(deadline) {
+		owner, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		if pid, err := strconv.Atoi(string(owner)); err == nil && !processAlive(pid) {
+			return
+		}
+		if !held {
+			held = os.WriteFile(heldPath(path), nil, 0o644) == nil
+		}
+		time.Sleep(every)
+	}
 }
 
 type Event struct {

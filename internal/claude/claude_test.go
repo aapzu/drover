@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,135 @@ func TestWriteSettingsAllowsEnterWorktree(t *testing.T) {
 	}
 	if !slices.Contains(got.Permissions.Allow, "EnterWorktree") {
 		t.Errorf("allow = %v, want EnterWorktree", got.Permissions.Allow)
+	}
+}
+
+func TestWriteSettingsHoldsTheAgentAfterExitPlanMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := WriteSettings(path, "/bin/drover", "/state/main/events.jsonl"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Hooks struct {
+			PostToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Command string `json:"command"`
+					Timeout int    `json:"timeout"`
+				} `json:"hooks"`
+			} `json:"PostToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	var gates, recorders int
+	for _, entry := range got.Hooks.PostToolUse {
+		for _, h := range entry.Hooks {
+			if strings.HasSuffix(h.Command, " hook '/state/main/events.jsonl'") && entry.Matcher == "*" {
+				recorders++
+			}
+			if !strings.Contains(h.Command, " hook-gate ") {
+				continue
+			}
+			gates++
+			if entry.Matcher != "ExitPlanMode" || !strings.HasSuffix(h.Command, "'/state/main/plan-gate'") || h.Timeout <= 10 {
+				t.Errorf("gate hook = matcher %q, %+v", entry.Matcher, h)
+			}
+		}
+	}
+	if gates != 1 {
+		t.Errorf("%d gate hooks, want 1", gates)
+	}
+	if recorders != 1 {
+		t.Errorf("%d recording hooks on PostToolUse, want 1", recorders)
+	}
+}
+
+// waitReturns reports whether waitPlanGate on gate returns within d.
+func waitReturns(gate string, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		waitPlanGate(gate, time.Millisecond, 5*time.Second)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+func TestWaitPlanGate(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "plan-gate")
+	if !waitReturns(gate, time.Second) {
+		t.Error("waited on a gate that was never opened")
+	}
+	if err := OpenPlanGate(gate); err != nil {
+		t.Fatal(err)
+	}
+	if PlanGateHeld(gate, 20*time.Millisecond) {
+		t.Error("held before any hook waited")
+	}
+	if waitReturns(gate, 50*time.Millisecond) {
+		t.Error("returned while the gate was open")
+	}
+	if !PlanGateHeld(gate, time.Second) {
+		t.Error("not held while the hook waits")
+	}
+	if err := ClosePlanGate(gate); err != nil {
+		t.Fatal(err)
+	}
+	if !waitReturns(gate, time.Second) {
+		t.Error("kept waiting after the gate closed")
+	}
+	if PlanGateHeld(gate, 20*time.Millisecond) {
+		t.Error("still held after the gate closed")
+	}
+}
+
+func TestWaitPlanGateReturnsWhenTheEngineIsGone(t *testing.T) {
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	gate := filepath.Join(t.TempDir(), "plan-gate")
+	if err := os.WriteFile(gate, []byte(strconv.Itoa(gone.Process.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	waitPlanGate(gate, time.Millisecond, 5*time.Second)
+	if time.Since(start) > time.Second {
+		t.Error("kept waiting on a gate whose owner has exited")
+	}
+}
+
+func TestWaitPlanGateGivesUpAfterTheTimeout(t *testing.T) {
+	gate := filepath.Join(t.TempDir(), "plan-gate")
+	if err := OpenPlanGate(gate); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		waitPlanGate(gate, time.Millisecond, 50*time.Millisecond)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("kept waiting past the timeout")
+	}
+	if time.Since(start) < 50*time.Millisecond {
+		t.Error("returned before the timeout with the gate still open")
+	}
+	if PlanGateHeld(gate, 20*time.Millisecond) {
+		t.Error("still held after giving up")
 	}
 }
 

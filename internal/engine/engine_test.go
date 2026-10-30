@@ -699,11 +699,24 @@ func TestPlanReadyBuildsTheWorktreeBeforeApproval(t *testing.T) {
 	if got.ColumnID != "plan" {
 		t.Errorf("column = %s, want plan until the plan is approved", got.ColumnID)
 	}
+	gate := claude.PlanGatePath(filepath.Join(dir, "events.jsonl"))
+	if _, err := os.Stat(gate); err != nil {
+		t.Errorf("the agent is not held for the plan exit: %v", err)
+	}
+	go claude.WaitPlanGate(gate)
 
 	appendEvent(`{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}`)
 	got = waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
 		return t.ColumnID == "exec" && inWorktree(t)
 	})
+	released := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !released; time.Sleep(20 * time.Millisecond) {
+		_, err := os.Stat(gate)
+		released = os.IsNotExist(err)
+	}
+	if !released {
+		t.Error("the plan gate is still there after the plan exit")
+	}
 	built := 0
 	for _, l := range got.Log {
 		if strings.HasPrefix(l.Text, "Worktree ready") {
@@ -713,6 +726,48 @@ func TestPlanReadyBuildsTheWorktreeBeforeApproval(t *testing.T) {
 	if built != 1 {
 		t.Errorf("worktree built %d times, want once", built)
 	}
+}
+
+// planningAgentAwaitingApproval starts an engine with a Planning column that
+// exits to Executing, and returns it with a card whose planning agent is idle.
+func planningAgentAwaitingApproval(t *testing.T, targetNoWorktree bool) (*Engine, *store.Task, *store.Task) {
+	t.Helper()
+	e := startWithBoard(t, fmt.Sprintf(`{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits","noWorktree":%t},
+	  {"id":"done","name":"Done","role":"done"}]}`, targetNoWorktree))
+	task := e.CreateTask("Draft the refactor", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the planning agent to finish its turn", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && idle(s)
+	})
+	return e, task, got
+}
+
+func TestPlanReadyHoldsNoAgentThatNeedsNoWorktree(t *testing.T) {
+	e, task, got := planningAgentAwaitingApproval(t, true)
+	gate := e.planGate(e.taskByID(task.ID))
+	e.gatePlanExit(task.ID, got.Visit)
+	if _, err := os.Stat(gate); !os.IsNotExist(err) {
+		t.Errorf("the agent is held although its target needs no worktree: %v", err)
+	}
+}
+
+func TestPlanExitReleasesTheGateWhenItCannotFollow(t *testing.T) {
+	e, task, got := planningAgentAwaitingApproval(t, false)
+	gate := e.planGate(e.taskByID(task.ID))
+	if err := claude.OpenPlanGate(gate); err != nil {
+		t.Fatal(err)
+	}
+	e.planExit(task.ID, got.Visit-1)
+	if _, err := os.Stat(gate); !os.IsNotExist(err) {
+		t.Errorf("the plan gate outlived a plan exit that did nothing: %v", err)
+	}
+	e.planExit("missing", 0)
 }
 
 func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.T) {

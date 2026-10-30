@@ -25,6 +25,7 @@ const usage = `drover: a kanban board for AI coding agents, in your terminal.
 Usage:
   drover [project-dir]          open the board for a git repository (default: .)
   drover hook <file>            internal: record a Claude Code hook event
+  drover hook-gate <file>       internal: hold an approved plan until its worktree is ready
 
 The board is read from drover.json at the repo root. Agents run in tmux and
 keep running after you quit.
@@ -36,6 +37,12 @@ func main() {
 	if len(args) > 0 && args[0] == "hook" {
 		if len(args) == 2 {
 			claude.RecordHook(args[1], os.Stdin)
+		}
+		return
+	}
+	if len(args) > 0 && args[0] == "hook-gate" {
+		if len(args) == 2 {
+			claude.WaitPlanGate(args[1])
 		}
 		return
 	}
