@@ -282,6 +282,18 @@ var modeIndicators = []struct{ text, mode string }{
 	{"manual mode", "default"},
 }
 
+// PermissionModes are the values --permission-mode takes.
+func PermissionModes() []string {
+	modes := make([]string, len(modeIndicators))
+	for i, m := range modeIndicators {
+		modes[i] = m.mode
+	}
+	return modes
+}
+
+// Efforts are the values --effort takes.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
 // ScreenMode returns the permission mode shown at the bottom of a plain
 // Claude Code screen, or "" when none is shown.
 func ScreenMode(screen string) string {

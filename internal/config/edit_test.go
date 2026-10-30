@@ -210,3 +210,156 @@ func TestRejectedEditLeavesTheFileAsItWas(t *testing.T) {
 		}
 	}
 }
+
+func TestSetColumnSettingInTheSharedFileKeepsTheRest(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+
+	if err := Set(dir, Shared, ColumnPath("dc9f2b38", "effortOverride"), "high"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	if !strings.Contains(string(data), `"_modifiedBy": "7ef4fd0cb484"`) || !strings.Contains(string(data), `"Apply findings"`) {
+		t.Errorf("lost an unrelated key:\n%s", data)
+	}
+	board, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := board.Column("dc9f2b38"); c.EffortOverride != "high" || c.PermissionMode != "auto" {
+		t.Errorf("executing = %+v", c)
+	}
+	if c, _, _ := board.Column("4873bb89"); c.EffortOverride != "xhigh" {
+		t.Errorf("planning = %+v", c)
+	}
+	if !Sets(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")) || Sets(dir, Shared, ColumnPath("dc9f2b38", "color")) {
+		t.Error("Sets does not see the column key")
+	}
+	if err := Unset(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")); err != nil {
+		t.Fatal(err)
+	}
+	if Sets(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")) {
+		t.Error("effortOverride is still set")
+	}
+}
+
+func TestSetColumnSettingWritesNamesReadably(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+
+	if err := Set(dir, Shared, ColumnPath("dc9f2b38", "name"), `Build & "ship" <it>`); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	if !strings.Contains(string(data), `"Build & \"ship\" <it>"`) || !strings.HasSuffix(string(data), "}\n") {
+		t.Errorf("name was escaped or the file reformatted oddly:\n%s", data)
+	}
+	if board, _, err := Load(dir); err != nil {
+		t.Fatal(err)
+	} else if c, _, _ := board.Column("dc9f2b38"); c.Name != `Build & "ship" <it>` {
+		t.Errorf("name = %q", c.Name)
+	}
+}
+
+func TestSetColumnSettingLocallyCreatesAndRemovesTheOverride(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":3}`), 0o644)
+
+	if err := Set(dir, Local, ColumnPath("dc9f2b38", "modelOverride"), "haiku"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(dir, Local, ColumnPath("4873bb89", "effortOverride"), "low"); err != nil {
+		t.Fatal(err)
+	}
+	board, _, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.Limit() != 3 {
+		t.Errorf("lost the other local keys, limit = %d", board.Limit())
+	}
+	if c, _, _ := board.Column("dc9f2b38"); c.ModelOverride != "haiku" {
+		t.Errorf("executing model = %q", c.ModelOverride)
+	}
+	if c, _, _ := board.Column("4873bb89"); c.EffortOverride != "low" || c.ModelOverride != "opus" {
+		t.Errorf("planning = %+v", c)
+	}
+	if err := Unset(dir, Local, ColumnPath("dc9f2b38", "modelOverride")); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
+	if strings.Contains(string(data), "dc9f2b38") || !strings.Contains(string(data), "4873bb89") {
+		t.Errorf("unsetting the last key should drop only that element:\n%s", data)
+	}
+	if err := Unset(dir, Local, ColumnPath("4873bb89", "effortOverride")); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(dir, LocalFileName))
+	if strings.Contains(string(data), "columns") || !strings.Contains(string(data), "maxConcurrent") {
+		t.Errorf("an empty columns array should go and the rest stay:\n%s", data)
+	}
+	if err := Unset(dir, Local, ColumnPath("no-such", "color")); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, LocalFileName)); string(after) != string(data) {
+		t.Errorf("unsetting a missing override changed the file:\n%s", after)
+	}
+}
+
+func TestSetColumnSettingInTheSharedFileNeverAddsOrDropsAColumn(t *testing.T) {
+	cases := []struct {
+		name   string
+		shared string
+		run    func(dir string) error
+	}{
+		{"unknown column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("no-such", "color"), "#fff") }},
+		{"no columns key", `{"autoName":false}`, func(dir string) error { return Set(dir, Shared, ColumnPath("x", "name"), "X") }},
+		{"unsetting the name", sample, func(dir string) error { return Unset(dir, Shared, ColumnPath("64f9ef9a", "name")) }},
+		{"keepAgent on an agent column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("dc9f2b38", "keepAgent"), true) }},
+		{"a whole column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("dc9f2b38"), "x") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			os.WriteFile(filepath.Join(dir, FileName), []byte(tc.shared), 0o644)
+			if err := tc.run(dir); err == nil {
+				t.Error("expected an error")
+			}
+			if data, _ := os.ReadFile(filepath.Join(dir, FileName)); string(data) != tc.shared {
+				t.Errorf("file changed after a rejected edit:\n%s", data)
+			}
+		})
+	}
+}
+
+func TestColumnPathsOnlyAddressTheColumnsArray(t *testing.T) {
+	dir := t.TempDir()
+	const local = `{"flows":[{"id":"a","x":1}]}`
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(local), 0o644)
+
+	if Sets(dir, Local, []string{"flows", "a", "x"}) {
+		t.Error("Sets looked inside an array other than columns")
+	}
+	if err := Set(dir, Local, []string{"flows", "a", "x"}, 2); err == nil {
+		t.Error("expected an error addressing another array by id")
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, LocalFileName)); string(data) != local {
+		t.Errorf("file changed:\n%s", data)
+	}
+}
+
+func TestSetColumnSettingRejectsMalformedColumns(t *testing.T) {
+	dir := t.TempDir()
+	const local = `{"columns":[{"id":5}]}`
+	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(local), 0o644)
+
+	if err := Set(dir, Local, ColumnPath("dc9f2b38", "color"), "#fff"); err == nil {
+		t.Error("expected an error for a column whose id isn't a string")
+	}
+	if Sets(dir, Local, ColumnPath("dc9f2b38", "color")) {
+		t.Error("Sets matched a malformed element")
+	}
+}
