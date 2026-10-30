@@ -39,6 +39,7 @@ const (
 	modePalette
 	modeAssistant
 	modeConfig
+	modeColumns
 )
 
 type tickMsg time.Time
@@ -138,6 +139,13 @@ type Model struct {
 	configLayer   config.Layer
 	configInput   textinput.Model
 	configSrc     []string
+
+	columnSel     int
+	columnOpen    bool
+	columnID      string
+	columnOptSel  int
+	columnEditing bool
+	columnSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
 	modalTask string
@@ -580,6 +588,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateDetail(msg)
 		case modeConfig:
 			return m.updateConfig(msg)
+		case modeColumns:
+			return m.updateColumns(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -1100,6 +1110,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeConfig
 		m.configSel = 0
 		m.configSrc = configSources(m.eng.Root)
+	case "O":
+		return m.openColumns(), nil
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

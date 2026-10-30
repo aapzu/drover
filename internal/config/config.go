@@ -2,6 +2,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -262,6 +263,7 @@ func (b *Board) applyLocal(root string) error {
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
 		Notifications      json.RawMessage `json:"notifications"`
+		Columns            []localColumn   `json:"columns"`
 	}
 	if err := json.Unmarshal(data, &local); err != nil {
 		return fmt.Errorf("parse %s: %w", LocalFileName, err)
@@ -289,7 +291,28 @@ func (b *Board) applyLocal(root string) error {
 			return fmt.Errorf("parse %s: notifications: %w", LocalFileName, err)
 		}
 	}
+	for _, lc := range local.Columns {
+		if _, i, ok := b.Column(lc.ID); ok {
+			lc.applyTo(&b.Columns[i])
+		}
+	}
 	return nil
+}
+
+// localColumn is the part of a column that drover.local.json can override.
+type localColumn struct {
+	ID             string `json:"id"`
+	Color          string `json:"color"`
+	PermissionMode string `json:"permissionMode"`
+	ModelOverride  string `json:"modelOverride"`
+	EffortOverride string `json:"effortOverride"`
+}
+
+func (lc localColumn) applyTo(c *Column) {
+	c.Color = cmp.Or(lc.Color, c.Color)
+	c.PermissionMode = cmp.Or(lc.PermissionMode, c.PermissionMode)
+	c.ModelOverride = cmp.Or(lc.ModelOverride, c.ModelOverride)
+	c.EffortOverride = cmp.Or(lc.EffortOverride, c.EffortOverride)
 }
 
 // Stamp changes whenever drover.json or drover.local.json does.

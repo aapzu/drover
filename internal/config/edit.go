@@ -32,6 +32,14 @@ func (l Layer) FileName() string {
 	return FileName
 }
 
+const columnsKey = "columns"
+
+// ColumnPath addresses a setting of the column with the given id, for Set,
+// Unset and Sets.
+func ColumnPath(id string, key ...string) []string {
+	return append([]string{columnsKey, id}, key...)
+}
+
 // Set writes value at path in the layer's file and keeps the other keys in
 // their order; the file is re-indented on write. If the result no longer
 // loads, the file is restored, or removed if it did not exist, and the error
@@ -67,10 +75,24 @@ func sets(data []byte, path []string) bool {
 		return false
 	}
 	i := findMember(members, path[0])
-	if i < 0 {
+	switch {
+	case i < 0:
+		return false
+	case len(path) == 1:
+		return true
+	case path[0] == columnsKey && isArray(members[i].val):
+		return setsInColumns(members[i].val, path[1:])
+	}
+	return sets(members[i].val, path[1:])
+}
+
+func setsInColumns(data []byte, path []string) bool {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(data, &elems); err != nil {
 		return false
 	}
-	return len(path) == 1 || sets(members[i].val, path[1:])
+	j := findElement(elems, path[0])
+	return j >= 0 && (len(path) == 1 || sets(elems[j], path[1:]))
 }
 
 func edit(root string, layer Layer, path []string, value json.RawMessage) error {
@@ -96,7 +118,7 @@ func edit(root string, layer Layer, path []string, value json.RawMessage) error 
 	if err != nil {
 		return fmt.Errorf("%s: %w", layer.FileName(), err)
 	}
-	members, err = setMember(members, path, value)
+	members, err = setMember(members, path, value, layer == Local)
 	if err != nil {
 		return fmt.Errorf("%s: %w", layer.FileName(), err)
 	}
@@ -228,13 +250,27 @@ func formatFile(members []member) ([]byte, error) {
 
 // setMember sets the value at path, creating parent objects as needed. A nil
 // value removes the key, and a parent left empty by that goes too.
-func setMember(members []member, path []string, value json.RawMessage) ([]member, error) {
+func setMember(members []member, path []string, value json.RawMessage, local bool) ([]member, error) {
 	i := findMember(members, path[0])
 	if len(path) == 1 {
 		if value == nil {
 			return removeMember(members, i), nil
 		}
 		return upsert(members, i, path[0], value), nil
+	}
+	if path[0] == columnsKey && (i < 0 || isArray(members[i].val)) {
+		var raw json.RawMessage
+		if i >= 0 {
+			raw = members[i].val
+		}
+		elems, err := setColumn(raw, path[1:], value, local)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path[0], err)
+		}
+		if elems == nil {
+			return removeMember(members, i), nil
+		}
+		return upsert(members, i, path[0], elems), nil
 	}
 	var child []member
 	if i >= 0 {
@@ -243,7 +279,7 @@ func setMember(members []member, path []string, value json.RawMessage) ([]member
 			return nil, fmt.Errorf("%s: %w", path[0], err)
 		}
 	}
-	child, err := setMember(child, path[1:], value)
+	child, err := setMember(child, path[1:], value, local)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +291,96 @@ func setMember(members []member, path []string, value json.RawMessage) ([]member
 		return nil, err
 	}
 	return upsert(members, i, path[0], obj), nil
+}
+
+// setColumn sets the value at path inside the columns element whose id is
+// path[0]. drover.local.json elements are overrides, so they are added and
+// dropped as keys come and go; a drover.json column must already exist and is
+// never dropped.
+func setColumn(raw json.RawMessage, path []string, value json.RawMessage, local bool) (json.RawMessage, error) {
+	if len(path) < 2 {
+		return nil, errors.New("address a setting of the column, not the whole column")
+	}
+	var elems []json.RawMessage
+	if raw != nil {
+		if err := json.Unmarshal(raw, &elems); err != nil {
+			return nil, err
+		}
+	}
+	j := -1
+	for i, e := range elems {
+		var el struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(e, &el); err != nil {
+			return nil, fmt.Errorf("column %d is not an object with a string id", i)
+		}
+		if j < 0 && el.ID == path[0] {
+			j = i
+		}
+	}
+	var child []member
+	switch {
+	case j >= 0:
+		var err error
+		if child, err = parseObject(elems[j]); err != nil {
+			return nil, fmt.Errorf("%s: %w", path[0], err)
+		}
+	case value == nil:
+		return raw, nil
+	case !local:
+		return nil, fmt.Errorf("no column %q", path[0])
+	default:
+		id, err := json.Marshal(path[0])
+		if err != nil {
+			return nil, err
+		}
+		child = []member{{"id", id}}
+	}
+	child, err := setMember(child, path[1:], value, local)
+	if err != nil {
+		return nil, err
+	}
+	if local && value == nil && len(child) <= 1 {
+		elems = slices.Delete(elems, j, j+1)
+	} else {
+		obj, err := encodeObject(child)
+		if err != nil {
+			return nil, err
+		}
+		if j >= 0 {
+			elems[j] = obj
+		} else {
+			elems = append(elems, obj)
+		}
+	}
+	if len(elems) == 0 {
+		return nil, nil
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('[')
+	for i, e := range elems {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(e)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes(), nil
+}
+
+func isArray(val json.RawMessage) bool {
+	return bytes.HasPrefix(bytes.TrimSpace(val), []byte("["))
+}
+
+// findElement is the index of the element whose "id" is id, or -1.
+func findElement(elems []json.RawMessage, id string) int {
+	return slices.IndexFunc(elems, func(e json.RawMessage) bool {
+		var el struct {
+			ID string `json:"id"`
+		}
+		return json.Unmarshal(e, &el) == nil && el.ID == id
+	})
 }
 
 func findMember(members []member, key string) int {
