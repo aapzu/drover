@@ -380,6 +380,48 @@ func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 	}
 }
 
+func TestStopFailureAppliesPendingRespawn(t *testing.T) {
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("Fail me", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"SLOW work"}` + "\n")
+	waitFor(t, e, "the turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	events.WriteString(`{"hook_event_name":"StopFailure","error":"server_error"}` + "\n")
+	waitFor(t, e, "the failed turn to switch to plan mode", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s.PermissionMode == "plan" && !s.RespawnPending && s.Activity == store.ActivityIdle
+	})
+}
+
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
 	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
@@ -2067,6 +2109,51 @@ func TestInterruptedTurnGoesIdle(t *testing.T) {
 	time.Sleep(time.Second)
 	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession].Activity; got != store.ActivityThinking {
 		t.Fatalf("an earlier turn's interrupt ended the new turn: %s", got)
+	}
+}
+
+func TestStopFailureGoesIdle(t *testing.T) {
+	root, _ := setupProject(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	if _, err := e.NewSession(); err != nil {
+		t.Fatal(err)
+	}
+	ready := waitFor(t, e, "the new session to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityIdle
+	})
+	events, err := os.OpenFile(filepath.Join(e.sessionDir(ready, store.MainSession), "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Close()
+
+	events.WriteString(`{"hook_event_name":"UserPromptSubmit","prompt":"/fix the login bug"}` + "\n")
+	waitFor(t, e, "turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+	var owner *store.Task
+	e.with(func() { owner = e.find(ready.ID) })
+	e.sendMessage(owner, store.MainSession, "and then this")
+	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession].Pending; len(got) != 1 {
+		t.Fatalf("a message sent mid-turn should queue, got %v", got)
+	}
+	events.WriteString(`{"hook_event_name":"StopFailure","error":"unknown"}` + "\n")
+	task := waitFor(t, e, "failed turn to go idle", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+	time.Sleep(time.Second)
+	if got := e.Snapshot().Tasks[0].Sessions[store.MainSession]; got.Activity != store.ActivityIdle || len(got.Pending) != 1 {
+		t.Errorf("a failed turn should hold the queue: activity=%s pending=%v", got.Activity, got.Pending)
+	}
+	if logs := task.Log; len(logs) == 0 || !strings.Contains(logs[len(logs)-1].Text, "1 queued message(s) held") {
+		t.Errorf("log should say the queue is held: %v", logs)
 	}
 }
 
