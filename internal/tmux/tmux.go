@@ -59,6 +59,7 @@ set -g status-right "` + backHint + `"
 set -g status-right-length 80
 set -g status-left "#[bold] #{session_name} #[nobold]"
 set -g mouse on
+set -g focus-events on
 set -g history-limit 20000
 set -g window-size latest
 set -g escape-time 10
