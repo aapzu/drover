@@ -15,6 +15,7 @@ import (
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gh"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -1485,6 +1486,41 @@ func TestMovingAMergedCardByHandStopsTheRetry(t *testing.T) {
 	if after := r.polls(); after != polled {
 		t.Errorf("the merged PR was polled %d more times after you moved the card", after-polled)
 	}
+}
+
+func TestMergedCardBackInReviewMovesToDone(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	r.holdMerged(t)
+	if err := r.e.Move(r.task.ID, "parked", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r.release()
+	if err := r.e.Move(r.task.ID, "review", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, r.e, "the merged card to leave review", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "done"
+	})
+}
+
+func TestMergedCardBackInReviewWaitsForABusyAgent(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	r.holdMerged(t)
+	r.e.with(func() {
+		card := r.e.find(r.task.ID)
+		card.PR.MergeMovePending = false
+		s := card.Sessions[store.MainSession]
+		s.Status, s.Activity = store.StatusRunning, store.ActivityThinking
+		step := r.e.prStep(card, card, "MERGED", gh.PR{State: "MERGED"})
+		if step.to.ID != "" {
+			t.Errorf("a merged card moved to %s while its agent was working", step.to.ID)
+		}
+		s.Activity = store.ActivityIdle
+		step = r.e.prStep(card, card, "MERGED", gh.PR{State: "MERGED"})
+		if step.to.ID != "done" {
+			t.Errorf("an idle agent should let the merged card move to done, got %q", step.to.ID)
+		}
+	})
 }
 
 func TestMergedPRWithoutMergedColumnIsNotRetried(t *testing.T) {
