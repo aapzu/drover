@@ -35,7 +35,7 @@ func (e *Engine) pollPRs() []func() {
 		switch t.PR.State {
 		case "CLOSED":
 		case "MERGED":
-			if t.PR.MergeMovePending {
+			if t.PR.MergeMovePending || e.strandedMerged(t) {
 				open = append(open, t.ID)
 			}
 			if flow != nil && flow.Released != "" && !t.PR.Released && !t.PR.IsReview() && t.PR.MergeCommit != "" {
@@ -85,6 +85,14 @@ func (e *Engine) pollPRs() []func() {
 			e.checkRelease(id, ref)
 		}
 	}}
+}
+
+// strandedMerged reports whether t's merged PR left it in the prFlow's opened
+// column, which a card only reaches after its merge move already ran. Called
+// with mu held.
+func (e *Engine) strandedMerged(t *store.Task) bool {
+	flow := e.board.PRFlow
+	return flow != nil && !t.PR.IsReview() && e.flowColumn(flow.Merged).ID != "" && e.inColumn(t, flow.Opened)
 }
 
 // prScan is a transcript to search for PRs its session created.
@@ -348,7 +356,7 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		flow = &config.PRFlow{}
 	}
 	switch at := info.ChangesRequestedAt(); {
-	case info.State == "MERGED" && (prevState != "MERGED" || pr.MergeMovePending):
+	case info.State == "MERGED" && (prevState != "MERGED" || pr.MergeMovePending || e.strandedMerged(card) && agentIdle(owner)):
 		retry := prevState == "MERGED"
 		if !retry {
 			card.AddLog(fmt.Sprintf("PR #%d merged", pr.Number))
