@@ -410,7 +410,9 @@ board uses:
   review issue with the fix it would make and ask you which to apply, without
   changing, pushing or replying. Turn-end automations such as moving to
   Waiting for me run as usual, and the card stays where you leave it. `fix`
-  has it address the comments, push and reply on its own.
+  has it address the comments, push and reply on its own. `off` leaves the
+  card and the agent alone; the review is only logged and notified. The
+  Settings view (`o`) cycles the mode.
   **changesRequestedMessage** replaces the built-in message in either mode; a
   board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a

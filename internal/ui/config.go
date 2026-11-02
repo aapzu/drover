@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,17 +18,19 @@ const (
 	optToggle optKind = iota
 	optText
 	optNumber
+	optChoice
 )
 
 // configOption is a setting the config view can change. A shared option only
 // lives in drover.json; the others default to drover.local.json.
 type configOption struct {
-	name   string
-	path   []string
-	kind   optKind
-	shared bool
-	min    int
-	get    func(*config.Board) any
+	name    string
+	path    []string
+	kind    optKind
+	shared  bool
+	min     int
+	choices []string
+	get     func(*config.Board) any
 }
 
 var configOptions = []configOption{
@@ -61,6 +64,17 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.ArchiveDoneAfter }},
 	{name: "Init script", path: []string{"initScript"}, kind: optText, shared: true,
 		get: func(b *config.Board) any { return b.InitScript }},
+	{name: "PR review fix mode", path: []string{"prFlow", "changesRequestedMode"}, kind: optChoice, shared: true,
+		choices: []string{config.ChangesModePropose, config.ChangesModeFix, config.ChangesModeOff},
+		get: func(b *config.Board) any {
+			switch {
+			case b.PRFlow.Off():
+				return config.ChangesModeOff
+			case b.PRFlow.Proposes():
+				return config.ChangesModePropose
+			}
+			return config.ChangesModeFix
+		}},
 	{name: "Symlink untracked files", path: []string{"linkUntracked"}, kind: optToggle, shared: true,
 		get: func(b *config.Board) any { return b.LinkUntracked }},
 }
@@ -147,9 +161,14 @@ func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
 	opt := configOptions[m.configSel]
-	if opt.kind == optToggle {
+	switch opt.kind {
+	case optToggle:
 		on, _ := opt.get(m.snap.Board).(bool)
 		return m.saveConfig(defaultConfigLayer(opt), opt, !on), nil
+	case optChoice:
+		current, _ := opt.get(m.snap.Board).(string)
+		next := opt.choices[(slices.Index(opt.choices, current)+1)%len(opt.choices)]
+		return m.saveConfig(defaultConfigLayer(opt), opt, next), nil
 	}
 	m.configEditing = true
 	m.configLayer = defaultConfigLayer(opt)
