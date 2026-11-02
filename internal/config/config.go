@@ -88,6 +88,7 @@ type PRFlow struct {
 const (
 	ChangesModePropose = "propose"
 	ChangesModeFix     = "fix"
+	ChangesModeOff     = "off"
 )
 
 const (
@@ -106,10 +107,15 @@ func (f *PRFlow) Proposes() bool {
 	switch f.ChangesRequestedMode {
 	case ChangesModePropose:
 		return true
-	case ChangesModeFix:
+	case ChangesModeFix, ChangesModeOff:
 		return false
 	}
 	return f.ChangesRequestedMessage == ""
+}
+
+// Off reports whether a review requesting changes leaves the card and agent alone.
+func (f *PRFlow) Off() bool {
+	return f != nil && f.ChangesRequestedMode == ChangesModeOff
 }
 
 // ChangesMessage is what the agent is sent when a review requests changes.
@@ -367,8 +373,8 @@ func (b *Board) validate() error {
 		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
 			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
 		}
-		if m := f.ChangesRequestedMode; m != "" && m != ChangesModePropose && m != ChangesModeFix {
-			return fmt.Errorf("%s: prFlow.changesRequestedMode must be %q or %q, not %q", FileName, ChangesModePropose, ChangesModeFix, m)
+		if m := f.ChangesRequestedMode; m != "" && m != ChangesModePropose && m != ChangesModeFix && m != ChangesModeOff {
+			return fmt.Errorf("%s: prFlow.changesRequestedMode must be %q, %q or %q, not %q", FileName, ChangesModePropose, ChangesModeFix, ChangesModeOff, m)
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
@@ -462,11 +468,12 @@ func Default() *Board {
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 		},
 		PRFlow: &PRFlow{
-			Requested:        "waiting-for-me",
-			Opened:           "in-review",
-			ChangesRequested: "executing",
-			Merged:           "done",
-			Released:         "done",
+			Requested:            "waiting-for-me",
+			Opened:               "in-review",
+			ChangesRequested:     "executing",
+			ChangesRequestedMode: ChangesModePropose,
+			Merged:               "done",
+			Released:             "done",
 		},
 	}
 }

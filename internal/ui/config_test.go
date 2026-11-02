@@ -259,7 +259,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 			_, typed = got.(bool)
 		case optNumber:
 			_, typed = got.(int)
-		case optText:
+		case optText, optChoice:
 			_, typed = got.(string)
 		}
 		if !typed {
@@ -282,6 +282,34 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 		} else if sharedSeen {
 			t.Errorf("%s: shared options must come last, renderConfig groups them by position", opt.name)
 		}
+	}
+}
+
+func TestConfigFixModeCyclesThroughTheChoices(t *testing.T) {
+	root := t.TempDir()
+	if err := config.Default().Save(root); err != nil {
+		t.Fatal(err)
+	}
+	m := configModel(t, root)
+	m = selectOption(t, m, "PR review fix mode")
+	if got := configValue(configOptions[m.configSel], m.snap.Board); got != "propose" {
+		t.Fatalf("starts as %q, want propose", got)
+	}
+
+	for _, want := range []string{"fix", "off", "propose"} {
+		m = pressConfig(t, m, keyPress("enter"))
+		if got := configValue(configOptions[m.configSel], m.snap.Board); got != want {
+			t.Fatalf("after enter = %q, want %q (flash %q)", got, want, m.flash)
+		}
+		data, _ := os.ReadFile(filepath.Join(root, config.FileName))
+		if !strings.Contains(string(data), `"changesRequestedMode": "`+want+`"`) {
+			t.Errorf("drover.json doesn't hold %q:\n%s", want, data)
+		}
+	}
+
+	m = pressConfig(t, m, keyPress("x"))
+	if config.Sets(root, config.Shared, configOptions[m.configSel].path) {
+		t.Error("x left changesRequestedMode in drover.json")
 	}
 }
 

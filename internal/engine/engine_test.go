@@ -1366,6 +1366,50 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 	}
 }
 
+func TestChangesRequestedOffLeavesTheCardAlone(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{
+  "columns": [
+    {"id":"backlog","name":"Backlog"},
+    {"id":"exec","name":"Executing","autoSpawn":true},
+    {"id":"review","name":"In review"},
+    {"id":"done","name":"Done","role":"done"}
+  ],
+  "prFlow": {"opened": "review", "changesRequested": "exec", "changesRequestedMode": "off"}
+}`), 0o644)
+	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
+	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
+	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
+	t.Setenv("FAKE_GH", ghFile)
+	pr := func(reviews string) {
+		os.WriteFile(ghFile, []byte(fmt.Sprintf(`{"title":"PR one","headRefName":"one","state":"OPEN","headRefOid":"aaa",
+		  "reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, reviews)), 0o644)
+	}
+	pr("")
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.PRPollInterval = 200 * time.Millisecond
+	runEngine(t, e)
+
+	task := e.CreateTask("Auth", "ONEPR")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the PR to ship to In review", func(t *store.Task) bool { return t.ColumnID == "review" })
+
+	pr(`{"state":"CHANGES_REQUESTED","submittedAt":"2026-10-19T10:00:00Z"}`)
+	waitFor(t, e, "the review to be logged", func(t *store.Task) bool { return hasLog(t, "Changes requested on PR") })
+	time.Sleep(600 * time.Millisecond)
+	if c := e.Snapshot().Tasks[0]; c.ColumnID != "review" {
+		t.Errorf("card went to %s though changes mode is off", c.ColumnID)
+	}
+	if data, _ := os.ReadFile(log); strings.Contains(string(data), "got review comments") {
+		t.Errorf("agent was told about the review though changes mode is off:\n%s", data)
+	}
+}
+
 type mergedRig struct {
 	e       *Engine
 	task    *store.Task

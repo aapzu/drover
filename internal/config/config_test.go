@@ -181,6 +181,8 @@ func TestChangesRequestedMode(t *testing.T) {
 		{"unset proposes", PRFlow{}, true, proposeChangesMessage},
 		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposeChangesMessage},
 		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fixChangesMessage},
+		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fixChangesMessage},
+		{"own message with off mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "off"}, false, "mine"},
 		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: "mine"}, false, "mine"},
 		{"own message with propose mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "propose"}, true, "mine"},
 	}
@@ -196,11 +198,17 @@ func TestChangesRequestedMode(t *testing.T) {
 		t.Error("default board does not propose")
 	}
 	var nilFlow *PRFlow
+	if nilFlow.Off() || (&PRFlow{ChangesRequestedMode: "fix"}).Off() || (&PRFlow{}).Off() {
+		t.Error("Off() is true outside off mode")
+	}
+	if !(&PRFlow{ChangesRequestedMode: "off"}).Off() {
+		t.Error("Off() is false in off mode")
+	}
 	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
 		t.Error("a missing prFlow does not propose")
 	}
 	dir := t.TempDir()
-	for mode, valid := range map[string]bool{"propose": true, "fix": true, "auto": false} {
+	for mode, valid := range map[string]bool{"propose": true, "fix": true, "off": true, "auto": false} {
 		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"}],
 		  "prFlow":{"changesRequestedMode":"`+mode+`"}}`), 0o644)
 		board, _, err := Load(dir)
