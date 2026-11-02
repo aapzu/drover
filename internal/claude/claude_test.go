@@ -362,9 +362,9 @@ func TestEvalCondition(t *testing.T) {
 	}
 	for _, c := range cases {
 		argsFile := fakeClaude(t, c.answer, 0)
-		got, err := EvalCondition(context.Background(), t.TempDir(), "tests pass", "all green")
-		if err != nil || got != c.want {
-			t.Errorf("answer %q: got %v, err %v, want %v", c.answer, got, err, c.want)
+		got, answer, err := EvalCondition(context.Background(), t.TempDir(), "tests pass", "all green")
+		if err != nil || got != c.want || answer != strings.TrimSpace(c.answer) {
+			t.Errorf("answer %q: got %v, %q, err %v, want %v", c.answer, got, answer, err, c.want)
 		}
 		recorded, _ := os.ReadFile(argsFile)
 		for _, part := range []string{"Condition: tests pass", "<message>\nall green\n</message>"} {
@@ -377,7 +377,7 @@ func TestEvalCondition(t *testing.T) {
 
 func TestEvalConditionFailure(t *testing.T) {
 	fakeClaude(t, "YES", 1)
-	got, err := EvalCondition(context.Background(), t.TempDir(), "c", "r")
+	got, _, err := EvalCondition(context.Background(), t.TempDir(), "c", "r")
 	if err == nil || got || !strings.Contains(err.Error(), "condition check failed") {
 		t.Errorf("got %v, err %v", got, err)
 	}

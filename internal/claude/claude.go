@@ -444,14 +444,15 @@ func AskHaiku(ctx context.Context, dir, prompt string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// EvalCondition asks AskHaiku whether condition holds for the agent's reply.
-func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, error) {
+// EvalCondition asks AskHaiku whether condition holds for the agent's reply and
+// returns the answer it got.
+func EvalCondition(ctx context.Context, dir, condition, reply string) (bool, string, error) {
 	prompt := fmt.Sprintf("You judge automation conditions. Answer with exactly YES or NO.\n\nCondition: %s\n\nAgent's final message:\n<message>\n%s\n</message>", condition, reply)
 	answer, err := AskHaiku(ctx, dir, prompt)
 	if err != nil {
-		return false, fmt.Errorf("condition check failed: %w", err)
+		return false, "", fmt.Errorf("condition check failed: %w", err)
 	}
-	return strings.HasPrefix(strings.ToUpper(answer), "YES"), nil
+	return strings.HasPrefix(strings.ToUpper(answer), "YES"), answer, nil
 }
 
 // Interrupted reports whether the transcript's last conversation entry is the

@@ -95,7 +95,7 @@ func TestConditionGatesTurnEndRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := waitFor(t, e, "the ALWAYS row to move the card", func(t *store.Task) bool { return t.ColumnID == "review" })
-	if !hasLog(moved, `Automation "Never" skipped: condition not met`) {
+	if !hasLog(moved, `Automation "Never" skipped: condition not met (answered "NO")`) {
 		t.Errorf("Never row not skipped: %+v", moved.Log)
 	}
 }
