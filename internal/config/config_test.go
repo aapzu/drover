@@ -408,13 +408,18 @@ func TestExecutingWaitsForYou(t *testing.T) {
 		name, columns, local, wantName string
 		wantRows                       int
 		matchesDefault                 bool
+		wantTarget                     string
 	}{
-		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", "", 0, false},
-		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "", "Apply", 1, false},
-		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "", "Waiting for me", 1, false},
-		{"no waiting-for-me", executing + `}`, "", "", 0, false},
-		{"unset gets the default row", executing + `}, ` + waitingForMe, "", "Waiting for me", 1, true},
-		{"a local overlay keeps it", executing + `}, ` + waitingForMe, `{"maxConcurrent":2}`, "Waiting for me", 1, true},
+		{"opted out", executing + `,"automations":{"onTurnEnd":[]}}, ` + waitingForMe, "", "", 0, false, ""},
+		{"custom rows", executing + `,"automations":{"onTurnEnd":[{"name":"Apply","type":"send_message","message":"Apply them."}]}}, ` + waitingForMe, "", "Apply", 1, false, ""},
+		{"null", executing + `,"automations":{"onTurnEnd":null}}, ` + waitingForMe, "", "Waiting for me", 1, false, ""},
+		{"no waiting-for-me", executing + `}`, "", "", 0, false, ""},
+		{"a plain waiting column", executing + `}, {"id":"waiting","name":"Waiting"}`, "", "Waiting for me", 1, false, "waiting"},
+		{"a Waiting for me name under another id", executing + `}, {"id":"parked","name":"Waiting for me"}`, "", "Waiting for me", 1, false, "parked"},
+		{"waiting-for-me wins over waiting", executing + `}, {"id":"waiting","name":"Waiting"}, ` + waitingForMe, "", "Waiting for me", 1, false, "waiting-for-me"},
+		{"a Waiting for me name wins over waiting", executing + `}, {"id":"waiting","name":"Waiting"}, {"id":"parked","name":"Waiting for me"}`, "", "Waiting for me", 1, false, "parked"},
+		{"unset gets the default row", executing + `}, ` + waitingForMe, "", "Waiting for me", 1, true, ""},
+		{"a local overlay keeps it", executing + `}, ` + waitingForMe, `{"maxConcurrent":2}`, "Waiting for me", 1, true, ""},
 	}
 	for _, tc := range cases {
 		board, err := loadJSON(t, `{"columns":[`+tc.columns+`]}`, tc.local)
@@ -428,6 +433,9 @@ func TestExecutingWaitsForYou(t *testing.T) {
 		}
 		if tc.wantRows > 0 && rows[0].Name != tc.wantName {
 			t.Errorf("%s: first turn-end row = %q, want %q", tc.name, rows[0].Name, tc.wantName)
+		}
+		if tc.wantTarget != "" && rows[0].TargetColumn != tc.wantTarget {
+			t.Errorf("%s: turn-end target = %q, want %q", tc.name, rows[0].TargetColumn, tc.wantTarget)
 		}
 		if want, _, _ := Default().Column("executing"); tc.matchesDefault && !reflect.DeepEqual(rows, want.Automations.OnTurnEnd) {
 			t.Errorf("%s: turn-end rows = %+v, want the default %+v", tc.name, rows, want.Automations.OnTurnEnd)

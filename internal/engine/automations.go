@@ -182,13 +182,13 @@ func (e *Engine) shouldRun(t *store.Task, row config.Automation, gc groupContext
 		if dir == "" {
 			dir = e.Root
 		}
-		ok, err := claude.EvalCondition(e.stopping, dir, row.Condition, gc.reply)
+		ok, answer, err := claude.EvalCondition(e.stopping, dir, row.Condition, gc.reply)
 		if err != nil {
 			e.skipErrored(t, row, "condition", err)
 			return false
 		}
 		if !ok {
-			e.logf(t, "Automation %q skipped: condition not met", rowName(row))
+			e.logf(t, "Automation %q skipped: condition not met (answered %q)", rowName(row), answer)
 			return false
 		}
 	}

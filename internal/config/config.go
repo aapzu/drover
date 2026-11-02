@@ -232,24 +232,28 @@ func (b *Board) defaultModel() {
 }
 
 // defaultWaitingForYou gives an Executing column with no onTurnEnd key the default
-// turn-end row, when a Waiting for me column exists to move to. An explicit
-// "onTurnEnd": [] keeps it off.
+// turn-end row, when a Waiting for me (or Waiting) column exists to move to. The
+// first of waiting-for-me, Waiting for me and waiting that resolves is the
+// target. An explicit "onTurnEnd": [] keeps it off.
 func (b *Board) defaultWaitingForYou() {
-	if _, _, ok := b.Column("waiting-for-me"); !ok {
-		return
-	}
 	_, i, ok := b.Column("executing")
 	if !ok || b.Columns[i].Automations.OnTurnEnd != nil {
 		return
 	}
-	b.Columns[i].Automations.OnTurnEnd = []Automation{waitingForYou()}
+	for _, ref := range []string{"waiting-for-me", "Waiting for me", "waiting"} {
+		if target, ok := b.Find(ref); ok {
+			b.Columns[i].Automations.OnTurnEnd = []Automation{waitingForYou(target.ID)}
+			return
+		}
+	}
 }
 
-// waitingForYou is the turn-end row that moves an Executing card to Waiting for me.
-func waitingForYou() Automation {
+// waitingForYou is the turn-end row that moves an Executing card to the column
+// where it waits for you.
+func waitingForYou(target string) Automation {
 	return Automation{
-		Name: "Waiting for me", Type: "move_to_column", TargetColumn: "waiting-for-me",
-		Condition: "The reply ends by asking me for a decision or input",
+		Name: "Waiting for me", Type: "move_to_column", TargetColumn: target,
+		Condition: "The reply ends by asking me for a decision or input, or by handing the work back for me to review or approve before anything continues",
 	}
 }
 
@@ -484,7 +488,7 @@ func Default() *Board {
 		SplitByPR:        true,
 		Columns: []Column{
 			{ID: "planning", Name: "Planning", Color: "#8b5cf6", AutoSpawn: true, PermissionMode: "plan", PlanExitTarget: "Executing", NoWorktree: true},
-			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{waitingForYou()}}},
+			{ID: "executing", Name: "Executing", Color: "#3b82f6", AutoSpawn: true, Automations: Automations{OnTurnEnd: []Automation{waitingForYou("waiting-for-me")}}},
 			{ID: "waiting-for-me", Name: "Waiting for me", Color: "#06b6d4", AutoSpawn: true},
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},

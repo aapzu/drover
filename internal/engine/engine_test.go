@@ -2855,6 +2855,22 @@ func TestTurnEndQuestionMovesCardToWaiting(t *testing.T) {
 	}
 }
 
+func TestDefaultTurnEndRowFollowsAWaitingColumn(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"executing","name":"Executing","autoSpawn":true},
+	  {"id":"waiting","name":"Waiting","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`)
+
+	task := e.CreateTask("ASKS_ME ready to review?", "")
+	if err := e.Move(task.ID, "executing", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the default turn-end row to move the card", func(t *store.Task) bool {
+		return t.ColumnID == "waiting"
+	})
+}
+
 func TestTurnEndMoveStillShipsPR(t *testing.T) {
 	e := startWithBoard(t, `{"columns":[
 	  {"id":"backlog","name":"Backlog"},
