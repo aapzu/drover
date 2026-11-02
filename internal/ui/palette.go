@@ -41,6 +41,7 @@ var paletteCommands = []paletteCommand{
 	{"Hide the assistant panel", liveExitKey},
 	{"Start a new assistant conversation", newAskKey},
 	{"Change settings in drover.local.json and drover.json", "o"},
+	{"Change column settings in drover.local.json and drover.json", "O"},
 	{"Task details and activity log", "i"},
 	{"Import agents, sessions or Linear issues", "I"},
 	{"Toggle live preview", "p"},

@@ -71,7 +71,7 @@ func BoardPrompt(exe string) string {
 
 var hookEvents = []string{
 	"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-	"Notification", "PermissionRequest", "Stop",
+	"Notification", "PermissionRequest", "Stop", "StopFailure",
 }
 
 // planGateName is the file next to a session's events. While it exists, the
@@ -226,6 +226,7 @@ type Event struct {
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	PermissionMode       string `json:"permission_mode"`
+	Error                string `json:"error"`
 	ToolInput            struct {
 		Command string `json:"command"`
 	} `json:"tool_input"`
@@ -372,6 +373,18 @@ var modeIndicators = []struct{ text, mode string }{
 	{"don't ask", "dontAsk"},
 	{"manual mode", "default"},
 }
+
+// PermissionModes are the values --permission-mode takes.
+func PermissionModes() []string {
+	modes := make([]string, len(modeIndicators))
+	for i, m := range modeIndicators {
+		modes[i] = m.mode
+	}
+	return modes
+}
+
+// Efforts are the values --effort takes.
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // ScreenMode returns the permission mode shown at the bottom of a plain
 // Claude Code screen, or "" when none is shown.

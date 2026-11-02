@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
@@ -78,6 +79,20 @@ func TestFailingInitScriptFailsTheMove(t *testing.T) {
 	}
 }
 
+// paneDir returns the session pane's directory once it is want. A freshly
+// started tmux server reports its own directory until the shell has moved into
+// the session's.
+func paneDir(name, want string) string {
+	var got string
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		out, _ := exec.Command("tmux", "-L", tmux.Socket, "display", "-p", "-t", "="+name+":", "#{pane_current_path}").Output()
+		if got = strings.TrimSpace(string(out)); got == want {
+			break
+		}
+	}
+	return got
+}
+
 func TestShellOpensInWorktreeAndGoesWithIt(t *testing.T) {
 	t.Setenv("SHELL", "/bin/sh")
 	e := startWithBoard(t, worktreeBoard(""))
@@ -89,9 +104,8 @@ func TestShellOpensInWorktreeAndGoesWithIt(t *testing.T) {
 	if err != nil || !tmux.Has(name) {
 		t.Fatalf("Shell = %q, %v", name, err)
 	}
-	out, _ := exec.Command("tmux", "-L", tmux.Socket, "display", "-p", "-t", "="+name+":", "#{pane_current_path}").Output()
 	want, _ := filepath.EvalSymlinks(e.Snapshot().Tasks[0].WorktreePath)
-	if got := strings.TrimSpace(string(out)); got != want {
+	if got := paneDir(name, want); got != want {
 		t.Errorf("shell runs in %q, want %q", got, want)
 	}
 	if again, _ := e.Shell(task.ID); again != name {
@@ -216,9 +230,8 @@ func TestShellOpensInTheMainCheckoutBeforeTheCardHasAWorktree(t *testing.T) {
 	if err != nil || !tmux.Has(name) {
 		t.Fatalf("Shell = %q, %v", name, err)
 	}
-	out, _ := exec.Command("tmux", "-L", tmux.Socket, "display", "-p", "-t", "="+name+":", "#{pane_current_path}").Output()
 	want, _ := filepath.EvalSymlinks(e.Root)
-	if got := strings.TrimSpace(string(out)); got != want {
+	if got := paneDir(name, want); got != want {
 		t.Errorf("shell runs in %q, want the main checkout %q", got, want)
 	}
 	if _, err := e.Shell("missing"); err == nil {

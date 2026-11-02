@@ -111,7 +111,10 @@ func sourceLayer(root string, opt configOption) (config.Layer, bool) {
 
 // configSource labels where opt's value comes from: local, shared or default.
 func configSource(root string, opt configOption) string {
-	layer, ok := sourceLayer(root, opt)
+	return sourceLabel(sourceLayer(root, opt))
+}
+
+func sourceLabel(layer config.Layer, ok bool) string {
 	switch {
 	case !ok:
 		return "default"
@@ -136,6 +139,8 @@ func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.beginConfigEdit()
 	case "x":
 		return m.resetConfig(), nil
+	case "c":
+		return m.openColumns(), nil
 	}
 	return m, nil
 }
@@ -166,11 +171,7 @@ func (m Model) updateConfigInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.commitConfig(opt), nil
 	case "tab":
 		if !opt.shared {
-			if m.configLayer == config.Local {
-				m.configLayer = config.Shared
-			} else {
-				m.configLayer = config.Local
-			}
+			m.configLayer = otherLayer(m.configLayer)
 		}
 		return m, nil
 	}
@@ -215,30 +216,49 @@ func (m Model) resetConfig() Model {
 // saveConfig writes value to the layer, or removes the key when value is nil,
 // then reloads the board and the source labels.
 func (m Model) saveConfig(layer config.Layer, opt configOption, value any) Model {
-	var err error
-	done := "Saved %s to %s"
-	if value == nil {
-		err = config.Unset(m.eng.Root, layer, opt.path)
-		done = "Reset %s in %s"
-	} else {
-		err = config.Set(m.eng.Root, layer, opt.path, value)
-	}
-	if errors.Is(err, config.ErrNoSharedFile) {
-		err = fmt.Errorf("%w; close settings and press W to write the default board", err)
-	}
+	m, err := m.writeSetting(layer, opt.path, value, "settings")
 	if err != nil {
 		m.setFlash("Error: " + err.Error())
 		return m
 	}
-	m.eng.ReloadBoard()
-	m.snap.Board = m.eng.Board()
 	m.configSrc = configSources(m.eng.Root)
+	done := "Saved %s to %s"
+	if value == nil {
+		done = "Reset %s in %s"
+	}
 	msg := fmt.Sprintf(done, opt.name, layer.FileName())
 	if src, ok := sourceLayer(m.eng.Root, opt); value != nil && ok && src != layer {
 		msg += fmt.Sprintf(" (overridden by %s)", src.FileName())
 	}
 	m.setFlash(msg)
 	return m
+}
+
+// writeSetting writes value at path in the layer, or removes the key when value
+// is nil, then reloads the board.
+func (m Model) writeSetting(layer config.Layer, path []string, value any, view string) (Model, error) {
+	var err error
+	if value == nil {
+		err = config.Unset(m.eng.Root, layer, path)
+	} else {
+		err = config.Set(m.eng.Root, layer, path, value)
+	}
+	if errors.Is(err, config.ErrNoSharedFile) {
+		err = fmt.Errorf("%w; close %s and press W to write the default board", err, view)
+	}
+	if err != nil {
+		return m, err
+	}
+	m.eng.ReloadBoard()
+	m.snap.Board = m.eng.Board()
+	return m, nil
+}
+
+func otherLayer(layer config.Layer) config.Layer {
+	if layer == config.Local {
+		return config.Shared
+	}
+	return config.Local
 }
 
 // configSources labels where each option's value comes from. It runs when the
@@ -270,6 +290,6 @@ func (m Model) renderConfig() string {
 		}
 		lines = append(lines, prefix+name+value+"  "+note)
 	}
-	lines = append(lines, "", dim.Render("Columns, flows and automations live in drover.json only."))
+	lines = append(lines, "", dim.Render("c edits columns. Flows and automations live in drover.json only."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

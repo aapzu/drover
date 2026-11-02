@@ -482,6 +482,30 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local splitByPR:true does not override the shared file")
 				}
 			}},
+		{"local column overrides apply by id",
+			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
+			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
+			func(t *testing.T, b *Board) {
+				a, _, ok := b.Column("a")
+				if !ok || a.Color != "#222" || a.PermissionMode != "auto" || a.ModelOverride != "opus" || a.EffortOverride != "high" || a.Name != "A" {
+					t.Errorf("a = %+v", a)
+				}
+				if c, _, _ := b.Column("b"); c.ModelOverride != "sonnet" || c.EffortOverride != "" {
+					t.Errorf("b = %+v", c)
+				}
+				if len(b.Columns) != 2 {
+					t.Errorf("columns = %d, an unknown id must not add one", len(b.Columns))
+				}
+			}},
+		{"an empty local value keeps the shared one",
+			`{"columns":[{"id":"a","name":"A","modelOverride":"haiku"}]}`, `{"columns":[{"id":"a","modelOverride":""}]}`,
+			func(t *testing.T, b *Board) {
+				if a, _, _ := b.Column("a"); a.ModelOverride != "haiku" {
+					t.Errorf("a = %+v", a)
+				}
+			}},
+		{"local columns that aren't a list are an error", "", `{"columns":{}}`, nil},
+		{"a local column setting of the wrong type is an error", "", `{"columns":[{"id":"a","color":5}]}`, nil},
 		{"a broken local file is an error", "", `{"maxConcurrent":`, nil},
 		{"a bad local notifications value is an error", "", `{"notifications":5}`, nil},
 	}

@@ -68,6 +68,8 @@ func (m Model) View() string {
 			body = m.place(bodyHeight, m.renderPalette(bodyHeight))
 		case modeConfig:
 			body = m.place(bodyHeight, m.renderConfig())
+		case modeColumns:
+			body = m.place(bodyHeight, m.renderColumns())
 		case modeConfirm:
 			body = m.place(bodyHeight, modalStyle.Width(min(70, m.width-4)).Render(m.confirmText))
 		}
@@ -152,7 +154,7 @@ func (m Model) renderFooter() string {
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
-		modeConfig:    "↑↓ select  enter change  x reset  esc close",
+		modeConfig:    "↑↓ select  enter change  x reset  c columns  esc close",
 	}
 	if m.configEditing {
 		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
@@ -160,6 +162,7 @@ func (m Model) renderFooter() string {
 			hints[modeConfig] = "enter save  esc cancel"
 		}
 	}
+	hints[modeColumns] = m.columnsHint()
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
 
@@ -705,6 +708,7 @@ func (m Model) renderHelp() string {
 		{"v", "show or hide archived cards"},
 		{"t", "show or hide column settings under column names"},
 		{"o", "change settings in drover.local.json and drover.json"},
+		{"O", "change column settings in drover.local.json and drover.json"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},

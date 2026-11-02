@@ -82,7 +82,17 @@ The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 
 A board is a row of columns defined in `drover.json`. Each card sits in one of
 them, and where it sits decides what happens to its agent and worktree. Columns
-live in `drover.json` only; `drover.local.json` can't change them.
+live in `drover.json`. `drover.local.json` can override a column's `color`,
+`permissionMode`, `modelOverride` and `effortOverride` by `id`, for your own
+settings only:
+
+```json
+{ "columns": [{ "id": "executing", "modelOverride": "opus", "effortOverride": "high" }] }
+```
+
+An override for an `id` the board doesn't have is ignored, and an empty value
+doesn't clear the shared one. `O` edits column settings in both files; see
+[Settings view](#how-it-works).
 
 Every column is one of three kinds:
 
@@ -184,8 +194,12 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. Columns and flows stay in
-  `drover.json`.
+  allow either, and `x` removes the override. Flows stay in `drover.json`.
+  `c` (or `O` on the board) opens the same view for a column's settings: pick
+  a column, then its name, color, permission mode, model, effort, `autoSpawn`,
+  `keepAgent`, `planExitTarget` or `noWorktree`. Only color, permission mode,
+  model and effort can go in `drover.local.json`. Columns can't be added,
+  removed or reordered there, and automations stay in `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
