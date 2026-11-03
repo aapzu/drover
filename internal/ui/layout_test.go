@@ -204,6 +204,92 @@ func TestPreviewScrollStaysAnchored(t *testing.T) {
 	}
 }
 
+func TestScrollPreviewCapturesOnlyWhenOutOfLines(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	m.previewHistory = 500
+	h := m.layout().previewH - 2
+
+	m.previewLines = h + 10
+	next, cmd := m.scrollPreview(3)
+	if cmd != nil || next.(Model).previewScroll != 3 || next.(Model).previewBusy {
+		t.Fatalf("scrolling within the capture: cmd %v scroll %d", cmd != nil, next.(Model).previewScroll)
+	}
+
+	next, cmd = m.scrollPreview(20)
+	if cmd == nil || !next.(Model).previewBusy {
+		t.Fatal("scrolling past the capture did not start one")
+	}
+}
+
+func TestScrollPreviewCaptureBoundary(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	m.previewHistory = 500
+	h := m.layout().previewH - 2
+	m.previewLines = h + 4
+	if _, cmd := m.scrollPreview(4); cmd != nil {
+		t.Fatal("captured although the window still fits the capture")
+	}
+	if _, cmd := m.scrollPreview(5); cmd == nil {
+		t.Fatal("did not capture although the window runs one line past the capture")
+	}
+}
+
+func TestPreviewMsgRecordsWhatTheCaptureHolds(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	id := m.snap.Tasks[0].ID
+	next, _ := m.Update(previewMsg{taskID: id, content: "a\nb\nc\n\n", complete: true, at: time.Now()})
+	if got := next.(Model); got.previewLines != 3 || !got.previewComplete {
+		t.Fatalf("lines %d complete %v, want 3 and true", got.previewLines, got.previewComplete)
+	}
+}
+
+func TestStalePreviewCaptureStillReleasesAndRepeats(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	id := m.snap.Tasks[0].ID
+	m.previewAt = time.Now()
+	m.previewBusy, m.previewWanted = true, true
+	next, again := m.Update(previewMsg{taskID: id, at: m.previewAt.Add(-time.Second)})
+	got := next.(Model)
+	if again == nil || !got.previewBusy || got.previewWanted {
+		t.Fatalf("follow-up %v busy %v wanted %v", again != nil, got.previewBusy, got.previewWanted)
+	}
+}
+
+func TestScrollPreviewDoesNotRecaptureOnceAllHistoryIsHeld(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	m.previewHistory, m.previewComplete = 5, true
+	if _, cmd := m.scrollPreview(5); cmd != nil {
+		t.Fatal("captured although the capture holds all of the history")
+	}
+}
+
+func TestPreviewCapturesDoNotStack(t *testing.T) {
+	m := testModel(120, 40, 1, 1)
+	m.previewHistory = 500
+	id := m.snap.Tasks[0].ID
+
+	next, first := m.scrollPreview(3)
+	if first == nil {
+		t.Fatal("first scroll started no capture")
+	}
+	next, second := next.(Model).scrollPreview(3)
+	m = next.(Model)
+	if second != nil || !m.previewWanted {
+		t.Fatalf("second scroll while capturing: cmd %v wanted %v", second != nil, m.previewWanted)
+	}
+
+	next, again := m.Update(previewMsg{taskID: id, history: 500, at: time.Now()})
+	m = next.(Model)
+	if again == nil || !m.previewBusy || m.previewWanted {
+		t.Fatalf("landed capture: follow-up %v busy %v wanted %v", again != nil, m.previewBusy, m.previewWanted)
+	}
+
+	next, none := m.Update(previewMsg{taskID: id, history: 500, at: time.Now()})
+	if none != nil || next.(Model).previewBusy {
+		t.Fatal("capture with nothing wanted left the preview busy or started another")
+	}
+}
+
 func TestPreviewMsgSetsMouse(t *testing.T) {
 	m := testModel(120, 40, 1, 1)
 	id := m.snap.Tasks[0].ID

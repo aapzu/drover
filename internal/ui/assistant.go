@@ -26,8 +26,7 @@ var (
 	startAssistant   = assistant.Start
 	restartAssistant = assistant.Restart
 	captureAssistant = func(name string, width, height, scrollback int) (out string, history int, mouse bool, err error) {
-		tmux.Resize(name, width, height)
-		out, history, mouse, err = tmux.Capture(name, scrollback)
+		out, history, mouse, err = tmux.CaptureSized(name, width, height, scrollback)
 		if err != nil && !tmux.Has(name) {
 			err = fmt.Errorf("%w (%w)", errSessionEnded, err)
 		}

@@ -196,6 +196,70 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	}
 }
 
+func TestCaptureSizedResizesOnce(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "sized"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "seq 1 100; cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "100")
+	for range 2 {
+		out, history, _, err := CaptureSized(name, 40, 10, 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rows := strings.Count(out, "\n"); rows != 10+min(30, history) {
+			t.Fatalf("got %d rows for %d lines of history, want 30 of it plus 10 on screen:\n%s", rows, history, out)
+		}
+		if size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}"); err != nil || strings.TrimSpace(size) != "40x10" {
+			t.Fatalf("window is %q (err %v), want 40x10", size, err)
+		}
+	}
+}
+
+func TestCaptureSizedLeavesAttachedSessionAlone(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "attached-sized"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "echo ready; cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "ready")
+	attachedMu.Lock()
+	attached[name] = true
+	attachedMu.Unlock()
+	t.Cleanup(func() {
+		attachedMu.Lock()
+		delete(attached, name)
+		attachedMu.Unlock()
+	})
+	if _, _, _, err := CaptureSized(name, 40, 10, 0); err != nil {
+		t.Fatal(err)
+	}
+	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
+	if err != nil || strings.TrimSpace(size) == "40x10" {
+		t.Fatalf("window is %q (err %v), want it left at its own size", size, err)
+	}
+}
+
+func TestCaptureMissingSessionFails(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	if out, _, _, err := CaptureSized("nope", 40, 10, 0); err == nil || out != "" {
+		t.Fatalf("got %q, %v; want an error and no output", out, err)
+	}
+}
+
 func TestCaptureReportsMouseTracking(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")

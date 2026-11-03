@@ -4,6 +4,7 @@ package tmux
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -95,7 +96,12 @@ func command(args ...string) *exec.Cmd {
 		}
 		escaped[i] = a
 	}
-	cmd := exec.Command("tmux", append([]string{"-L", Socket, "-f", ensureConf()}, escaped...)...)
+	return rawCommand(context.Background(), escaped...)
+}
+
+// rawCommand passes args as they are, so a lone ";" chains tmux commands.
+func rawCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tmux", append([]string{"-L", Socket, "-f", ensureConf()}, args...)...)
 	cmd.Env = withoutTmuxEnv()
 	return cmd
 }
@@ -113,12 +119,15 @@ func withoutTmuxEnv() []string {
 }
 
 func run(args ...string) (string, error) {
-	cmd := command(args...)
+	return output(command(args...), args[0])
+}
+
+func output(cmd *exec.Cmd, name string) (string, error) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("tmux %s: %s", args[0], strings.TrimSpace(stderr.String()+" "+err.Error()))
+		return "", fmt.Errorf("tmux %s: %s", name, strings.TrimSpace(stderr.String()+" "+err.Error()))
 	}
 	return string(out), nil
 }
@@ -186,15 +195,53 @@ func Stop(name string) {
 // with colors, how many lines of history the pane has, and whether its app has
 // enabled mouse tracking with SGR encoding. Alternate-screen apps have no history.
 func Capture(name string, scrollback int) (out string, history int, mouse bool, err error) {
-	target := "=" + name + ":"
-	info, err := run("display-message", "-p", "-t", target, "#{history_size} #{mouse_any_flag}#{mouse_sgr_flag}")
-	if err != nil {
-		return "", 0, false, err
+	out, _, history, mouse, err = capture(name, scrollback)
+	return out, history, mouse, err
+}
+
+// CaptureSized is Capture after resizing the window to width x height, unless
+// a terminal is attached to it.
+func CaptureSized(name string, width, height, scrollback int) (out string, history int, mouse bool, err error) {
+	out, size, history, mouse, err := capture(name, scrollback)
+	if err != nil || size == fmt.Sprintf("%dx%d", width, height) {
+		return out, history, mouse, err
 	}
-	size, flags, _ := strings.Cut(strings.TrimSpace(info), " ")
-	history, _ = strconv.Atoi(size)
-	out, err = run("capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback))
-	return out, history, flags == "11", err
+	attachedMu.Lock()
+	defer attachedMu.Unlock()
+	if attached[name] {
+		return out, history, mouse, nil
+	}
+	if _, err := run("resize-window", "-t", "="+name+":", "-x", fmt.Sprint(width), "-y", fmt.Sprint(height)); err != nil {
+		return out, history, mouse, nil
+	}
+	out, _, history, mouse, err = capture(name, scrollback)
+	return out, history, mouse, err
+}
+
+// captureTimeout keeps a hung tmux from stalling the preview, which waits for
+// each capture before starting the next.
+const captureTimeout = 5 * time.Second
+
+// capture reads the window's size and the pane's state in the same tmux call
+// as the pane itself.
+func capture(name string, scrollback int) (out, size string, history int, mouse bool, err error) {
+	target := "=" + name + ":"
+	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
+	defer cancel()
+	raw, err := output(rawCommand(ctx,
+		"display-message", "-p", "-t", target, "#{window_width}x#{window_height} #{history_size} #{mouse_any_flag}#{mouse_sgr_flag}", ";",
+		"capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback),
+	), "display-message; capture-pane")
+	if err != nil {
+		return "", "", 0, false, err
+	}
+	info, out, _ := strings.Cut(raw, "\n")
+	fields := strings.Fields(info)
+	if len(fields) != 3 {
+		return "", "", 0, false, fmt.Errorf("tmux display-message: unexpected output %q", info)
+	}
+	history, _ = strconv.Atoi(fields[1])
+	return out, fields[0], history, fields[2] == "11", nil
 }
 
 // Screen returns the visible screen as plain text.
