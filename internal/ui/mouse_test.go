@@ -122,6 +122,16 @@ func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 		})
 	}
 
+	t.Run("a burst captures once", func(t *testing.T) {
+		m := setup()
+		y := l.previewY + 3
+		next, first := m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		_, second := next.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if first == nil || second != nil {
+			t.Fatalf("first wheel captured %v, second %v", first != nil, second != nil)
+		}
+	})
+
 	scrolls := map[string]func(*Model){
 		"pane has scrollback": func(m *Model) { m.previewHistory = 50 },
 		"agent ignores mouse": func(m *Model) { m.previewMouse = false },

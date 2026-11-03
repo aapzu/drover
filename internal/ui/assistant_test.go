@@ -486,7 +486,7 @@ func TestCaptureSizesTheWindowToThePanel(t *testing.T) {
 	}
 	m.assist.scroll = 5
 	runCmds(m.captureAssistantCmd())
-	if want := 5 + 2*(l.bodyH-2); f.capturedBack != want {
+	if want := scrollbackFor(5, l.bodyH-2); f.capturedBack != want {
 		t.Errorf("scrollback = %d, want %d", f.capturedBack, want)
 	}
 }

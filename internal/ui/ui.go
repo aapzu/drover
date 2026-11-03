@@ -46,6 +46,7 @@ type previewMsg struct {
 	taskID, content string
 	history         int
 	mouse           bool
+	complete        bool
 	at              time.Time
 }
 type noticeMsg string
@@ -108,9 +109,12 @@ type Model struct {
 	follow      string
 	followUntil time.Time
 	// previewScroll is how many lines above the bottom the preview shows.
-	previewScroll  int
-	previewHistory int
-	previewMouse   bool
+	previewScroll              int
+	previewHistory             int
+	previewMouse               bool
+	previewLines               int
+	previewComplete            bool
+	previewBusy, previewWanted bool
 
 	prefs   prefs
 	drag    dragState
@@ -419,7 +423,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.snapshot())
 		}
 		if !m.prefs.HidePreview && m.mode != modeLive && m.frame%2 == 0 {
-			cmds = append(cmds, m.capturePreview())
+			cmds = append(cmds, m.requestPreview(false))
 		}
 		if m.assistantCapturing() && m.mode != modeAssistant && m.frame%2 == 0 {
 			cmds = append(cmds, m.captureAssistantCmd())
@@ -440,8 +444,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applySnap(engine.Snapshot(msg))
 		return m, nil
 	case previewMsg:
+		m.previewBusy = false
+		var again tea.Cmd
+		if m.previewWanted {
+			m.previewWanted = false
+			again = m.requestPreview(false)
+		}
 		if msg.at.Before(m.previewAt) {
-			return m, nil
+			return m, again
 		}
 		switch {
 		case msg.taskID != m.previewFor:
@@ -453,7 +463,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
 		m.previewMouse = msg.mouse
-		return m, nil
+		m.previewLines, m.previewComplete = len(captureLines(msg.content)), msg.complete
+		return m, again
 	case liveTickMsg:
 		if m.mode != modeLive || msg.gen != m.liveGen {
 			return m, nil
@@ -463,7 +474,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("The agent is no longer running; back on the board.")
 			return m, nil
 		}
-		return m, tea.Batch(liveTick(m.liveGen), m.capturePreview())
+		cmd := m.requestPreview(false)
+		return m, tea.Batch(liveTick(m.liveGen), cmd)
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
 	case sessionsLoadedMsg, issuesLoadedMsg:
@@ -634,7 +646,7 @@ func scrollbackFor(scroll, h int) int {
 	if scroll <= 0 {
 		return 0
 	}
-	return scroll + 2*h
+	return scroll + 5*h
 }
 
 func (m Model) capturePreview() tea.Cmd {
@@ -650,20 +662,49 @@ func (m Model) capturePreview() tea.Cmd {
 	return func() tea.Msg {
 		msg := previewMsg{taskID: id, at: time.Now()}
 		if ok {
+			capture := tmux.Capture
 			if l.previewH > 0 {
-				tmux.Resize(name, w, h)
+				capture = func(name string, scrollback int) (string, int, bool, error) {
+					return tmux.CaptureSized(name, w, h, scrollback)
+				}
 			}
-			if out, history, mouse, err := tmux.Capture(name, scrollback); err == nil {
+			if out, history, mouse, err := capture(name, scrollback); err == nil {
 				msg.content, msg.history, msg.mouse = out, history, mouse
+				msg.complete = scrollback >= history
 			}
 		}
 		return msg
 	}
 }
 
+// requestPreview starts a capture unless one is running, in which case it
+// asks for another once that lands.
+func (m *Model) requestPreview(delay bool) tea.Cmd {
+	if m.previewBusy {
+		m.previewWanted = true
+		return nil
+	}
+	m.previewBusy = true
+	if delay {
+		return afterKey(m.capturePreview())
+	}
+	return m.capturePreview()
+}
+
+// scrollPreview moves the view within the last capture, and only captures
+// again when it runs past the lines that capture holds.
 func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
-	m.previewScroll = clamp(m.previewScroll+lines, 0, m.previewHistory)
-	return m, m.capturePreview()
+	scroll := clamp(m.previewScroll+lines, 0, m.previewHistory)
+	if scroll == m.previewScroll {
+		return m, nil
+	}
+	m.previewScroll = scroll
+	h := m.layout().previewH - 2
+	if scroll+h <= m.previewLines || m.previewComplete {
+		return m, nil
+	}
+	cmd := m.requestPreview(false)
+	return m, cmd
 }
 
 // wheelTarget is the session that should get wheel events: its agent reads

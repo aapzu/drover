@@ -190,7 +190,8 @@ func (m Model) startLive() (Model, tea.Cmd) {
 		m.prefs.HidePreview = false
 		m.savePrefs()
 	}
-	return m, tea.Batch(liveTick(m.liveGen), m.capturePreview())
+	cmd := m.requestPreview(false)
+	return m, tea.Batch(liveTick(m.liveGen), cmd)
 }
 
 func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

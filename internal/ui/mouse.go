@@ -51,7 +51,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if name, ok := m.wheelTarget(); ok {
 				x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
 				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
-				return m, nil
+				cmd := m.requestPreview(true)
+				return m, cmd
 			}
 			if msg.Button == tea.MouseButtonWheelUp {
 				return m.scrollPreview(3)
