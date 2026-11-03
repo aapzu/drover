@@ -1,3 +1,6 @@
 .claude/worktrees/
 /drover
 drover.local.json
+
+CLAUDE.local.md
+.claude/*.local.json

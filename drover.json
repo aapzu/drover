@@ -31,11 +31,6 @@
       "automations": {
         "onEnter": [
           {
-            "name": "Prepare PR",
-            "type": "send_message",
-            "message": "Run comment-destroyer subagent, /simplify and /pr-review-toolkit:review-pr, unless you already ran them on the current diff."
-          },
-          {
             "name": "Ping",
             "type": "notify",
             "title": "{{title}}",
