@@ -455,8 +455,8 @@ func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	if !strings.Contains(launches[0], "--permission-mode\nplan") {
 		t.Errorf("planning launch should force plan mode:\n%s", launches[0])
 	}
-	if !strings.Contains(launches[1], "--resume") || strings.Contains(launches[1], "--permission-mode") {
-		t.Errorf("restart should resume with Claude's own mode:\n%s", launches[1])
+	if !strings.Contains(launches[1], "--resume") || !strings.Contains(launches[1], "--permission-mode\ndefault") {
+		t.Errorf("restart should resume out of plan mode:\n%s", launches[1])
 	}
 	for i, launch := range launches[:2] {
 		if !strings.Contains(launch, "--append-system-prompt\nYou are running as an agent on a drover kanban board.") {
@@ -534,8 +534,8 @@ func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	waitForAll(t, e, "the agent to restart without a forced mode", func([]*store.Task) bool {
 		return strings.Count(readFile(log), "---") >= 2
 	})
-	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || strings.Contains(l, "--permission-mode") {
-		t.Errorf("restart should resume with Claude's own mode:\n%s", l)
+	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || !strings.Contains(l, "--permission-mode\ndefault") {
+		t.Errorf("restart should resume out of plan mode:\n%s", l)
 	}
 }
 
@@ -3041,5 +3041,26 @@ func TestArchiveColumnSkipsHiddenCards(t *testing.T) {
 		if want := task.ID == shown.ID; task.Archived != want {
 			t.Errorf("#%d archived = %v, want %v", task.Number, task.Archived, want)
 		}
+	}
+}
+
+func TestResumeMode(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		want, observed string
+		fresh          bool
+		expected       string
+	}{
+		{"fresh launch inherits", "", "auto", true, ""},
+		{"column mode wins", "acceptEdits", "plan", false, "acceptEdits"},
+		{"resume keeps the observed mode", "", "auto", false, "auto"},
+		{"resume never carries plan", "", "plan", false, "default"},
+		{"resume with nothing observed inherits", "", "", false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resumeMode(tc.want, tc.observed, tc.fresh); got != tc.expected {
+				t.Errorf("resumeMode(%q, %q, %t) = %q, want %q", tc.want, tc.observed, tc.fresh, got, tc.expected)
+			}
+		})
 	}
 }

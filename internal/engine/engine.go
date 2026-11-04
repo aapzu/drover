@@ -1031,6 +1031,21 @@ func settingsDiffer(s *store.Session, col config.Column, mode, worktree string) 
 	return modeDiffers || s.Model != col.ModelOverride || s.Effort != col.EffortOverride
 }
 
+// resumeMode is the --permission-mode to launch with. Left unset, a resumed
+// conversation restores the mode recorded in its transcript, which can still be
+// plan after an approval, so a column that leaves the mode to Claude Code
+// resumes in the mode the agent was last seen in, and never in plan.
+func resumeMode(want, observed string, fresh bool) string {
+	switch {
+	case want != "" || fresh:
+		return want
+	case observed == "plan":
+		return "default"
+	default:
+		return observed
+	}
+}
+
 // switchSettings moves a live, idle agent to col's settings, in place when it
 // can and by resuming it in a new process otherwise.
 func (e *Engine) switchSettings(t *store.Task, key string, col config.Column, worktree string) error {
@@ -1500,14 +1515,16 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 			s.EventsOffset = info.Size()
 		}
 		s.Model, s.Effort = col.ModelOverride, col.EffortOverride
-		s.SetMode(e.board.PermissionMode(col))
+		want := e.board.PermissionMode(col)
+		launchMode := resumeMode(want, s.PermissionMode, fresh)
+		s.SetMode(want)
 		s.RespawnPending = false
 		s.UpdatedAt = time.Now()
 		launch = claude.Launch{
 			SettingsPath:   settings,
 			SessionID:      s.AgentSessionID,
 			Resume:         !fresh,
-			PermissionMode: s.PermissionMode,
+			PermissionMode: launchMode,
 			Model:          col.ModelOverride,
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,

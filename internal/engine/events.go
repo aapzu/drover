@@ -466,7 +466,12 @@ func (e *Engine) planExit(taskID string, visit int) {
 			return
 		}
 		s.TurnInVisit = true
-		s.SetMode(e.board.PermissionMode(target))
+		if mode := e.board.PermissionMode(target); mode != "" {
+			s.SetMode(mode)
+		} else {
+			// Keep the mode the approval left the agent in, so a respawn carries it.
+			s.ModeInherited = true
+		}
 		s.RespawnPending = false
 		if dir = e.dirOf(t); s.MovedFrom(dir) {
 			moved, name = true, s.Tmux
