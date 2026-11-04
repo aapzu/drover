@@ -18,6 +18,7 @@ const (
 	dragColumn
 	dragPreview
 	dragAssistant
+	dragSelect
 )
 
 type dragState struct {
@@ -72,6 +73,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		h := l.hitTest(m, msg.X, msg.Y)
 		m.drag = dragState{clickAt: m.drag.clickAt, clickFor: m.drag.clickFor}
+		m.sel = selection{}
 		switch h.kind {
 		case hitCard:
 			m.mode = modeBoard
@@ -93,6 +95,12 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitAssistantEdge:
 			m.drag = dragState{kind: dragAssistant}
 		case hitPreview:
+			if t := m.current(); t != nil && m.showsCapture(t) {
+				if p, ok := m.selPointAt(l, msg.X, msg.Y); ok {
+					m.drag = dragState{kind: dragSelect}
+					m.sel.anchor, m.sel.head = p, p
+				}
+			}
 			if m.mode != modeLive {
 				return m.startLive()
 			}
@@ -119,6 +127,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
 		case dragAssistant:
 			m.prefs.AssistantWidth = m.clampAssistantWidth(m.width - msg.X)
+		case dragSelect:
+			return m.extendSelection(l, msg.X, msg.Y)
 		}
 
 	case msg.Action == tea.MouseActionRelease:
@@ -138,9 +148,38 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, m.moveCmd(t, target)
 		case dragColumn, dragPreview, dragAssistant:
 			m.savePrefs()
+		case dragSelect:
+			if text := m.selectedText(); strings.TrimSpace(text) != "" {
+				return m, copyText(text)
+			}
 		}
 	}
 	return m, nil
+}
+
+// extendSelection moves the selection's end to the cell under the pointer,
+// scrolling the preview when the pointer is on or past its border.
+func (m Model) extendSelection(l layout, x, y int) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	if d := edgeScroll(l, y); d != 0 {
+		var next tea.Model
+		next, cmd = m.scrollPreview(d)
+		m = next.(Model)
+	}
+	if p, ok := m.selPointAt(l, x, y); ok {
+		m.sel.head = p
+	}
+	return m, cmd
+}
+
+func edgeScroll(l layout, y int) int {
+	switch {
+	case y <= l.previewY:
+		return 1
+	case y >= l.previewY+l.previewH-1:
+		return -1
+	}
+	return 0
 }
 
 // dropTarget is the column a dragged card would land in, or -1.

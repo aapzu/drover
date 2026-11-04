@@ -116,6 +116,7 @@ type Model struct {
 	previewLines               int
 	previewComplete            bool
 	previewBusy, previewWanted bool
+	sel                        selection
 
 	prefs   prefs
 	drag    dragState
@@ -461,12 +462,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.at.Before(m.previewAt) {
 			return m, again
 		}
-		switch {
-		case msg.taskID != m.previewFor:
-			m.previewScroll = 0
-		case m.previewScroll > 0:
-			// Keep the scrolled view on the same lines as output arrives.
-			m.previewScroll += msg.history - m.previewHistory
+		if msg.taskID != m.previewFor {
+			m.previewScroll, m.sel = 0, selection{}
+		} else {
+			d := msg.history - m.previewHistory
+			if m.previewScroll > 0 {
+				m.previewScroll += d
+			}
+			m.sel.anchor.line += d
+			m.sel.head.line += d
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
@@ -486,6 +490,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(liveTick(m.liveGen), cmd)
 	case tea.MouseMsg:
 		return m.updateMouse(msg)
+	case copiedMsg:
+		m.setFlash(msg.flash())
+		return m, nil
 	case sessionsLoadedMsg, issuesLoadedMsg:
 		return m.updateImportLoaded(msg), nil
 	case assistantStartedMsg:
@@ -587,6 +594,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
+		m.sel = selection{}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)
