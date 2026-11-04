@@ -586,8 +586,8 @@ func (m Model) renderPreview(height int) string {
 			if s := m.sessionFor(t); s != nil && s.LastReply != "" {
 				body += "\n\n" + muted.Render("Last reply:") + "\n" + s.LastReply
 			}
-		} else if m.previewFor == t.ID {
-			body = previewWindow(m.previewTxt, height-2, m.previewScroll)
+		} else if m.showsCapture(t) {
+			body = m.previewBody(height - 2)
 			if m.previewScroll > 0 {
 				title += thinking.Render(fmt.Sprintf("· ↑ %d lines up, scroll down to return ", m.previewScroll))
 			} else if m.mode != modeLive {
@@ -603,6 +603,15 @@ func (m Model) renderPreview(height int) string {
 		style = style.BorderForeground(accent)
 	}
 	return titledBox(style, title, body, m.boardWidth(), height)
+}
+
+// showsCapture reports whether the preview shows t's agent's latest capture.
+func (m Model) showsCapture(t *store.Task) bool {
+	if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
+		return false
+	}
+	_, ok := m.liveSession(t.ID)
+	return ok && m.previewFor == t.ID
 }
 
 func titledBox(style lipgloss.Style, title, body string, width, height int) string {
@@ -634,8 +643,21 @@ func captureLines(s string) []string {
 // previewWindow shows n lines ending scroll lines above the last line with content.
 func previewWindow(s string, n, scroll int) string {
 	lines := captureLines(s)
-	end := clamp(len(lines)-scroll, min(n, len(lines)), len(lines))
-	return strings.Join(lines[max(0, end-n):end], "\n")
+	start, end := previewBounds(len(lines), n, scroll)
+	return strings.Join(lines[start:end], "\n")
+}
+
+// previewBounds is the range of a capture's lines the preview window shows.
+func previewBounds(lines, n, scroll int) (int, int) {
+	end := clamp(lines-scroll, min(n, lines), lines)
+	return max(0, end-n), end
+}
+
+// previewBody is the preview window with the selection highlighted.
+func (m Model) previewBody(n int) string {
+	lines := captureLines(m.previewTxt)
+	start, end := previewBounds(len(lines), n, m.previewScroll)
+	return strings.Join(m.highlight(lines[start:end], len(lines)-end), "\n")
 }
 
 func (m Model) renderForm() string {
@@ -698,6 +720,7 @@ func (m Model) renderHelp() string {
 		{"< / >", "narrower / wider column"},
 		{"z", "card size: normal, compact, tall with last reply"},
 		{"0", "reset layout"},
+		{"drag", "select text in the preview and copy it"},
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
