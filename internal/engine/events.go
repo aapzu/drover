@@ -469,7 +469,6 @@ func (e *Engine) planExit(taskID string, visit int) {
 		if mode := e.board.PermissionMode(target); mode != "" {
 			s.SetMode(mode)
 		} else {
-			// Keep the mode the approval left the agent in, so a respawn carries it.
 			s.ModeInherited = true
 		}
 		s.RespawnPending = false
@@ -705,16 +704,17 @@ func (e *Engine) launchQueued(t *store.Task, key string) {
 		return
 	}
 	dir := e.sessionDir(t, key)
+	want := e.board.PermissionMode(col)
 	launch := claude.Launch{
 		SettingsPath:   filepath.Join(dir, "settings.json"),
 		SessionID:      s.AgentSessionID,
 		Resume:         s.Started,
-		PermissionMode: e.board.PermissionMode(col),
+		PermissionMode: resumeMode(want, s.PermissionMode, !s.Started),
 		Model:          col.ModelOverride,
 		Effort:         col.EffortOverride,
 	}
 	s.Model, s.Effort = launch.Model, launch.Effort
-	s.SetMode(launch.PermissionMode)
+	s.SetMode(want)
 	e.mu.Unlock()
 	worktree, err := e.ensureWorktree(t, col, t.ID)
 	if err != nil {

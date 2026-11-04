@@ -1032,9 +1032,9 @@ func settingsDiffer(s *store.Session, col config.Column, mode, worktree string) 
 }
 
 // resumeMode is the --permission-mode to launch with. Left unset, a resumed
-// conversation restores the mode recorded in its transcript, which can still be
-// plan after an approval, so a column that leaves the mode to Claude Code
-// resumes in the mode the agent was last seen in, and never in plan.
+// conversation restores the mode in its transcript, which can still be plan
+// after an approval, so a column that inherits the mode pins the last observed
+// one, with plan mapped to default.
 func resumeMode(want, observed string, fresh bool) string {
 	switch {
 	case want != "" || fresh:
@@ -1516,6 +1516,7 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		}
 		s.Model, s.Effort = col.ModelOverride, col.EffortOverride
 		want := e.board.PermissionMode(col)
+		// Read before SetMode overwrites the observed mode.
 		launchMode := resumeMode(want, s.PermissionMode, fresh)
 		s.SetMode(want)
 		s.RespawnPending = false

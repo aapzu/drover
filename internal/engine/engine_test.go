@@ -3064,3 +3064,46 @@ func TestResumeMode(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanExitIntoAnInheritingColumnResumesInTheApprovedMode(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+	task := e.CreateTask("Draft the refactor", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the planning agent to finish its turn", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && idle(s)
+	})
+	var dir string
+	e.with(func() { dir = e.sessionDir(e.find(task.ID), store.MainSession) })
+	f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode","permission_mode":"auto"}` + "\n")
+	f.Close()
+
+	got := waitFor(t, e, "the agent to run in the worktree after the plan exit", func(t *store.Task) bool {
+		return t.ColumnID == "exec" && inWorktree(t)
+	})
+	waitForAll(t, e, "the agent to be resumed", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if l := strings.Split(readFile(log), "---")[1]; !strings.Contains(l, "--resume") || !strings.Contains(l, "--permission-mode\nauto") {
+		t.Errorf("the resumed agent should keep the mode the approval chose:\n%s", l)
+	}
+	if s := got.Sessions[store.MainSession]; !s.ModeInherited {
+		t.Errorf("the session should still inherit its mode, got %q", s.PermissionMode)
+	}
+}
