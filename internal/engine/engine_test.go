@@ -48,6 +48,7 @@ turn() {
   esac
   sleep 0.2
   case "$1" in
+    *PLANAUTO*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode","permission_mode":"auto"}'; sleep 1;;
     *PLAN*) emit '{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}'; sleep 1;;
     *SLOW*) sleep 3;;
     *"open a PR"*) sleep 1;;
@@ -707,6 +708,31 @@ func TestPlanExit(t *testing.T) {
 			}
 			tc.check(t, root, waitFor(t, e, "the plan exit to finish", tc.wait))
 		})
+	}
+}
+
+func TestPlanExitResumesInTheApprovedModeWhenTheTargetSetsNone(t *testing.T) {
+	root, log := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	  {"id":"backlog","name":"Backlog"},
+	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
+	  {"id":"exec","name":"Executing","autoSpawn":true},
+	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("PLANAUTO the refactor", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitForAll(t, e, "the agent to resume in the worktree", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	if resumed := strings.Split(readFile(log), "---")[1]; !strings.Contains(resumed, "--resume") || !strings.Contains(resumed, "--permission-mode\nauto") {
+		t.Errorf("resume does not keep the approved mode:\n%s", resumed)
 	}
 }
 

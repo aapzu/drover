@@ -1503,11 +1503,16 @@ func (e *Engine) spawn(t *store.Task, col config.Column, key, worktree string, f
 		s.SetMode(e.board.PermissionMode(col))
 		s.RespawnPending = false
 		s.UpdatedAt = time.Now()
+		launchMode := s.PermissionMode
+		if launchMode == "" && !fresh {
+			launchMode = s.ResumeMode
+		}
+		s.ResumeMode = ""
 		launch = claude.Launch{
 			SettingsPath:   settings,
 			SessionID:      s.AgentSessionID,
 			Resume:         !fresh,
-			PermissionMode: s.PermissionMode,
+			PermissionMode: launchMode,
 			Model:          col.ModelOverride,
 			Effort:         col.EffortOverride,
 			Prompt:         prompt,

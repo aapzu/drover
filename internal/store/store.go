@@ -98,7 +98,10 @@ type Session struct {
 	TurnEndRow  string `json:"turnEndRow,omitempty"`
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
-	RespawnPending     bool      `json:"respawnPending,omitempty"`
+	RespawnPending bool `json:"respawnPending,omitempty"`
+	// ResumeMode is the mode the next resume passes when the column leaves the
+	// mode to Claude Code, which would restore the conversation's saved one.
+	ResumeMode         string    `json:"-"`
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`

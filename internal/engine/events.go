@@ -451,6 +451,16 @@ func (e *Engine) planExit(taskID string, visit int) {
 		return
 	}
 	e.logf(card, "Plan approved, moving to %s", target.Name)
+	e.with(func() {
+		if s := t.Sessions[store.MainSession]; s != nil && e.board.PermissionMode(target) == "" && s.PermissionMode != "plan" {
+			s.ResumeMode = s.PermissionMode
+		}
+	})
+	defer e.with(func() {
+		if s := t.Sessions[store.MainSession]; s != nil {
+			s.ResumeMode = ""
+		}
+	})
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{}); err != nil {
 		stop()
 		e.logf(card, "Plan-exit move failed: %v", err)
