@@ -20,6 +20,7 @@ func TestPrefsRoundTrip(t *testing.T) {
 		HidePreview:    true,
 		NoMouse:        true,
 		ShowArchived:   true,
+		CollapseGroups: true,
 		ShowHidden:     true,
 		ShowSettings:   true,
 		AssistantWidth: 50,

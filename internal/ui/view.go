@@ -57,7 +57,7 @@ func (m Model) View() string {
 		if m.drag.kind == dragCard {
 			if t := m.task(m.drag.task); t != nil {
 				w := min(36, m.width)
-				ghost := m.renderCard(t, w, true, false)
+				ghost := m.renderCard(t, w, true, false, 0)
 				body = overlay(body, ghost, clamp(m.drag.x-w/2, 0, m.width-w), clamp(m.drag.y-l.bodyY-1, 0, max(0, l.bodyH-1)))
 			}
 		}
@@ -250,7 +250,7 @@ func columnSummary(c config.Column) string {
 func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	i, width := box.index, box.width
 	col := m.columns()[i]
-	tasks := m.tasksForColumn(i)
+	tasks, folded := m.columnCards(i)
 	selected := i == m.col
 	color := lipgloss.Color(col.Color)
 	if col.Color == "" {
@@ -260,8 +260,12 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	inner := width - 2
 	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true).Underline(selected)
 	count := fmt.Sprintf(" %d", len(tasks))
-	if hidden := m.offBoardIn(col.ID); hidden > 0 {
-		count += fmt.Sprintf(" +%d", hidden)
+	off := m.offBoardIn(col.ID)
+	for _, n := range folded {
+		off += n
+	}
+	if off > 0 {
+		count += fmt.Sprintf(" +%d", off)
 	}
 	name := ansi.Truncate(fmt.Sprintf("%d %s", i+1, col.Name), inner-1-len(count), "…")
 	note := ""
@@ -284,7 +288,7 @@ func (m Model) renderColumn(box colBox, height int, dropping bool) string {
 	}
 	for j := box.first; j < len(tasks) && j < box.first+box.slots; j++ {
 		dragged := m.drag.kind == dragCard && tasks[j].ID == m.drag.task
-		lines = append(lines, m.renderCard(tasks[j], inner, selected && j == sel, dragged))
+		lines = append(lines, m.renderCard(tasks[j], inner, selected && j == sel, dragged, folded[tasks[j].ID]))
 	}
 	if hidden := len(tasks) - (box.first + box.slots); hidden > 0 {
 		lines = append(lines, dim.Render(fmt.Sprintf("  +%d more", hidden)))
@@ -365,8 +369,9 @@ func stuckStarting(s *store.Session) bool {
 }
 
 // renderCard draws a card exactly Density.cardHeight() rows tall. A dragged
-// card is drawn faint where it came from.
-func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string {
+// card is drawn faint where it came from. folded is how many collapsed
+// siblings the card stands for.
+func (m Model) renderCard(t *store.Task, width int, active, dragged bool, folded int) string {
 	content := width - 4
 	title := fmt.Sprintf("#%d %s", t.Number, taskTitle(t))
 	if t.Issue != nil {
@@ -388,7 +393,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool) string
 	} else if t.Archived || t.Hidden {
 		style = style.Faint(true)
 	}
-	group := groupMarker(g, t, sibling)
+	group := groupMarker(g, t, sibling, folded)
 	if m.prefs.Density == densityCompact {
 		status := strings.TrimSpace(group + " " + m.status(t))
 		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
@@ -472,13 +477,18 @@ func (m Model) groupOf(t *store.Task) *cardGroup {
 }
 
 // groupMarker shows "⧉ 2/3" on cards that share one agent session, in the
-// group's color; bold on the siblings of the selected card.
-func groupMarker(g *cardGroup, t *store.Task, sibling bool) string {
+// group's color; bold on the siblings of the selected card. A card standing in
+// for folded siblings adds "+2".
+func groupMarker(g *cardGroup, t *store.Task, sibling bool, folded int) string {
 	if g == nil {
 		return ""
 	}
 	pos := slices.Index(g.members, t) + 1
-	return lipgloss.NewStyle().Foreground(g.color).Bold(sibling).Render(fmt.Sprintf("⧉ %d/%d", pos, len(g.members)))
+	text := fmt.Sprintf("⧉ %d/%d", pos, len(g.members))
+	if folded > 0 {
+		text += fmt.Sprintf(" +%d", folded)
+	}
+	return lipgloss.NewStyle().Foreground(g.color).Bold(sibling).Render(text)
 }
 
 // isSibling reports whether t shares a session with the selected card.
@@ -730,6 +740,7 @@ func (m Model) renderHelp() string {
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
+		{"f", "show one card per session or all of them"},
 		{"t", "show or hide column settings under column names"},
 		{"o", "change settings in drover.local.json and drover.json"},
 		{"O", "change column settings in drover.local.json and drover.json"},

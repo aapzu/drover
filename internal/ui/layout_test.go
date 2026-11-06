@@ -122,7 +122,7 @@ func TestCardHeightMatchesDensity(t *testing.T) {
 	task.Title = strings.Repeat("long title ", 10)
 	for _, d := range []density{densityNormal, densityCompact, densityTall} {
 		m.prefs.Density = d
-		if got := lipgloss.Height(m.renderCard(task, 30, false, false)); got != d.cardHeight() {
+		if got := lipgloss.Height(m.renderCard(task, 30, false, false, 0)); got != d.cardHeight() {
 			t.Fatalf("density %d: card is %d rows, want %d", d, got, d.cardHeight())
 		}
 	}
@@ -337,7 +337,7 @@ func TestIdleCardWithBackgroundTasksIsNotIdle(t *testing.T) {
 	task := &store.Task{ID: "t", Number: 1, Title: "Build", ColumnID: "c0",
 		Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle, Background: []string{"b1"}}}}
 	m.snap.Tasks = []*store.Task{task}
-	card := ansi.Strip(m.renderCard(task, 60, false, false))
+	card := ansi.Strip(m.renderCard(task, 60, false, false, 0))
 	if !strings.Contains(card, "◌ background tasks") || strings.Contains(card, "● idle") {
 		t.Errorf("card:\n%s", card)
 	}
@@ -356,7 +356,7 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	if m.sessionFor(split) != owner.Sessions[store.MainSession] {
 		t.Fatal("split card doesn't resolve its group's session")
 	}
-	splitCard := ansi.Strip(m.renderCard(split, 60, false, false))
+	splitCard := ansi.Strip(m.renderCard(split, 60, false, false, 0))
 	for _, want := range []string{"⧉ 2/2", "● idle", "PR #11 merged two"} {
 		if !strings.Contains(splitCard, want) {
 			t.Errorf("split card misses %q:\n%s", want, splitCard)
@@ -364,7 +364,7 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 	}
 	// The owner sits in a plain column while the agent works for the split
 	// card, so it doesn't show the agent's activity.
-	ownerCard := ansi.Strip(m.renderCard(owner, 60, false, false))
+	ownerCard := ansi.Strip(m.renderCard(owner, 60, false, false, 0))
 	if !strings.Contains(ownerCard, "⧉ 1/2") || strings.Contains(ownerCard, "idle") || !strings.Contains(ownerCard, "✓ approved PR #10") {
 		t.Errorf("owner card:\n%s", ownerCard)
 	}
@@ -375,13 +375,13 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 		{Number: 14, State: "OPEN", Error: "gh pr view: timed out"}:                 "⚠ gh PR #14",
 	} {
 		card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0", PR: &pr}
-		if got := ansi.Strip(m.renderCard(card, 60, false, false)); !strings.Contains(got, want) {
+		if got := ansi.Strip(m.renderCard(card, 60, false, false, 0)); !strings.Contains(got, want) {
 			t.Errorf("card misses %q:\n%s", want, got)
 		}
 	}
 	for _, d := range []density{densityNormal, densityCompact, densityTall} {
 		m.prefs.Density = d
-		if got := lipgloss.Height(m.renderCard(split, 30, false, false)); got != d.cardHeight() {
+		if got := lipgloss.Height(m.renderCard(split, 30, false, false, 0)); got != d.cardHeight() {
 			t.Fatalf("density %d: card is %d rows, want %d", d, got, d.cardHeight())
 		}
 	}
@@ -407,7 +407,7 @@ func TestReviewCardsShowYourReview(t *testing.T) {
 		{review(store.PR{Author: "them", Error: "gh pr view: timed out"}), []string{"⚠ gh"}, nil},
 	} {
 		card := &store.Task{ID: "pr", Number: 3, Title: "Review", ColumnID: "c0", PR: &tc.pr}
-		got := ansi.Strip(m.renderCard(card, 80, false, false))
+		got := ansi.Strip(m.renderCard(card, 80, false, false, 0))
 		for _, want := range tc.want {
 			if !strings.Contains(got, want) {
 				t.Errorf("%+v misses %q:\n%s", tc.pr, want, got)
@@ -429,14 +429,14 @@ func TestSiblingsOfSelectedCardStandOut(t *testing.T) {
 	m.snap.Tasks = []*store.Task{owner, split, other}
 	m.selectTask(owner)
 
-	if got := ansi.Strip(m.renderCard(split, 30, false, false)); !strings.HasPrefix(got, "┏") {
+	if got := ansi.Strip(m.renderCard(split, 30, false, false, 0)); !strings.HasPrefix(got, "┏") {
 		t.Errorf("sibling of the selected card isn't thick:\n%s", got)
 	}
-	if got := ansi.Strip(m.renderCard(other, 30, false, false)); !strings.HasPrefix(got, "╭") {
+	if got := ansi.Strip(m.renderCard(other, 30, false, false, 0)); !strings.HasPrefix(got, "╭") {
 		t.Errorf("ungrouped card changed border:\n%s", got)
 	}
 	m.selectTask(other)
-	if got := ansi.Strip(m.renderCard(split, 30, false, false)); !strings.HasPrefix(got, "╭") {
+	if got := ansi.Strip(m.renderCard(split, 30, false, false, 0)); !strings.HasPrefix(got, "╭") {
 		t.Errorf("group card is thick without a selected sibling:\n%s", got)
 	}
 }
@@ -446,10 +446,10 @@ func TestSelectedCardHasDoubleBorder(t *testing.T) {
 	task := &store.Task{ID: "t", Number: 1, Title: "Task", ColumnID: "c0"}
 	m.snap.Tasks = []*store.Task{task}
 
-	if got := ansi.Strip(m.renderCard(task, 30, true, false)); !strings.HasPrefix(got, "╔") {
+	if got := ansi.Strip(m.renderCard(task, 30, true, false, 0)); !strings.HasPrefix(got, "╔") {
 		t.Errorf("selected card isn't double-bordered:\n%s", got)
 	}
-	if got := ansi.Strip(m.renderCard(task, 30, false, false)); !strings.HasPrefix(got, "╭") {
+	if got := ansi.Strip(m.renderCard(task, 30, false, false, 0)); !strings.HasPrefix(got, "╭") {
 		t.Errorf("unselected card changed border:\n%s", got)
 	}
 }
@@ -571,7 +571,7 @@ func TestCardLinksItsPR(t *testing.T) {
 	card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0",
 		PR: &store.PR{Number: 21, URL: url, State: "OPEN", Branch: "a-long-branch-name"}}
 	for _, width := range []int{60, 18} {
-		got := m.renderCard(card, width, false, false)
+		got := m.renderCard(card, width, false, false, 0)
 		if open := strings.Count(got, ansi.SetHyperlink(url)); open != 1 {
 			t.Errorf("width %d: %d hyperlinks opened:\n%q", width, open, got)
 		}
@@ -579,12 +579,12 @@ func TestCardLinksItsPR(t *testing.T) {
 			t.Errorf("width %d: %d hyperlinks closed:\n%q", width, closed, got)
 		}
 	}
-	linked := m.renderCard(card, 60, false, false)
+	linked := m.renderCard(card, 60, false, false, 0)
 	if !strings.Contains(linked, ansi.SetHyperlink(url)+"PR #21"+ansi.ResetHyperlink()) {
 		t.Errorf("link doesn't wrap exactly the PR number:\n%q", linked)
 	}
 	card.PR.URL = ""
-	plain := m.renderCard(card, 60, false, false)
+	plain := m.renderCard(card, 60, false, false, 0)
 	if strings.Contains(plain, "\x1b]8") {
 		t.Errorf("card links a PR without a URL:\n%q", plain)
 	}
