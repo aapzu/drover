@@ -3,4 +3,4 @@
 drover.local.json
 
 CLAUDE.local.md
-.claude/*.local.json
+.claude/*.local.json/dist/
