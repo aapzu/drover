@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Usage: next-version.sh <latest-tag-or-empty> <comma-separated PR labels>
-# Prints the next vX.Y.Z: patch by default, minor/major when labelled.
 set -euo pipefail
 
 latest=${1:-}

@@ -11,7 +11,7 @@ func TestBuildVersion(t *testing.T) {
 	}
 
 	version = ""
-	if got := buildVersion(); got == "" {
-		t.Error("buildVersion() without ldflags is empty")
+	if got := buildVersion(); got == "" || got == "(devel)" {
+		t.Errorf("buildVersion() without ldflags = %q", got)
 	}
 }
