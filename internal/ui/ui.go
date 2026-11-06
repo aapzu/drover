@@ -306,9 +306,16 @@ func (m Model) updatedAt(t *store.Task) time.Time {
 	return t.UpdatedAt
 }
 
-// orphans are tasks whose column no longer exists in drover.json; they are
-// shown in the first column so they can be moved somewhere valid.
 func (m Model) tasksForColumn(i int) []*store.Task {
+	tasks, _ := m.columnCards(i)
+	return tasks
+}
+
+// columnCards is the cards shown in column i, and how many cards each one
+// stands for beyond itself when CollapseGroups folds a session's cards into one.
+// Orphans are tasks whose column no longer exists in drover.json; they are
+// shown in the first column so they can be moved somewhere valid.
+func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	col := m.columns()[i]
 	tasks := m.tasksIn(col.ID)
 	if i == 0 {
@@ -321,7 +328,35 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 	if m.filter != "" {
 		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, m.filter) })
 	}
-	return tasks
+	if m.prefs.CollapseGroups {
+		return m.collapseGroups(tasks, m.selected[col.ID])
+	}
+	return tasks, nil
+}
+
+// collapseGroups keeps one card per session: the selected one, else the
+// owner, else the first in tasks. folded counts the cards dropped, by the kept
+// card's ID.
+func (m Model) collapseGroups(tasks []*store.Task, selectedID string) ([]*store.Task, map[string]int) {
+	owners := make([]*store.Task, len(tasks))
+	kept := map[string]*store.Task{}
+	for i, t := range tasks {
+		owner := store.Owner(m.snap.Tasks, t)
+		owners[i] = owner
+		if k := kept[owner.ID]; k == nil || t.ID == selectedID || t == owner && k.ID != selectedID {
+			kept[owner.ID] = t
+		}
+	}
+	var shown []*store.Task
+	folded := map[string]int{}
+	for i, t := range tasks {
+		if k := kept[owners[i].ID]; k == t {
+			shown = append(shown, t)
+		} else {
+			folded[k.ID]++
+		}
+	}
+	return shown, folded
 }
 
 // matches reports whether the card's number, title, branch, issue or PR
@@ -1123,7 +1158,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		n := 0
-		for _, task := range m.tasksForColumn(m.col) {
+		for _, task := range m.tasksIn(cols[m.col].ID) {
 			if !task.Archived && !task.Hidden {
 				n++
 			}
@@ -1151,6 +1186,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "v":
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
+		m.savePrefs()
+	case "f":
+		m.prefs.CollapseGroups = !m.prefs.CollapseGroups
 		m.savePrefs()
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings
