@@ -1,0 +1,30 @@
+name: Release label
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+concurrency:
+  group: release-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: read
+
+jobs:
+  release-label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require exactly one release label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          found=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name | select(. == "patch" or . == "minor" or . == "major" or . == "no-release")')
+          count=$(echo -n "$found" | grep -c . || true)
+          if [ "$count" != 1 ]; then
+            echo "::error::Label this PR with exactly one of: patch, minor, major, no-release (found ${count})."
+            exit 1
+          fi
+          echo "Release label: $found"

@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pick the next version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(git tag --points-at HEAD --list 'v*' | head -n1)
+          if [ -n "$existing" ]; then
+            echo "tag=$existing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr_labels() {
+            gh api "repos/$GITHUB_REPOSITORY/commits/$1/pulls" --jq '.[] | ["pr"] + [.labels[].name] | join(",")'
+          }
+          latest=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+          head_labels=$(pr_labels "$GITHUB_SHA" | tr '\n' ',')
+          case ",$head_labels" in
+            *,no-release,*)
+              echo "Labelled no-release, not releasing."
+              exit 0
+              ;;
+          esac
+          if [ -n "$latest" ]; then
+            shas=$(git rev-list --first-parent "$latest..HEAD")
+          else
+            shas=$GITHUB_SHA
+          fi
+          lines=$(for sha in $shas; do pr_labels "$sha"; done)
+          if [ -z "$lines" ]; then
+            echo "No pull request since ${latest:-the start}, not releasing."
+            exit 0
+          fi
+          tag=$(scripts/next-version.sh "$latest" "$(echo "$lines" | tr '\n' ',')")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "new=true" >> "$GITHUB_OUTPUT"
+      - name: Tag
+        if: steps.version.outputs.new == 'true'
+        run: |
+          git tag "${{ steps.version.outputs.tag }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+      - uses: actions/setup-go@v5
+        if: steps.version.outputs.tag != ''
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        if: steps.version.outputs.tag != ''
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

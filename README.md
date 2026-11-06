@@ -28,6 +28,10 @@ go install github.com/aapzu/drover@latest
 go build -o ~/.local/bin/drover .
 ```
 
+Or download a macOS or Linux binary from the
+[Releases](https://github.com/aapzu/drover/releases) page. `drover --version`
+prints the version.
+
 Install the binary somewhere permanent. Claude's hooks call it to report
 activity, so don't run it with `go run`.
 
@@ -624,3 +628,9 @@ drover ask --new "start over: what's in Planning?"
   board quits or its terminal closes. Automations only run while the board is
   open. Events that arrive while it's closed are processed when you reopen it.
 - Only Claude Code is supported. Issues import from Linear only.
+
+## Releases
+
+Every pull request merged to `main` publishes a release with binaries. Label
+each PR with exactly one of `patch`, `minor`, `major` or `no-release` (a CI
+check requires it); `no-release` skips the release.

@@ -24,6 +24,7 @@ const usage = `drover: a kanban board for AI coding agents, in your terminal.
 
 Usage:
   drover [project-dir]          open the board for a git repository (default: .)
+  drover version                print the version (also --version, -v)
   drover hook <file>            internal: record a Claude Code hook event
   drover hook-gate <file>       internal: hold an approved plan until its worktree is ready
 
@@ -48,6 +49,10 @@ func main() {
 	}
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 		fmt.Print(usage)
+		return
+	}
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Println("drover", buildVersion())
 		return
 	}
 	if len(args) > 0 {
