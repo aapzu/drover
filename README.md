@@ -38,34 +38,17 @@ cd your-repo
 drover
 ```
 
-| Key | Action |
-| --- | --- |
-| `ctrl+k` | search and run a command |
-| `←→` / `h l`, `↑↓` / `j k` | select column / card |
-| `H` / `L` (or shift+←→) | move card to previous / next column |
-| `m`, then ↑↓ and enter, or `1`–`9` | move card to a column |
-| `n`, `e`, `x` | new card with an agent in the first column (attaches right away), edit, delete task |
-| `I` | import Claude Code agents and sessions, or Linear issues (`tab` switches) |
-| `A` / `C` | archive or restore the selected card in Done / archive every card in Done |
-| `v` | show or hide archived cards |
-| `b` / `B` | hide or unhide the selected card in any column / show or hide hidden cards |
-| `t` | show or hide column settings under column names |
-| `enter` | attach to the agent's terminal, starting it if needed (`Ctrl-q` returns) |
-| `tab` | type into the agent from the preview (`Ctrl-q` returns) |
-| `s` | send the agent a message |
-| `r` / `S` | start or resume / suspend the agent |
-| `c` | open a shell in the card's worktree, or the main checkout before it has one (`Ctrl-q` returns) |
-| `u` | update the worktree from its base branch |
-| `:` / `N` | open the assistant panel and type into it (`Ctrl-q` returns to the board and hides it) / start a new assistant conversation |
-| `/` | filter cards by number, title, branch, issue or PR (`esc` clears) |
-| `+` / `-`, `<` / `>` | taller / shorter preview, narrower / wider column |
-| `z`, `0` | cycle card size (normal, compact, tall with the last reply), reset layout |
-| `p`, `i`, `?` | toggle preview, task details and log, help |
-| `M` | toggle mouse capture (off lets the terminal select text) |
-| `q` | quit (agents keep running) |
-| `Q` | suspend every agent and quit, printing a `claude --resume` command for each |
+Then bring in the Claude Code work you already have:
 
-With the mouse on, drag a card onto another column to move it, double-click
+1. Press `I` to import your Claude Code agents and sessions. Running agents
+   become cards in the first agent column, and past sessions land in the first
+   column, ready to resume. See
+   [Importing Claude Code agents](#importing-claude-code-agents).
+2. Or press `n` to start a new card with an agent.
+
+Press `?` for every shortcut, or `ctrl+k` to search and run a command.
+
+With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to
 resize, click the preview to type into the agent, and click the assistant
 panel to type into it. Dragging over the live preview selects text and
@@ -495,7 +478,7 @@ selected. `a` does the same for every loaded session.
 - **Sessions that opened several PRs** are split into a card per PR as they
   are imported; the first PR stays on the session's own card.
 - **Board conversations you resume yourself**, for example with the commands
-  `Q` prints, are tracked the same way. The board won't start them again
+  `Q` (suspend every agent and quit) prints, are tracked the same way. The board won't start them again
   until you exit them.
 - The board never deletes a directory it didn't create. Imported sessions
   that live in the main checkout or in another tool's worktree keep their
