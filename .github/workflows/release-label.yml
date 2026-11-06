@@ -8,7 +8,8 @@ concurrency:
   group: release-label-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-permissions: {}
+permissions:
+  pull-requests: read
 
 jobs:
   release-label:
@@ -17,9 +18,10 @@ jobs:
     steps:
       - name: Require exactly one release label
         env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          found=$(echo "$LABELS" | jq -r '.[] | select(. == "patch" or . == "minor" or . == "major" or . == "no-release")')
+          found=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name | select(. == "patch" or . == "minor" or . == "major" or . == "no-release")')
           count=$(echo -n "$found" | grep -c . || true)
           if [ "$count" != 1 ]; then
             echo "::error::Label this PR with exactly one of: patch, minor, major, no-release (found ${count})."
