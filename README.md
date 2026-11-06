@@ -648,6 +648,6 @@ drover ask --new "start over: what's in Planning?"
 
 ## Releases
 
-Every pull request merged to `main` publishes a release with binaries. The
-patch version goes up by default. Label the PR `minor` or `major` to bump
-those instead, or `no-release` to skip the release.
+Every pull request merged to `main` publishes a release with binaries. Label
+each PR with exactly one of `patch`, `minor`, `major` or `no-release` (a CI
+check requires it); `no-release` skips the release.
