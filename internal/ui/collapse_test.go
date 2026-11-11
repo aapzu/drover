@@ -42,7 +42,7 @@ func TestCollapseGroupsShowsOneCardPerSession(t *testing.T) {
 		t.Fatalf("expanded column = %q", got)
 	}
 
-	m.prefs.CollapseGroups = true
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
 	if got := ids(m.tasksForColumn(1)); got != "a2 b solo" {
 		t.Errorf("collapsed column = %q, want %q", got, "a2 b solo")
 	}
@@ -63,9 +63,24 @@ func TestCollapseGroupsShowsOneCardPerSession(t *testing.T) {
 	}
 }
 
+func TestCollapseOnlyFoldsTheCurrentColumn(t *testing.T) {
+	m := collapseModel(t)
+	m.snap.Tasks = append(m.snap.Tasks,
+		&store.Task{ID: "a4", Number: 7, Title: "a4", ColumnID: "c0", GroupID: "a"})
+	m.col = 0
+
+	m, _ = update(m, key("f"))
+	if got := ids(m.tasksForColumn(0)); got != "a" {
+		t.Errorf("folded column = %q, want a", got)
+	}
+	if got := ids(m.tasksForColumn(1)); got != "a2 a3 b b2 solo" {
+		t.Errorf("f in c0 folded c1: %q", got)
+	}
+}
+
 func TestCollapseGroupsAppliesAfterTheFilter(t *testing.T) {
 	m := collapseModel(t)
-	m.prefs.CollapseGroups = true
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
 	m.filter = "#103"
 	if got := ids(m.tasksForColumn(1)); got != "a3" {
 		t.Errorf("filtering for a folded card shows %q, want a3", got)
@@ -78,8 +93,8 @@ func TestCollapseKeepsTheSelectedCardShown(t *testing.T) {
 	m.selected["c1"] = "a3"
 
 	m, _ = update(m, key("f"))
-	if !m.prefs.CollapseGroups {
-		t.Fatal("f didn't collapse")
+	if !m.prefs.CollapsedColumns["c1"] || len(m.prefs.CollapsedColumns) != 1 {
+		t.Fatalf("f didn't collapse only c1: %v", m.prefs.CollapsedColumns)
 	}
 	if got := ids(m.tasksForColumn(1)); got != "a3 b solo" {
 		t.Errorf("collapsed column = %q, want the selected a3 to stand for its session", got)
@@ -89,6 +104,9 @@ func TestCollapseKeepsTheSelectedCardShown(t *testing.T) {
 	}
 
 	m, _ = update(m, key("f"))
+	if len(m.prefs.CollapsedColumns) != 0 {
+		t.Errorf("f again left %v folded", m.prefs.CollapsedColumns)
+	}
 	if got := m.current(); got == nil || got.ID != "a3" || len(m.tasksForColumn(1)) != 5 {
 		t.Errorf("cursor on %v with %d cards after expanding", got, len(m.tasksForColumn(1)))
 	}
@@ -96,7 +114,7 @@ func TestCollapseKeepsTheSelectedCardShown(t *testing.T) {
 
 func TestMovedCardStaysSelectedWhenItsSiblingIsShown(t *testing.T) {
 	m := collapseModel(t)
-	m.prefs.CollapseGroups = true
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
 	m.snap.Tasks[0].ColumnID = "c1"
 	m.snap.Tasks[1].ColumnID = "c0"
 	m.snap.Tasks[2].ColumnID = "c0"
@@ -112,7 +130,7 @@ func TestMovedCardStaysSelectedWhenItsSiblingIsShown(t *testing.T) {
 
 func TestArchivingDoneCountsFoldedCards(t *testing.T) {
 	m := collapseModel(t)
-	m.prefs.CollapseGroups = true
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
 	m.col = 1
 	m, _ = update(m, key("C"))
 	if m.mode != modeConfirm || !strings.Contains(m.confirmText, "all 5 cards") {
@@ -122,7 +140,7 @@ func TestArchivingDoneCountsFoldedCards(t *testing.T) {
 
 func TestArchivingDoneIgnoresTheFilter(t *testing.T) {
 	m := collapseModel(t)
-	m.prefs.CollapseGroups = true
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
 	m.filter = "#106"
 	m.col = 1
 	m, _ = update(m, key("C"))
