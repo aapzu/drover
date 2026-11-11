@@ -647,3 +647,13 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		}
 	}
 }
+
+func TestDoneColumn(t *testing.T) {
+	b := &Board{Columns: []Column{{ID: "a", Name: "A"}, {ID: "d1", Name: "D1", Role: "done"}, {ID: "d2", Name: "D2", Role: "done"}}}
+	if got := b.DoneColumn().ID; got != "d1" {
+		t.Errorf("DoneColumn = %q, want the first done column d1", got)
+	}
+	if got := (&Board{Columns: []Column{{ID: "a"}}}).DoneColumn().ID; got != "" {
+		t.Errorf("DoneColumn without a done column = %q, want none", got)
+	}
+}

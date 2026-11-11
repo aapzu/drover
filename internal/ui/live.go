@@ -1,11 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -84,26 +84,47 @@ func afterKey(capture tea.Cmd) tea.Cmd {
 	}
 }
 
-// mouseJob is the SGR report for msg, with x and y 1-based. ok is false for
-// buttons terminals have no report for.
-func mouseJob(session string, msg tea.MouseMsg, x, y int) (job keyJob, ok bool) {
-	var button ansi.MouseButton
+func wheelJob(session string, up bool, x, y int) keyJob {
+	code := 65
+	if up {
+		code = 64
+	}
+	return sgrMouseJob(session, code, x, y, true)
+}
+
+// mouseJob reports a click, release or drag to the agent as an SGR mouse
+// sequence at pane cell (x, y), 1-based.
+func mouseJob(session string, msg tea.MouseMsg, x, y int) keyJob {
+	code := 3
 	switch msg.Button {
 	case tea.MouseButtonLeft:
-		button = ansi.MouseLeft
+		code = 0
 	case tea.MouseButtonMiddle:
-		button = ansi.MouseMiddle
+		code = 1
 	case tea.MouseButtonRight:
-		button = ansi.MouseRight
-	case tea.MouseButtonWheelUp:
-		button = ansi.MouseWheelUp
-	case tea.MouseButtonWheelDown:
-		button = ansi.MouseWheelDown
-	default:
-		return keyJob{}, false
+		code = 2
 	}
-	code := ansi.EncodeMouseButton(button, msg.Action == tea.MouseActionMotion, msg.Shift, msg.Alt, msg.Ctrl)
-	return keyJob{session: session, literal: ansi.MouseSgr(code, x-1, y-1, msg.Action == tea.MouseActionRelease)}, true
+	if msg.Shift {
+		code |= 4
+	}
+	if msg.Alt {
+		code |= 8
+	}
+	if msg.Ctrl {
+		code |= 16
+	}
+	if msg.Action == tea.MouseActionMotion {
+		code |= 32
+	}
+	return sgrMouseJob(session, code, x, y, msg.Action != tea.MouseActionRelease)
+}
+
+func sgrMouseJob(session string, code, x, y int, down bool) keyJob {
+	final := "M"
+	if !down {
+		final = "m"
+	}
+	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%d%s", code, x, y, final)}
 }
 
 type keyJob struct {

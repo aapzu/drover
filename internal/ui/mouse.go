@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aapzu/drover/internal/assistant"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -20,13 +19,11 @@ const (
 	dragPreview
 	dragAssistant
 	dragSelect
-	dragPane
+	dragForward
 )
 
 type dragState struct {
 	kind     dragKind
-	pane     mousePane
-	button   tea.MouseButton
 	task     string
 	fromCol  int
 	col      int
@@ -36,6 +33,7 @@ type dragState struct {
 	startY   int
 	clickAt  time.Time
 	clickFor string
+	target   mouseTarget
 }
 
 const doubleClick = 400 * time.Millisecond
@@ -45,23 +43,23 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.drag = dragState{}
 		return m, nil
 	}
-	if m.drag.kind == dragPane && msg.Action != tea.MouseActionPress {
-		return m.forwardDrag(msg)
-	}
 	l := m.layout()
-	var h hit
-	if msg.Action == tea.MouseActionPress {
-		h = l.hitTest(m, msg.X, msg.Y)
-		if next, cmd, ok := m.forwardPress(msg, l, h); ok {
-			return next, cmd
-		}
+	if target, ok := m.forwardTarget(msg, l); ok {
+		return m.forwardMouse(target, msg, l)
 	}
 	switch {
 	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
+		h := l.hitTest(m, msg.X, msg.Y)
 		if h.kind == hitAssistant || h.kind == hitAssistantEdge {
-			return m.wheelAssistant(msg)
+			return m.wheelAssistant(msg, l)
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
+			if name, ok := m.wheelTarget(); ok {
+				x, y := l.previewCell(msg)
+				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
+				cmd := m.requestPreview(true)
+				return m, cmd
+			}
 			if msg.Button == tea.MouseButtonWheelUp {
 				return m.scrollPreview(3)
 			}
@@ -78,6 +76,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.updateBoard(key)
 
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+		h := l.hitTest(m, msg.X, msg.Y)
 		m.drag = dragState{clickAt: m.drag.clickAt, clickFor: m.drag.clickFor}
 		m.sel = selection{}
 		switch h.kind {
@@ -163,99 +162,59 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// mousePane is a pane whose app reads mouse reports. x, y, w and h are its
-// box on screen, border included.
-type mousePane struct {
+// mouseTarget is a pane whose agent reads mouse reports.
+type mouseTarget struct {
 	session   string
-	x, y      int
-	w, h      int
 	assistant bool
 }
 
-// cell is where msg lands inside the pane, 1-based and clamped to its
-// interior so a drag that leaves the pane still reports its nearest edge.
-func (p mousePane) cell(msg tea.MouseMsg) (int, int) {
-	return clamp(msg.X-p.x, 1, p.w-2), clamp(msg.Y-p.y, 1, p.h-2)
-}
-
-// paneAt is the pane under a hit if its app wants the mouse. A pane that
-// doesn't, or that is showing scrollback, keeps drover's own handling.
-func (m Model) paneAt(l layout, h hit) (mousePane, bool) {
-	switch h.kind {
-	case hitPreview, hitPreviewEdge:
-		name, ok := m.wheelTarget()
-		return mousePane{session: name, y: l.previewY, w: l.boardW, h: l.previewH}, ok
-	case hitAssistant, hitAssistantEdge:
-		if !m.assist.running() || !m.assist.mouse || m.assist.history != 0 {
-			return mousePane{}, false
+// forwardTarget is the pane msg belongs to: a press inside the live preview
+// or the focused assistant panel, or the motion and release that follow such
+// a press.
+func (m Model) forwardTarget(msg tea.MouseMsg, l layout) (mouseTarget, bool) {
+	if msg.Action != tea.MouseActionPress {
+		return m.drag.target, m.drag.kind == dragForward
+	}
+	switch msg.Button {
+	case tea.MouseButtonLeft, tea.MouseButtonMiddle, tea.MouseButtonRight:
+		preview, previewOK := m.clickTarget()
+		assistant, assistantOK := m.assistantClickTarget()
+		if !previewOK && !assistantOK {
+			return mouseTarget{}, false
 		}
-		return mousePane{session: assistant.SessionName(m.eng.Root), x: l.boardW, y: l.bodyY,
-			w: l.assistantW, h: l.bodyH, assistant: true}, true
+		switch l.hitTest(m, msg.X, msg.Y).kind {
+		case hitPreview:
+			return mouseTarget{session: preview}, previewOK
+		case hitAssistant:
+			return mouseTarget{session: assistant, assistant: true}, assistantOK
+		}
 	}
-	return mousePane{}, false
+	return mouseTarget{}, false
 }
 
-func (m Model) sendMouse(p mousePane, msg tea.MouseMsg) bool {
-	x, y := p.cell(msg)
-	job, ok := mouseJob(p.session, msg, x, y)
-	if ok {
-		m.keys.send(job)
+func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
+	x, y := l.previewCell(msg)
+	focused := m.mode == modeLive
+	refresh := func() tea.Cmd { return m.requestPreview(true) }
+	if t.assistant {
+		x, y = l.assistantCell(msg)
+		focused = m.mode == modeAssistant
+		refresh = func() tea.Cmd { return afterKey(m.captureAssistantCmd()) }
 	}
-	return ok
-}
-
-func (m *Model) refreshPane(p mousePane) tea.Cmd {
-	if p.assistant {
-		return afterKey(m.captureAssistantCmd())
-	}
-	return m.requestPreview(true)
-}
-
-func (m Model) focusPane(p mousePane) (Model, tea.Cmd) {
-	switch {
-	case p.assistant && m.mode != modeAssistant:
-		return m, m.focusAssistant()
-	case !p.assistant && m.mode != modeLive:
-		return m.startLive()
-	}
-	return m, nil
-}
-
-// forwardPress sends wheel turns and clicks over a pane to its app. The
-// pane's resize edge and the board stay drover's, and so does everything over
-// a pane that doesn't read the mouse.
-func (m Model) forwardPress(msg tea.MouseMsg, l layout, h hit) (Model, tea.Cmd, bool) {
-	wheel := msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
-	if !wheel && h.kind != hitPreview && h.kind != hitAssistant {
-		return m, nil, false
-	}
-	p, ok := m.paneAt(l, h)
-	if !ok || !m.sendMouse(p, msg) {
-		return m, nil, false
-	}
-	if wheel {
-		return m, m.refreshPane(p), true
-	}
-	m.drag = dragState{kind: dragPane, pane: p, button: msg.Button}
-	m.sel = selection{}
-	var focus tea.Cmd
-	if msg.Button == tea.MouseButtonLeft {
-		m, focus = m.focusPane(p)
-	}
-	return m, focus, true
-}
-
-// forwardDrag sends the motion and release of a drag that began in a pane,
-// whatever it is over now.
-func (m Model) forwardDrag(msg tea.MouseMsg) (Model, tea.Cmd) {
-	d := m.drag
-	msg.Button = d.button
-	m.sendMouse(d.pane, msg)
-	if msg.Action == tea.MouseActionMotion {
+	switch msg.Action {
+	case tea.MouseActionPress:
+		m.drag = dragState{kind: dragForward, target: t}
+		m.sel = selection{}
+	case tea.MouseActionMotion:
+		if focused {
+			m.keys.send(mouseJob(t.session, msg, x, y))
+		}
 		return m, nil
+	case tea.MouseActionRelease:
+		m.drag = dragState{}
 	}
-	m.drag = dragState{}
-	return m, m.refreshPane(d.pane)
+	m.keys.send(mouseJob(t.session, msg, x, y))
+	return m, refresh()
 }
 
 // extendSelection moves the selection's end to the cell under the pointer,

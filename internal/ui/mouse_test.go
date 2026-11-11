@@ -383,124 +383,165 @@ func TestDropTarget(t *testing.T) {
 	}
 }
 
-func TestPreviewForwardsClicksAndDragsToAgentThatTracksMouse(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 16)}
-	m.previewFor, m.previewMouse = id, true
-	l := m.layout()
-	y := l.previewY + 3
-
-	sent := func(want string) {
-		t.Helper()
-		job, ok := sentJob(m)
-		if !ok || job.session != "sess" || job.literal != want {
-			t.Fatalf("sent %+v (sent=%v), want %q to sess", job, ok, want)
-		}
-	}
-	step := func(msg tea.MouseMsg) {
-		t.Helper()
-		next, _ := m.Update(msg)
-		m = next.(Model)
-	}
-
-	step(mousePress(10, y))
-	sent("\x1b[<0;10;3M")
-	if m.mode != modeLive || m.sel != (selection{}) {
-		t.Fatalf("mode %v, selection %+v: a forwarded click still focuses the preview and selects nothing", m.mode, m.sel)
-	}
-	step(mouse(tea.MouseActionMotion, tea.MouseButtonLeft, 12, y+1))
-	sent("\x1b[<32;12;4M")
-	step(mouse(tea.MouseActionMotion, tea.MouseButtonLeft, 500, l.previewY+l.previewH+5))
-	sent(fmt.Sprintf("\x1b[<32;118;%dM", l.previewH-2))
-	step(mouseRelease(12, y+1))
-	sent("\x1b[<0;12;4m")
-	if m.drag.kind != dragNone {
-		t.Fatalf("drag %v after release", m.drag.kind)
-	}
-	step(mouseMotion(12, y))
-	if job, ok := sentJob(m); ok {
-		t.Fatalf("motion with no button down sent %+v", job)
-	}
-
-	step(mouse(tea.MouseActionPress, tea.MouseButtonRight, 10, y))
-	sent("\x1b[<2;10;3M")
-	step(mouse(tea.MouseActionRelease, tea.MouseButtonRight, 10, y))
-	sent("\x1b[<2;10;3m")
-	step(tea.MouseMsg{X: 10, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true})
-	sent("\x1b[<16;10;3M")
+func trackingModel() Model {
+	m := liveModel()
+	m.previewFor = m.current().ID
+	m.previewMouse = true
+	return m
 }
 
-func TestPreviewKeepsClicksWhenAgentIgnoresTheMouse(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 4)}
-	m.previewFor, m.previewMouse = id, false
-	l := m.layout()
+func motion(button tea.MouseButton, x, y int) tea.MouseMsg {
+	return mouse(tea.MouseActionMotion, button, x, y)
+}
 
-	next, _ := m.Update(mousePress(10, l.previewY+3))
-	if job, ok := sentJob(m); ok {
-		t.Fatalf("sent %+v to an agent that doesn't read the mouse", job)
+func TestLiveClicksGoToAgentThatTracksMouse(t *testing.T) {
+	l := trackingModel().layout()
+	x, y := 5, l.previewY+3
+
+	m, cmd := update(trackingModel(), mousePress(x, y))
+	job, ok := sentJob(m)
+	if !ok || job.session != "sess" || job.literal != "\x1b[<0;5;3M" {
+		t.Fatalf("press job = %+v, %v", job, ok)
 	}
-	if next.(Model).mode != modeLive {
-		t.Fatal("a click on the preview should still enter live mode")
+	if m.sel != (selection{}) || m.drag.kind != dragForward || cmd == nil {
+		t.Errorf("sel %+v drag %v cmd nil %v", m.sel, m.drag.kind, cmd == nil)
+	}
+
+	m, cmd = update(m, motion(tea.MouseButtonLeft, x+2, y))
+	if job, _ := sentJob(m); job.literal != "\x1b[<32;7;3M" || cmd != nil {
+		t.Errorf("motion job = %+v, cmd nil %v", job, cmd == nil)
+	}
+
+	m, _ = update(m, mouse(tea.MouseActionRelease, tea.MouseButtonLeft, x+2, y))
+	if job, _ := sentJob(m); job.literal != "\x1b[<0;7;3m" {
+		t.Errorf("release job = %+v", job)
+	}
+	if m.drag != (dragState{}) {
+		t.Errorf("drag = %+v", m.drag)
 	}
 }
 
-func TestPreviewBorderStaysDroverOwnedForAgentThatTracksMouse(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 4)}
-	m.previewFor, m.previewMouse = id, true
-	l := m.layout()
+func TestLiveClicksClampToThePreview(t *testing.T) {
+	l := trackingModel().layout()
+	tests := []struct {
+		name string
+		msg  tea.MouseMsg
+		want string
+	}{
+		{"left border", mousePress(0, l.previewY+2), "\x1b[<0;1;2M"},
+		{"right border", mousePress(l.boardW-1, l.previewY+2), fmt.Sprintf("\x1b[<0;%d;2M", l.boardW-2)},
+		{"bottom border", mousePress(5, l.previewY+l.previewH-1), fmt.Sprintf("\x1b[<0;5;%dM", l.previewH-2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _ := update(trackingModel(), tt.msg)
+			if job, _ := sentJob(m); job.literal != tt.want {
+				t.Errorf("job = %q, want %q", job.literal, tt.want)
+			}
+		})
+	}
 
-	next, _ := m.Update(mousePress(10, l.previewY))
-	if job, ok := sentJob(m); ok || next.(Model).drag.kind != dragPreview {
-		t.Fatalf("sent %+v, drag %v: the border should start a resize", job, next.(Model).drag.kind)
+	m, _ := update(trackingModel(), mousePress(5, l.previewY+2))
+	sentJob(m)
+	m, _ = update(m, mouse(tea.MouseActionRelease, tea.MouseButtonLeft, 200, 0))
+	if job, _ := sentJob(m); job.literal != fmt.Sprintf("\x1b[<0;%d;1m", l.boardW-2) {
+		t.Errorf("release outside the preview = %q", job.literal)
 	}
 }
 
-func TestForwardedReleaseRequestsACaptureThatSticks(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 4)}
-	m.previewFor, m.previewMouse = id, true
-	m.mode = modeLive
-	y := m.layout().previewY + 3
-
-	next, _ := m.Update(mousePress(10, y))
-	next, cmd := next.Update(mouseRelease(10, y))
-	if cmd == nil || !next.(Model).previewBusy {
-		t.Fatalf("cmd %v, busy %v: the release should start a capture and mark it running", cmd != nil, next.(Model).previewBusy)
+func TestMouseJobEncodesButtonsAndModifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  tea.MouseMsg
+		want string
+	}{
+		{"middle", tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonMiddle}, "\x1b[<1;4;2M"},
+		{"right", tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight}, "\x1b[<2;4;2M"},
+		{"alt left", tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Alt: true}, "\x1b[<8;4;2M"},
+		{"ctrl shift right", tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, Ctrl: true, Shift: true}, "\x1b[<22;4;2M"},
+		{"release", tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonMiddle}, "\x1b[<1;4;2m"},
+		{"drag", tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonRight}, "\x1b[<34;4;2M"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mouseJob("sess", tt.msg, 4, 2).literal; got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestWheelReportsCarryModifiers(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 4)}
-	m.previewFor, m.previewMouse = id, true
+func TestLiveClicksSelectTextUnlessAgentTracksMouse(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{"agent ignores the mouse", func(m *Model) { m.previewMouse = false }},
+		{"preview is scrolled back", func(m *Model) { m.previewScroll = 3 }},
+		{"preview shows another task", func(m *Model) { m.previewFor = "other" }},
+		{"session is gone", func(m *Model) { m.snap.Live = nil }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := trackingModel()
+			tt.setup(&m)
 
-	m.Update(tea.MouseMsg{X: 10, Y: m.layout().previewY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp, Shift: true})
-	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<68;10;3M" {
-		t.Fatalf("sent %+v, %v, want shift+wheel up", job, ok)
+			m, _ = update(m, mousePress(5, m.layout().previewY+1))
+			if job, ok := sentJob(m); ok {
+				t.Errorf("sent %+v", job)
+			}
+			if m.drag.kind == dragForward {
+				t.Error("started forwarding")
+			}
+		})
 	}
 }
 
-func TestPreviewWithScrollbackKeepsSelectingOnClick(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	m.snap.Live = map[string]string{id: "sess"}
-	m.keys = &keySender{jobs: make(chan keyJob, 4)}
-	m.previewFor, m.previewMouse, m.previewHistory = id, true, 50
+func TestOnlyPreviewPressesAreForwarded(t *testing.T) {
+	l := trackingModel().layout()
+	tests := []struct {
+		name string
+		msg  tea.MouseMsg
+	}{
+		{"card", mousePress(1, l.bodyY+columnHeaderHeight+1)},
+		{"resize edge", mousePress(5, l.previewY)},
+		{"horizontal wheel", mouse(tea.MouseActionPress, tea.MouseButtonWheelLeft, 5, l.previewY+2)},
+		{"no button", mouse(tea.MouseActionPress, tea.MouseButtonNone, 5, l.previewY+2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _ := update(trackingModel(), tt.msg)
+			if job, ok := sentJob(m); ok {
+				t.Errorf("sent %+v", job)
+			}
+		})
+	}
+}
 
-	m.Update(mousePress(10, m.layout().previewY+3))
-	if job, ok := sentJob(m); ok {
-		t.Fatalf("sent %+v while the preview shows scrollback", job)
+func TestFirstPreviewClickEntersLiveModeWithoutForwarding(t *testing.T) {
+	m := trackingModel()
+	m.mode = modeBoard
+
+	m, _ = update(m, mousePress(5, m.layout().previewY+2))
+	if job, ok := sentJob(m); ok || m.mode != modeLive {
+		t.Errorf("mode %v, sent %+v", m.mode, job)
+	}
+}
+
+func TestForwardedDragKeepsItsSessionAndStopsWhenLiveModeEnds(t *testing.T) {
+	l := trackingModel().layout()
+	m, _ := update(trackingModel(), mousePress(5, l.previewY+2))
+	sentJob(m)
+
+	m.mode = modeBoard
+	m, cmd := update(m, motion(tea.MouseButtonLeft, 6, l.previewY+2))
+	if job, ok := sentJob(m); ok || cmd != nil {
+		t.Errorf("motion after leaving live mode sent %+v", job)
+	}
+
+	m.snap.Live = map[string]string{"c0-t0": "other"}
+	m, _ = update(m, mouse(tea.MouseActionRelease, tea.MouseButtonLeft, 6, l.previewY+2))
+	if job, _ := sentJob(m); job.session != "sess" || job.literal != "\x1b[<0;6;2m" || m.drag.kind != dragNone {
+		t.Errorf("release job = %+v, drag %v", job, m.drag.kind)
 	}
 }

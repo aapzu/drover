@@ -251,11 +251,16 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, afterKey(m.captureAssistantCmd())
 }
 
-func (m Model) wheelAssistant(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 	if !m.assist.running() {
 		return m, nil
 	}
 	up := msg.Button == tea.MouseButtonWheelUp
+	if m.assist.mouse && m.assist.history == 0 {
+		x, y := l.assistantCell(msg)
+		m.keys.send(wheelJob(assistant.SessionName(m.eng.Root), up, x, y))
+		return m, nil
+	}
 	lines := -3
 	if up {
 		lines = 3

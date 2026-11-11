@@ -55,11 +55,10 @@ Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to
 resize, click the preview to type into the agent, and click the assistant
-panel to type into it. When the agent in a pane reads the mouse, clicks,
-drags and releases over that pane go to the agent, not drover; otherwise
-dragging over the live preview selects text and copies it. To select text
-anywhere else with the terminal's own selection (double and triple click
-included), hold Option on macOS or Shift elsewhere while dragging. Layout is saved in `ui.json` in the project's state
+panel to type into it. Dragging over the live preview selects text and
+copies it. To select text anywhere else with the terminal's own selection
+(double and triple click included), hold Option on macOS or Shift elsewhere
+while dragging. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
@@ -349,8 +348,8 @@ the session's own card, which moves to the `prFlow` opened column once the
 agent's turn ends. Every further PR gets its own card (unless `splitByPR` is
 off), so one session can ship several. The cards are marked `⧉ 1/3`, `⧉ 2/3`
 and so on, and the marker has the same color on every card of the group. `f`
-folds each column to one card per session (`⧉ 1/3 +2` stands for two more in
-that column), so a pile of merged PRs doesn't fill Done.
+folds the current column to one card per session (`⧉ 1/3 +2` stands for two
+more in that column), so a pile of merged PRs doesn't fill Done.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
   and the preview all reach the same agent from any of them.
@@ -410,6 +409,8 @@ board uses:
   board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
+- A PR closed without merging moves a card in `opened` to Done, if the board
+  has a Done column.
 - **released:** once the merge commit reaches `releaseBranch` on origin
   (default `master`, else `main`), a card in `merged` moves here.
 

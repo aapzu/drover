@@ -1,6 +1,10 @@
 package ui
 
-import "github.com/aapzu/drover/internal/store"
+import (
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/aapzu/drover/internal/store"
+)
 
 const (
 	headerHeight       = 1
@@ -134,6 +138,16 @@ type hit struct {
 	col  int
 	box  colBox
 	task *store.Task
+}
+
+// previewCell is the 1-based pane cell under the pointer, clamped to the preview.
+func (l layout) previewCell(msg tea.MouseMsg) (x, y int) {
+	return clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+}
+
+// assistantCell is the 1-based pane cell under the pointer, clamped to the assistant panel.
+func (l layout) assistantCell(msg tea.MouseMsg) (x, y int) {
+	return clamp(msg.X-l.boardW, 1, l.assistantW-2), clamp(msg.Y-l.bodyY, 1, l.bodyH-2)
 }
 
 func (l layout) hitTest(m Model, x, y int) hit {

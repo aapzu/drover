@@ -740,7 +740,7 @@ func (m Model) renderHelp() string {
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
-		{"f", "show one card per session or all of them"},
+		{"f", "fold or unfold this column to one card per session"},
 		{"t", "show or hide column settings under column names"},
 		{"o", "change settings in drover.local.json and drover.json"},
 		{"O", "change column settings in drover.local.json and drover.json"},
@@ -766,6 +766,7 @@ func (m Model) renderHelp() string {
 	}) + "\n\n" + section("Live mode", [][2]string{
 		{"ctrl+q", "back to board"},
 		{"mouse wheel", "scroll the agent's history"},
+		{"click", "goes to agents that track the mouse"},
 		{"typing", "jumps back to the bottom"},
 		{"anything else", "goes to the agent"},
 	})

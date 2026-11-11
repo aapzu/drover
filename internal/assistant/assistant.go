@@ -364,13 +364,7 @@ func moveOffer(b *config.Board) string {
 	if !ok {
 		return ""
 	}
-	var done config.Column
-	for _, c := range b.Columns {
-		if c.IsDone() {
-			done = c
-			break
-		}
-	}
+	done := b.DoneColumn()
 	if done.Name == "" {
 		return ""
 	}

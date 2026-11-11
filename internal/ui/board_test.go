@@ -109,7 +109,7 @@ func TestBoardKeysTogglePrefsAndSaveThem(t *testing.T) {
 		{"p", func(p prefs) any { return p.HidePreview }, true},
 		{"B", func(p prefs) any { return p.ShowHidden }, true},
 		{"v", func(p prefs) any { return p.ShowArchived }, true},
-		{"f", func(p prefs) any { return p.CollapseGroups }, true},
+		{"f", func(p prefs) any { return len(p.CollapsedColumns) }, 1},
 		{"t", func(p prefs) any { return p.ShowSettings }, true},
 		{"z", func(p prefs) any { return p.Density }, densityCompact},
 		{"M", func(p prefs) any { return p.NoMouse }, true},

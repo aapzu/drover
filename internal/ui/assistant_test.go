@@ -1054,34 +1054,59 @@ func TestDroppingACardOnAColumnStillMovesItBesideThePanel(t *testing.T) {
 	}
 }
 
-func TestPanelForwardsClicksAndDragsToClaudeThatTracksMouse(t *testing.T) {
+func TestFocusedPanelClicksAndDragsGoToClaudeThatTracksMouse(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.session, m.assist.mouse, m.assist.history = sessionRunning, true, 0
+	l := m.layout()
+	x, y := l.boardW+5, l.bodyY+4
+	step := func(msg tea.MouseMsg, want string) {
+		t.Helper()
+		m, _ = update(m, msg)
+		if job, ok := sentJob(m); !ok || job.literal != want {
+			t.Fatalf("sent %+v, %v, want %q", job, ok, want)
+		}
+	}
+
+	step(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}, "\x1b[<0;5;4M")
+	step(tea.MouseMsg{X: l.boardW - 20, Y: y + 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}, "\x1b[<32;1;5M")
+	step(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}, "\x1b[<0;5;4m")
+	step(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonRight}, "\x1b[<2;5;4M")
+	if m.drag.kind != dragForward {
+		t.Errorf("drag %v, want the press to start a forwarded drag", m.drag.kind)
+	}
+}
+
+func TestFirstPanelClickFocusesWithoutForwarding(t *testing.T) {
 	fakePanel(t)
 	m := open(t, assistantModel(t))
 	m.assist.session, m.assist.mouse, m.assist.history = sessionRunning, true, 0
 	m.mode = modeBoard
 	l := m.layout()
-	x, y := l.boardW+5, l.bodyY+4
 
-	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<0;5;4M" {
-		t.Errorf("press sent %+v, %v", job, ok)
+	next, _ := update(m, tea.MouseMsg{X: l.boardW + 5, Y: l.bodyY + 4, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(next); ok || next.mode != modeAssistant {
+		t.Errorf("sent %+v, mode %v: the first click should only focus the panel", job, next.mode)
 	}
-	if m.mode != modeAssistant {
-		t.Errorf("mode %v: a click still focuses the panel", m.mode)
-	}
-	m, _ = update(m, tea.MouseMsg{X: l.boardW - 20, Y: y + 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
-	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<32;1;5M" {
-		t.Errorf("drag out of the panel sent %+v, %v", job, ok)
-	}
-	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
-	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<0;5;4m" {
-		t.Errorf("release sent %+v, %v", job, ok)
-	}
+}
 
-	m.assist.mouse = false
-	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
-	if job, ok := sentJob(m); ok {
-		t.Errorf("a claude that ignores the mouse got %+v", job)
+func TestPanelClicksStayDroversWhenClaudeIgnoresTheMouse(t *testing.T) {
+	fakePanel(t)
+	l := open(t, assistantModel(t)).layout()
+	cases := map[string]func(*Model){
+		"claude ignores the mouse": func(m *Model) { m.assist.mouse = false },
+		"panel has scrollback":     func(m *Model) { m.assist.history = 50 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := open(t, assistantModel(t))
+			m.assist.session, m.assist.mouse, m.assist.history = sessionRunning, true, 0
+			mutate(&m)
+			next, _ := update(m, tea.MouseMsg{X: l.boardW + 5, Y: l.bodyY + 4, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+			if job, ok := sentJob(next); ok {
+				t.Errorf("sent %+v", job)
+			}
+		})
 	}
 }
 
