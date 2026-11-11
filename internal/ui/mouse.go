@@ -44,6 +44,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	l := m.layout()
+	if name, ok := m.forwardTarget(msg, l); ok {
+		return m.forwardMouse(name, msg, l)
+	}
 	switch {
 	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
 		h := l.hitTest(m, msg.X, msg.Y)
@@ -52,7 +55,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
 			if name, ok := m.wheelTarget(); ok {
-				x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+				x, y := l.previewCell(msg)
 				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
 				cmd := m.requestPreview(true)
 				return m, cmd
@@ -71,9 +74,6 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			key.Type = tea.KeyUp
 		}
 		return m.updateBoard(key)
-
-	case m.forwardsMouse(msg, l):
-		return m.forwardMouse(msg, l)
 
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		h := l.hitTest(m, msg.X, msg.Y)
@@ -162,38 +162,35 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// forwardsMouse reports whether msg belongs to the agent: a press inside the
-// live preview, or the motion and release that follow such a press.
-func (m Model) forwardsMouse(msg tea.MouseMsg, l layout) bool {
-	switch msg.Action {
-	case tea.MouseActionPress:
-		switch msg.Button {
-		case tea.MouseButtonLeft, tea.MouseButtonMiddle, tea.MouseButtonRight:
-			_, ok := m.clickTarget()
-			return ok && l.hitTest(m, msg.X, msg.Y).kind == hitPreview
-		}
-		return false
-	case tea.MouseActionMotion, tea.MouseActionRelease:
-		return m.drag.kind == dragForward
+// forwardTarget is the session msg belongs to: a press inside the live
+// preview, or the motion and release that follow such a press.
+func (m Model) forwardTarget(msg tea.MouseMsg, l layout) (string, bool) {
+	if msg.Action != tea.MouseActionPress {
+		return m.drag.session, m.drag.kind == dragForward
 	}
-	return false
+	switch msg.Button {
+	case tea.MouseButtonLeft, tea.MouseButtonMiddle, tea.MouseButtonRight:
+		name, ok := m.clickTarget()
+		return name, ok && l.hitTest(m, msg.X, msg.Y).kind == hitPreview
+	}
+	return "", false
 }
 
-func (m Model) forwardMouse(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
-	if msg.Action == tea.MouseActionPress {
-		name, _ := m.clickTarget()
+func (m Model) forwardMouse(name string, msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
+	x, y := l.previewCell(msg)
+	switch msg.Action {
+	case tea.MouseActionPress:
 		m.drag = dragState{kind: dragForward, session: name}
 		m.sel = selection{}
-	}
-	name := m.drag.session
-	if msg.Action == tea.MouseActionRelease {
+	case tea.MouseActionMotion:
+		if m.mode == modeLive {
+			m.keys.send(mouseJob(name, msg, x, y))
+		}
+		return m, nil
+	case tea.MouseActionRelease:
 		m.drag = dragState{}
 	}
-	x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
 	m.keys.send(mouseJob(name, msg, x, y))
-	if msg.Action == tea.MouseActionMotion {
-		return m, nil
-	}
 	cmd := m.requestPreview(true)
 	return m, cmd
 }
