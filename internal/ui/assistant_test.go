@@ -1053,3 +1053,46 @@ func TestDroppingACardOnAColumnStillMovesItBesideThePanel(t *testing.T) {
 		}
 	}
 }
+
+func TestPanelForwardsClicksAndDragsToClaudeThatTracksMouse(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.session, m.assist.mouse, m.assist.history = sessionRunning, true, 0
+	m.mode = modeBoard
+	l := m.layout()
+	x, y := l.boardW+5, l.bodyY+4
+
+	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<0;5;4M" {
+		t.Errorf("press sent %+v, %v", job, ok)
+	}
+	if m.mode != modeAssistant {
+		t.Errorf("mode %v: a click still focuses the panel", m.mode)
+	}
+	m, _ = update(m, tea.MouseMsg{X: l.boardW - 20, Y: y + 1, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<32;1;5M" {
+		t.Errorf("drag out of the panel sent %+v, %v", job, ok)
+	}
+	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(m); !ok || job.literal != "\x1b[<0;5;4m" {
+		t.Errorf("release sent %+v, %v", job, ok)
+	}
+
+	m.assist.mouse = false
+	m, _ = update(m, tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(m); ok {
+		t.Errorf("a claude that ignores the mouse got %+v", job)
+	}
+}
+
+func TestPanelEdgeStillResizesWhenClaudeTracksMouse(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.assist.session, m.assist.mouse, m.assist.history = sessionRunning, true, 0
+	l := m.layout()
+
+	next, _ := update(m, tea.MouseMsg{X: l.boardW, Y: l.bodyY + 4, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if job, ok := sentJob(next); ok || next.drag.kind != dragAssistant {
+		t.Errorf("sent %+v, drag %v: the edge should start a resize", job, next.drag.kind)
+	}
+}

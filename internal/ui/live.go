@@ -1,11 +1,11 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -84,12 +84,26 @@ func afterKey(capture tea.Cmd) tea.Cmd {
 	}
 }
 
-func wheelJob(session string, up bool, x, y int) keyJob {
-	code := 65
-	if up {
-		code = 64
+// mouseJob is the SGR report for msg, with x and y 1-based. ok is false for
+// buttons terminals have no report for.
+func mouseJob(session string, msg tea.MouseMsg, x, y int) (job keyJob, ok bool) {
+	var button ansi.MouseButton
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		button = ansi.MouseLeft
+	case tea.MouseButtonMiddle:
+		button = ansi.MouseMiddle
+	case tea.MouseButtonRight:
+		button = ansi.MouseRight
+	case tea.MouseButtonWheelUp:
+		button = ansi.MouseWheelUp
+	case tea.MouseButtonWheelDown:
+		button = ansi.MouseWheelDown
+	default:
+		return keyJob{}, false
 	}
-	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)}
+	code := ansi.EncodeMouseButton(button, msg.Action == tea.MouseActionMotion, msg.Shift, msg.Alt, msg.Ctrl)
+	return keyJob{session: session, literal: ansi.MouseSgr(code, x-1, y-1, msg.Action == tea.MouseActionRelease)}, true
 }
 
 type keyJob struct {

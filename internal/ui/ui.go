@@ -760,8 +760,7 @@ func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// wheelTarget is the session that should get wheel events: its agent reads
-// SGR mouse reports and tmux has no history for the preview to scroll.
+// wheelTarget is the session that should get mouse events over the preview.
 // previewFor guards against flags left over from the previously selected task.
 func (m Model) wheelTarget() (string, bool) {
 	t := m.current()
