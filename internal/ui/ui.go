@@ -760,15 +760,32 @@ func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// wheelTarget is the session that should get wheel events: its agent reads
-// SGR mouse reports and tmux has no history for the preview to scroll.
-// previewFor guards against flags left over from the previously selected task.
-func (m Model) wheelTarget() (string, bool) {
+// mouseSession is the selected task's session when its agent reads SGR mouse
+// reports. previewFor guards against flags left over from the previously
+// selected task.
+func (m Model) mouseSession() (string, bool) {
 	t := m.current()
-	if t == nil || m.previewFor != t.ID || !m.previewMouse || m.previewHistory != 0 {
+	if t == nil || m.previewFor != t.ID || !m.previewMouse {
 		return "", false
 	}
 	return m.liveSession(t.ID)
+}
+
+// wheelTarget is the session that should get wheel events: tmux has no
+// history for the preview to scroll.
+func (m Model) wheelTarget() (string, bool) {
+	if m.previewHistory != 0 {
+		return "", false
+	}
+	return m.mouseSession()
+}
+
+// clickTarget is the session that should get clicks.
+func (m Model) clickTarget() (string, bool) {
+	if m.mode != modeLive || m.previewScroll != 0 {
+		return "", false
+	}
+	return m.mouseSession()
 }
 
 // liveSession reads the snapshot instead of the engine, which Tick can keep
