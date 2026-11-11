@@ -312,7 +312,7 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 }
 
 // columnCards is the cards shown in column i, and how many cards each one
-// stands for beyond itself when CollapseGroups folds a session's cards into one.
+// stands for beyond itself when the column is folded to one card per session.
 // Orphans are tasks whose column no longer exists in drover.json; they are
 // shown in the first column so they can be moved somewhere valid.
 func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
@@ -328,7 +328,7 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	if m.filter != "" {
 		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, m.filter) })
 	}
-	if m.prefs.CollapseGroups {
+	if m.prefs.CollapsedColumns[col.ID] {
 		return m.collapseGroups(tasks, m.selected[col.ID])
 	}
 	return tasks, nil
@@ -1188,7 +1188,15 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()
 	case "f":
-		m.prefs.CollapseGroups = !m.prefs.CollapseGroups
+		id := m.columns()[m.col].ID
+		if m.prefs.CollapsedColumns[id] {
+			delete(m.prefs.CollapsedColumns, id)
+		} else {
+			if m.prefs.CollapsedColumns == nil {
+				m.prefs.CollapsedColumns = map[string]bool{}
+			}
+			m.prefs.CollapsedColumns[id] = true
+		}
 		m.savePrefs()
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings

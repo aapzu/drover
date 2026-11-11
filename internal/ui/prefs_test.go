@@ -14,16 +14,16 @@ import (
 func TestPrefsRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	want := prefs{
-		PreviewHeight:  14,
-		ColumnWidths:   map[string]int{"planning": 30, "done": 20},
-		Density:        densityTall,
-		HidePreview:    true,
-		NoMouse:        true,
-		ShowArchived:   true,
-		CollapseGroups: true,
-		ShowHidden:     true,
-		ShowSettings:   true,
-		AssistantWidth: 50,
+		PreviewHeight:    14,
+		ColumnWidths:     map[string]int{"planning": 30, "done": 20},
+		Density:          densityTall,
+		HidePreview:      true,
+		NoMouse:          true,
+		ShowArchived:     true,
+		CollapsedColumns: map[string]bool{"done": true},
+		ShowHidden:       true,
+		ShowSettings:     true,
+		AssistantWidth:   50,
 	}
 	if err := want.save(root); err != nil {
 		t.Fatal(err)
