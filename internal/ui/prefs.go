@@ -29,13 +29,12 @@ func (d density) cardHeight() int {
 // prefs is the board layout, kept per repo in the store's ui.json.
 type prefs struct {
 	// PreviewHeight is in rows; 0 means the default share of the screen.
-	PreviewHeight int            `json:"previewHeight,omitempty"`
-	ColumnWidths  map[string]int `json:"columnWidths,omitempty"`
-	Density       density        `json:"density,omitempty"`
-	HidePreview   bool           `json:"hidePreview,omitempty"`
-	NoMouse       bool           `json:"noMouse,omitempty"`
-	ShowArchived  bool           `json:"showArchived,omitempty"`
-	// CollapsedColumns holds the IDs of columns folded to one card per session.
+	PreviewHeight    int             `json:"previewHeight,omitempty"`
+	ColumnWidths     map[string]int  `json:"columnWidths,omitempty"`
+	Density          density         `json:"density,omitempty"`
+	HidePreview      bool            `json:"hidePreview,omitempty"`
+	NoMouse          bool            `json:"noMouse,omitempty"`
+	ShowArchived     bool            `json:"showArchived,omitempty"`
 	CollapsedColumns map[string]bool `json:"collapsedColumns,omitempty"`
 	ShowHidden       bool            `json:"showHidden,omitempty"`
 	ShowSettings     bool            `json:"showSettings,omitempty"`

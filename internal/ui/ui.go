@@ -1188,7 +1188,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()
 	case "f":
-		id := m.columns()[m.col].ID
+		id := cols[m.col].ID
 		if m.prefs.CollapsedColumns[id] {
 			delete(m.prefs.CollapsedColumns, id)
 		} else {
