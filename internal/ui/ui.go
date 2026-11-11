@@ -771,6 +771,17 @@ func (m Model) wheelTarget() (string, bool) {
 	return m.liveSession(t.ID)
 }
 
+// clickTarget is the session that should get clicks: live mode, its agent
+// reads SGR mouse reports and the preview shows the live screen, so pane
+// cells line up with preview cells.
+func (m Model) clickTarget() (string, bool) {
+	t := m.current()
+	if m.mode != modeLive || t == nil || m.previewFor != t.ID || !m.previewMouse || m.previewScroll != 0 {
+		return "", false
+	}
+	return m.liveSession(t.ID)
+}
+
 // liveSession reads the snapshot instead of the engine, which Tick can keep
 // locked for long enough to freeze drawing.
 func (m Model) liveSession(id string) (string, bool) {

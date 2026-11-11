@@ -19,6 +19,7 @@ const (
 	dragPreview
 	dragAssistant
 	dragSelect
+	dragForward
 )
 
 type dragState struct {
@@ -32,6 +33,7 @@ type dragState struct {
 	startY   int
 	clickAt  time.Time
 	clickFor string
+	session  string
 }
 
 const doubleClick = 400 * time.Millisecond
@@ -69,6 +71,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			key.Type = tea.KeyUp
 		}
 		return m.updateBoard(key)
+
+	case m.forwardsMouse(msg, l):
+		return m.forwardMouse(msg, l)
 
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		h := l.hitTest(m, msg.X, msg.Y)
@@ -155,6 +160,42 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// forwardsMouse reports whether msg belongs to the agent: a press inside the
+// live preview, or the motion and release that follow such a press.
+func (m Model) forwardsMouse(msg tea.MouseMsg, l layout) bool {
+	switch msg.Action {
+	case tea.MouseActionPress:
+		switch msg.Button {
+		case tea.MouseButtonLeft, tea.MouseButtonMiddle, tea.MouseButtonRight:
+			_, ok := m.clickTarget()
+			return ok && l.hitTest(m, msg.X, msg.Y).kind == hitPreview
+		}
+		return false
+	case tea.MouseActionMotion, tea.MouseActionRelease:
+		return m.drag.kind == dragForward
+	}
+	return false
+}
+
+func (m Model) forwardMouse(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
+	if msg.Action == tea.MouseActionPress {
+		name, _ := m.clickTarget()
+		m.drag = dragState{kind: dragForward, session: name}
+		m.sel = selection{}
+	}
+	name := m.drag.session
+	if msg.Action == tea.MouseActionRelease {
+		m.drag = dragState{}
+	}
+	x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+	m.keys.send(mouseJob(name, msg, x, y))
+	if msg.Action == tea.MouseActionMotion {
+		return m, nil
+	}
+	cmd := m.requestPreview(true)
+	return m, cmd
 }
 
 // extendSelection moves the selection's end to the cell under the pointer,

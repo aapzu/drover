@@ -382,3 +382,69 @@ func TestDropTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestLiveClicksGoToAgentThatTracksMouse(t *testing.T) {
+	setup := func() Model {
+		m := liveModel()
+		m.previewFor = m.current().ID
+		m.previewMouse = true
+		return m
+	}
+	l := setup().layout()
+	x, y := 5, l.previewY+3
+
+	m, cmd := update(setup(), mousePress(x, y))
+	job, ok := sentJob(m)
+	if !ok || job.session != "sess" || job.literal != fmt.Sprintf("\x1b[<0;%d;%dM", x, 3) {
+		t.Fatalf("press job = %+v, %v", job, ok)
+	}
+	if m.sel != (selection{}) || m.drag.kind != dragForward || cmd == nil {
+		t.Errorf("sel %+v drag %v cmd nil %v", m.sel, m.drag.kind, cmd == nil)
+	}
+
+	m, cmd = update(m, tea.MouseMsg{X: x + 2, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft})
+	job, _ = sentJob(m)
+	if job.literal != fmt.Sprintf("\x1b[<32;%d;%dM", x+2, 3) || cmd != nil {
+		t.Errorf("motion job = %+v, cmd nil %v", job, cmd == nil)
+	}
+
+	m, _ = update(m, mouse(tea.MouseActionRelease, tea.MouseButtonLeft, x+2, l.previewY+l.previewH+5))
+	job, _ = sentJob(m)
+	if job.literal != fmt.Sprintf("\x1b[<0;%d;%dm", x+2, l.previewH-2) || m.drag.kind != dragNone {
+		t.Errorf("release job = %+v, drag %v", job, m.drag.kind)
+	}
+
+	press := tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonRight, Ctrl: true, Shift: true}
+	m, _ = update(setup(), press)
+	if job, _ := sentJob(m); job.literal != fmt.Sprintf("\x1b[<22;%d;%dM", x, 3) {
+		t.Errorf("modifier job = %+v", job)
+	}
+}
+
+func TestLiveClicksSelectTextUnlessAgentTracksMouse(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*Model)
+	}{
+		{"agent ignores the mouse", func(m *Model) { m.previewMouse = false }},
+		{"preview is scrolled back", func(m *Model) { m.previewScroll = 3 }},
+		{"preview shows another task", func(m *Model) { m.previewFor = "other" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := liveModel()
+			m.previewFor = m.current().ID
+			m.previewMouse = true
+			tt.setup(&m)
+			l := m.layout()
+
+			m, _ = update(m, mousePress(5, l.previewY+1))
+			if job, ok := sentJob(m); ok {
+				t.Errorf("sent %+v", job)
+			}
+			if m.drag.kind == dragForward {
+				t.Error("started forwarding")
+			}
+		})
+	}
+}

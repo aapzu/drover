@@ -766,6 +766,7 @@ func (m Model) renderHelp() string {
 	}) + "\n\n" + section("Live mode", [][2]string{
 		{"ctrl+q", "back to board"},
 		{"mouse wheel", "scroll the agent's history"},
+		{"click", "goes to agents that track the mouse"},
 		{"typing", "jumps back to the bottom"},
 		{"anything else", "goes to the agent"},
 	})
