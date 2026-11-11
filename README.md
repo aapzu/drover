@@ -409,6 +409,8 @@ board uses:
   board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
+- A PR closed without merging moves a card in `opened` to Done, if the board
+  has a Done column.
 - **released:** once the merge commit reaches `releaseBranch` on origin
   (default `master`, else `main`), a card in `merged` moves here.
 

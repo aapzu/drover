@@ -34,6 +34,9 @@ func (e *Engine) pollPRs() []func() {
 		}
 		switch t.PR.State {
 		case "CLOSED":
+			if t.PR.MergeMovePending {
+				open = append(open, t.ID)
+			}
 		case "MERGED":
 			if t.PR.MergeMovePending || e.strandedMerged(t) {
 				open = append(open, t.ID)
@@ -368,9 +371,19 @@ func (e *Engine) prStep(card, owner *store.Task, prevState string, info gh.PR) p
 		}
 		pr.MergeMovePending = true
 		return prMove{to: to, retry: retry, onMoved: func() { pr.MergeMovePending = false }}
-	case info.State == "CLOSED" && prevState != "CLOSED":
-		card.AddLog(fmt.Sprintf("PR #%d closed without merging", pr.Number))
-		e.notify("#%d: PR #%d was closed", card.Number, pr.Number)
+	case info.State == "CLOSED" && (prevState != "CLOSED" || pr.MergeMovePending):
+		retry := prevState == "CLOSED"
+		if !retry {
+			card.AddLog(fmt.Sprintf("PR #%d closed without merging", pr.Number))
+			e.notify("#%d: PR #%d was closed", card.Number, pr.Number)
+		}
+		to := e.board.DoneColumn()
+		if to.ID == "" || (!retry && !e.inColumn(card, flow.Opened)) {
+			pr.MergeMovePending = false
+			return prMove{}
+		}
+		pr.MergeMovePending = true
+		return prMove{to: to, retry: retry, onMoved: func() { pr.MergeMovePending = false }}
 	case info.State == "OPEN" && at.After(pr.ChangesSeenAt):
 		pr.ChangesSeenAt = at
 		card.AddLog(fmt.Sprintf("Changes requested on PR #%d", pr.Number))
@@ -532,7 +545,7 @@ func (e *Engine) applyPRMove(card, owner *store.Task, step prMove) {
 	if step.onMoved != nil {
 		e.with(step.onMoved)
 	}
-	if step.to.IsDone() && !card.PR.IsReview() {
+	if step.to.IsDone() && !card.PR.IsReview() && card.PR.State != "CLOSED" {
 		e.notifyAllReleased(owner)
 	}
 }

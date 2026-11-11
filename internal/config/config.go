@@ -480,6 +480,16 @@ func (b *Board) PermissionMode(c Column) string {
 // FirstColumn is where new and imported cards land.
 func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
+// DoneColumn is the first column with the done role, or the zero Column.
+func (b *Board) DoneColumn() Column {
+	for _, c := range b.Columns {
+		if c.IsDone() {
+			return c
+		}
+	}
+	return Column{}
+}
+
 func Default() *Board {
 	return &Board{
 		ArchiveDoneAfter: "7d",
