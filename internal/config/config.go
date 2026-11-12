@@ -41,6 +41,7 @@ type Board struct {
 	Notifications         Notifications `json:"notifications"`
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
+	DisableMouse          bool          `json:"disableMouse,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -100,6 +101,9 @@ const (
 	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
 )
 
+const reReviewMessage = "Review PR #{{prNumber}} ({{prUrl}}) again. " +
+	"Look only at what changed since your last review, and list what is still open."
+
 // Proposes reports whether the agent presents review fixes before applying them.
 func (f *PRFlow) Proposes() bool {
 	if f == nil {
@@ -134,6 +138,7 @@ type Column struct {
 	ID             string      `json:"id"`
 	Name           string      `json:"name"`
 	Role           string      `json:"role,omitempty"`
+	Lane           string      `json:"lane,omitempty"`
 	Color          string      `json:"color,omitempty"`
 	AutoSpawn      bool        `json:"autoSpawn,omitempty"`
 	KeepAgent      bool        `json:"keepAgent,omitempty"`
@@ -167,6 +172,11 @@ type Automation struct {
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
 func (c Column) IsDone() bool { return c.Role == "done" }
+
+const LaneReview = "review"
+
+// InReviewLane reports whether the column belongs to the review lane.
+func (c Column) InReviewLane() bool { return c.Lane == LaneReview }
 
 // IsAgent columns run an agent for the cards in them.
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsDone() }
@@ -205,6 +215,14 @@ func Load(root string) (board *Board, found bool, err error) {
 
 // dropTodo removes columns with the "todo" role, which no longer exists, and
 // remembers their ids in LegacyTodo, plus "todo", the id the default board used.
+// ClaudeEnv is the environment drover adds to every claude session it starts.
+func (b *Board) ClaudeEnv() map[string]string {
+	if b != nil && b.DisableMouse {
+		return map[string]string{"CLAUDE_CODE_DISABLE_MOUSE": "1"}
+	}
+	return nil
+}
+
 func (b *Board) dropTodo() {
 	b.Columns = slices.DeleteFunc(b.Columns, func(c Column) bool {
 		if c.Role != "todo" {
@@ -272,6 +290,7 @@ func (b *Board) applyLocal(root string) error {
 		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
+		DisableMouse       *bool           `json:"disableMouse"`
 		Notifications      json.RawMessage `json:"notifications"`
 		Columns            []localColumn   `json:"columns"`
 	}
@@ -295,6 +314,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.SplitByPR != nil {
 		b.SplitByPR = *local.SplitByPR
+	}
+	if local.DisableMouse != nil {
+		b.DisableMouse = *local.DisableMouse
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -380,6 +402,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
 		}
 	}
+	if b.Columns[0].InReviewLane() {
+		return fmt.Errorf("%s: the first column must not be in the %s lane, since new cards land there", FileName, LaneReview)
+	}
 	seen := map[string]bool{}
 	for _, c := range b.Columns {
 		if c.ID == "" || c.Name == "" {
@@ -389,6 +414,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
 		}
 		seen[c.ID] = true
+		if c.Lane != "" && !c.InReviewLane() {
+			return fmt.Errorf("%s: column %s has unknown lane %q, only %q is supported", FileName, c.ID, c.Lane, LaneReview)
+		}
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
 			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
 		}
@@ -480,6 +508,16 @@ func (b *Board) PermissionMode(c Column) string {
 // FirstColumn is where new and imported cards land.
 func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
+// DoneColumn is the first column with the done role, or the zero Column.
+func (b *Board) DoneColumn() Column {
+	for _, c := range b.Columns {
+		if c.IsDone() {
+			return c
+		}
+	}
+	return Column{}
+}
+
 func Default() *Board {
 	return &Board{
 		ArchiveDoneAfter: "7d",
@@ -493,6 +531,16 @@ func Default() *Board {
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
+				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
+			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
+		},
+		ReviewFlow: &ReviewFlow{
+			Started:  "triage",
+			Reviewed: "waiting-on-author",
+			Updated:  "reviewing",
+			Done:     "done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",

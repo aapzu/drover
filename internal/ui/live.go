@@ -89,7 +89,42 @@ func wheelJob(session string, up bool, x, y int) keyJob {
 	if up {
 		code = 64
 	}
-	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%dM", code, x, y)}
+	return sgrMouseJob(session, code, x, y, true)
+}
+
+// mouseJob reports a click, release or drag to the agent as an SGR mouse
+// sequence at pane cell (x, y), 1-based.
+func mouseJob(session string, msg tea.MouseMsg, x, y int) keyJob {
+	code := 3
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		code = 0
+	case tea.MouseButtonMiddle:
+		code = 1
+	case tea.MouseButtonRight:
+		code = 2
+	}
+	if msg.Shift {
+		code |= 4
+	}
+	if msg.Alt {
+		code |= 8
+	}
+	if msg.Ctrl {
+		code |= 16
+	}
+	if msg.Action == tea.MouseActionMotion {
+		code |= 32
+	}
+	return sgrMouseJob(session, code, x, y, msg.Action != tea.MouseActionRelease)
+}
+
+func sgrMouseJob(session string, code, x, y int, down bool) keyJob {
+	final := "M"
+	if !down {
+		final = "m"
+	}
+	return keyJob{session: session, literal: fmt.Sprintf("\x1b[<%d;%d;%d%s", code, x, y, final)}
 }
 
 type keyJob struct {

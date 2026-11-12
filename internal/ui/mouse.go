@@ -19,6 +19,7 @@ const (
 	dragPreview
 	dragAssistant
 	dragSelect
+	dragForward
 )
 
 type dragState struct {
@@ -32,6 +33,7 @@ type dragState struct {
 	startY   int
 	clickAt  time.Time
 	clickFor string
+	target   mouseTarget
 }
 
 const doubleClick = 400 * time.Millisecond
@@ -42,6 +44,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	l := m.layout()
+	if target, ok := m.forwardTarget(msg, l); ok {
+		return m.forwardMouse(target, msg, l)
+	}
 	switch {
 	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
 		h := l.hitTest(m, msg.X, msg.Y)
@@ -50,7 +55,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
 			if name, ok := m.wheelTarget(); ok {
-				x, y := clamp(msg.X, 1, l.boardW-2), clamp(msg.Y-l.previewY, 1, l.previewH-2)
+				x, y := l.previewCell(msg)
 				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
 				cmd := m.requestPreview(true)
 				return m, cmd
@@ -155,6 +160,61 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// mouseTarget is a pane whose agent reads mouse reports.
+type mouseTarget struct {
+	session   string
+	assistant bool
+}
+
+// forwardTarget is the pane msg belongs to: a press inside the live preview
+// or the focused assistant panel, or the motion and release that follow such
+// a press.
+func (m Model) forwardTarget(msg tea.MouseMsg, l layout) (mouseTarget, bool) {
+	if msg.Action != tea.MouseActionPress {
+		return m.drag.target, m.drag.kind == dragForward
+	}
+	switch msg.Button {
+	case tea.MouseButtonLeft, tea.MouseButtonMiddle, tea.MouseButtonRight:
+		preview, previewOK := m.clickTarget()
+		assistant, assistantOK := m.assistantClickTarget()
+		if !previewOK && !assistantOK {
+			return mouseTarget{}, false
+		}
+		switch l.hitTest(m, msg.X, msg.Y).kind {
+		case hitPreview:
+			return mouseTarget{session: preview}, previewOK
+		case hitAssistant:
+			return mouseTarget{session: assistant, assistant: true}, assistantOK
+		}
+	}
+	return mouseTarget{}, false
+}
+
+func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
+	x, y := l.previewCell(msg)
+	focused := m.mode == modeLive
+	refresh := func() tea.Cmd { return m.requestPreview(true) }
+	if t.assistant {
+		x, y = l.assistantCell(msg)
+		focused = m.mode == modeAssistant
+		refresh = func() tea.Cmd { return afterKey(m.captureAssistantCmd()) }
+	}
+	switch msg.Action {
+	case tea.MouseActionPress:
+		m.drag = dragState{kind: dragForward, target: t}
+		m.sel = selection{}
+	case tea.MouseActionMotion:
+		if focused {
+			m.keys.send(mouseJob(t.session, msg, x, y))
+		}
+		return m, nil
+	case tea.MouseActionRelease:
+		m.drag = dragState{}
+	}
+	m.keys.send(mouseJob(t.session, msg, x, y))
+	return m, refresh()
 }
 
 // extendSelection moves the selection's end to the cell under the pointer,

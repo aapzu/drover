@@ -27,6 +27,7 @@ if [ "$1" = "-p" ]; then
 fi
 settings=""; sid=""; prompt=""
 for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_LOG"
+echo "mouse=$CLAUDE_CODE_DISABLE_MOUSE" >> "$FAKE_LOG"
 echo "---" >> "$FAKE_LOG"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -275,6 +276,39 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 	}
 	if !strings.Contains(typed, "typed:/code-review main") {
 		t.Errorf("review message not typed into the agent:\n%s", typed)
+	}
+}
+
+func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Run(fmt.Sprint(on), func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_DISABLE_MOUSE", "")
+			root, log := setupProject(t)
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(`{"disableMouse":%t,"columns":[
+			  {"id":"backlog","name":"Backlog"},
+			  {"id":"exec","name":"Executing","autoSpawn":true},
+			  {"id":"done","name":"Done","role":"done"}]}`, on)), 0o644)
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+
+			task := e.CreateTask("Fix it", "")
+			if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			want := "mouse=\n"
+			if on {
+				want = "mouse=1\n"
+			}
+			waitForAll(t, e, "the agent to log its env", func([]*store.Task) bool {
+				return strings.Contains(readFile(log), "mouse=")
+			})
+			if got := readFile(log); !strings.Contains(got, want) {
+				t.Errorf("launch env missing %q:\n%s", want, got)
+			}
+		})
 	}
 }
 
@@ -1570,7 +1604,11 @@ func newMergedRig(t *testing.T, board string) *mergedRig {
 }
 
 func (r *mergedRig) holdMerged(t *testing.T) *store.Task {
-	r.pr("MERGED")
+	return r.hold(t, "MERGED")
+}
+
+func (r *mergedRig) hold(t *testing.T, state string) *store.Task {
+	r.pr(state)
 	waitForAll(t, r.e, "the blocked move to be logged", func(tasks []*store.Task) bool {
 		return hasLog(tasks[0], "Moving to Done failed")
 	})
@@ -1677,6 +1715,58 @@ func TestMergedPRWithoutMergedColumnIsNotRetried(t *testing.T) {
 	waitForAll(t, r.e, "the merge to be seen", func(tasks []*store.Task) bool { return tasks[0].PR.State == "MERGED" })
 	if c := r.e.Snapshot().Tasks[0]; c.ColumnID != "review" || c.PR.MergeMovePending {
 		t.Fatalf("a merge with nowhere to go should leave the card alone: %s %+v", c.ColumnID, c.PR)
+	}
+}
+
+func TestClosedPRMovesCardToDoneOnceUnblocked(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	c := r.hold(t, "CLOSED")
+	if c.ColumnID != "review" || !c.PR.MergeMovePending {
+		t.Fatalf("a live external session should hold the closed card in review: %s %+v", c.ColumnID, c.PR)
+	}
+	if !hasLog(c, "closed without merging") {
+		t.Error("the close wasn't logged")
+	}
+	r.release()
+	waitForAll(t, r.e, "the closed card to reach done", func(tasks []*store.Task) bool {
+		return tasks[0].ColumnID == "done" && !tasks[0].PR.MergeMovePending
+	})
+}
+
+func TestMovingAClosedCardByHandStopsTheRetry(t *testing.T) {
+	r := newMergedRig(t, mergedBoard)
+	r.hold(t, "CLOSED")
+	if err := r.e.Move(r.task.ID, "parked", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r.release()
+	polled := r.polls()
+	time.Sleep(3 * r.e.PRPollInterval)
+	if c := r.e.Snapshot().Tasks[0]; c.ColumnID != "parked" || c.PR.MergeMovePending {
+		t.Fatalf("the card you moved was pulled back or is still pending: %s %+v", c.ColumnID, c.PR)
+	}
+	if after := r.polls(); after != polled {
+		t.Errorf("the closed PR was polled %d more times after you moved the card", after-polled)
+	}
+}
+
+func TestClosedPRLeavesCardAloneWithoutADestination(t *testing.T) {
+	for name, change := range map[string]func(*config.Board){
+		"card outside the opened column": func(b *config.Board) { b.PRFlow.Opened = "parked" },
+		"no done column":                 func(b *config.Board) { b.Columns[len(b.Columns)-1].Role = "" },
+		"no prFlow":                      func(b *config.Board) { b.PRFlow = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newMergedRig(t, mergedBoard)
+			r.e.with(func() {
+				change(r.e.board)
+				card := r.e.find(r.task.ID)
+				step := r.e.prStep(card, card, "OPEN", gh.PR{State: "CLOSED"})
+				if step.to.ID != "" || card.PR.MergeMovePending {
+					t.Errorf("a close with nowhere to go moved the card to %q, pending %v", step.to.ID, card.PR.MergeMovePending)
+				}
+			})
+		})
 	}
 }
 

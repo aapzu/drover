@@ -235,7 +235,7 @@ func launch(root, exe string, board *config.Board) error {
 		}
 	}
 	args := append(argv(exe, root, id, resume, systemPrompt(exe, root, board)), "--permission-mode", "dontAsk")
-	return newSession(SessionName(root), root, append([]string{"claude"}, args...), nil)
+	return newSession(SessionName(root), root, append([]string{"claude"}, args...), board.ClaudeEnv())
 }
 
 func Restart(root, exe string, board *config.Board) error {
@@ -418,13 +418,7 @@ func moveOffer(b *config.Board) string {
 	if !ok {
 		return ""
 	}
-	var done config.Column
-	for _, c := range b.Columns {
-		if c.IsDone() {
-			done = c
-			break
-		}
-	}
+	done := b.DoneColumn()
 	if done.Name == "" {
 		return ""
 	}

@@ -121,6 +121,7 @@ Each column takes these fields:
 | --- | --- |
 | `id` | Unique. Used in `drover.json` targets such as `prFlow` and `planExitTarget`. |
 | `name` | Shown on the board. Targets and the CLI also accept it, case-insensitively. |
+| `lane` | `review` puts the column in the [review lane](#the-review-lane). Not allowed on the first column. |
 | `role` | `done`. Leave it out for other columns. A `todo` role from older versions is dropped when the board loads, and its cards move to the first column. |
 | `color` | Header color, such as `"#3b82f6"`. |
 | `autoSpawn` | Makes an agent column. |
@@ -160,6 +161,12 @@ open, and to Done once it merges:
 | Waiting for me | Agent |
 | In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
+| Reviewing | Agent, in the review lane, at `high` effort; on entry it asks for a re-review of the new commits |
+| Triage findings | Agent, in the review lane |
+| Waiting on author | Plain, in the review lane; the agent is suspended |
+
+The last three are the [review lane](#the-review-lane) and come with a
+`reviewFlow` that moves the cards of PRs you review through them.
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, or hands the work back for you to review, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. A custom board gets this row by default when its `executing` column has no `onTurnEnd` and the board has a column with id or name `waiting-for-me`, `Waiting for me` or `waiting`; set `"onTurnEnd": []` to turn it off.
 
@@ -253,7 +260,8 @@ These settings work in `drover.json` and, for you alone, in
   "maxConcurrent": 8,
   "idleTimeoutMinutes": 0,
   "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 },
-  "autoName": true
+  "autoName": true,
+  "disableMouse": false
 }
 ```
 
@@ -272,6 +280,9 @@ These settings work in `drover.json` and, for you alone, in
 - **`autoName`** titles a new session's card with a short summary of your
   first message, written with `claude -p --model haiku`. A title you edit is
   never replaced.
+- **`disableMouse`** (default `false`) starts agents and the assistant with
+  `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
+  your terminal. It applies to sessions started or resumed after you change it.
 
 ## Automations
 
@@ -348,8 +359,8 @@ the session's own card, which moves to the `prFlow` opened column once the
 agent's turn ends. Every further PR gets its own card (unless `splitByPR` is
 off), so one session can ship several. The cards are marked `⧉ 1/3`, `⧉ 2/3`
 and so on, and the marker has the same color on every card of the group. `f`
-folds each column to one card per session (`⧉ 1/3 +2` stands for two more in
-that column), so a pile of merged PRs doesn't fill Done.
+folds the current column to one card per session (`⧉ 1/3 +2` stands for two
+more in that column), so a pile of merged PRs doesn't fill Done.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
   and the preview all reach the same agent from any of them.
@@ -409,6 +420,8 @@ board uses:
   board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
+- A PR closed without merging moves a card in `opened` to Done, if the board
+  has a Done column.
 - **released:** once the merge commit reaches `releaseBranch` on origin
   (default `master`, else `main`), a card in `merged` moves here.
 
@@ -459,6 +472,22 @@ same column targets as `prFlow`:
 
 Your own review is never sent to the agent as feedback to address, and review
 cards don't follow a PR to release.
+
+### The review lane
+
+Reviewing is a loop that waits on someone else, so the default board keeps it in
+a lane of its own: a second row of columns below the main ones. Give a column
+`"lane": "review"` to put it there; the first column can't be in it. The lane
+shows while it holds cards. `R` hides it or shows it again and remembers the
+choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
+from Done into the lane, and skip it while it is hidden. `H` and `L` move a
+card within its lane only; use `m` to move it between them.
+
+The default lane is Reviewing, Triage findings and Waiting on author, with a
+`reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
+author, `updated` back to Reviewing when the author pushes, and `done` to Done. A board with a
+`drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
+get it, or press `W` to write out the default board.
 
 ## Importing Claude Code agents
 

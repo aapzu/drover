@@ -88,6 +88,23 @@ func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
 	}
 }
 
+func TestConfigDisableMouseToggleSavesToTheLocalFile(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	if m.snap.Board.DisableMouse {
+		t.Fatal("disableMouse is on by default")
+	}
+	m = selectOption(t, m, "Disable mouse in agents")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	if !m.snap.Board.DisableMouse {
+		t.Error("toggle didn't change the running board")
+	}
+	if !config.Sets(root, config.Local, []string{"disableMouse"}) {
+		t.Error("toggle wasn't saved to drover.local.json")
+	}
+}
+
 func TestConfigNumberRejectsText(t *testing.T) {
 	root := t.TempDir()
 	m := configModel(t, root)
@@ -241,7 +258,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 	board := config.Default()
 	board.DefaultBaseBranch, board.DefaultPermissionMode, board.DefaultModel = "main", "auto", "opus"
 	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
-	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked = 4, 5, true
+	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked, board.DisableMouse = 4, 5, true, true
 	data, err := json.Marshal(board)
 	if err != nil {
 		t.Fatal(err)

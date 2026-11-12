@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gitx"
@@ -234,6 +235,74 @@ func (m *Model) setFlash(s string) {
 
 func (m Model) columns() []config.Column { return m.snap.Board.Columns }
 
+// hasReviewLane reports whether the board has columns in the review lane.
+func (m Model) hasReviewLane() bool {
+	return slices.ContainsFunc(m.columns(), config.Column.InReviewLane)
+}
+
+// reviewLaneCards counts the cards in the review lane's columns, not counting
+// archived or hidden ones.
+func (m Model) reviewLaneCards() int {
+	n := 0
+	for _, t := range m.snap.Tasks {
+		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() && !m.offBoard(t, m.hidesArchived(col.ID)) {
+			n++
+		}
+	}
+	return n
+}
+
+// reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
+// pref, and with none set, while the lane holds cards.
+func (m Model) reviewLaneShown() bool {
+	if shown := m.prefs.ReviewLane; shown != nil {
+		return *shown && m.hasReviewLane()
+	}
+	return m.reviewLaneCards() > 0
+}
+
+// lanes is the indexes of the columns on each row of the board: the main
+// columns, then the review lane's while it is shown.
+func (m Model) lanes() [][]int {
+	var main, review []int
+	for i, c := range m.columns() {
+		if c.InReviewLane() {
+			review = append(review, i)
+		} else {
+			main = append(main, i)
+		}
+	}
+	if len(review) == 0 || !m.reviewLaneShown() {
+		return [][]int{main}
+	}
+	return [][]int{main, review}
+}
+
+// visibleColumn reports whether the board draws column i.
+func (m Model) visibleColumn(i int) bool {
+	return !m.columns()[i].InReviewLane() || m.reviewLaneShown()
+}
+
+// stepColumn is the nearest column from i in direction dir (-1 or 1) that the
+// board draws, or i when there is none.
+func (m Model) stepColumn(i, dir int) int {
+	for j := i + dir; j >= 0 && j < len(m.columns()); j += dir {
+		if m.visibleColumn(j) {
+			return j
+		}
+	}
+	return i
+}
+
+// shownColumn is col if the board draws it, else the nearest one before it.
+func (m Model) shownColumn(col int) int {
+	col = clamp(col, 0, len(m.columns())-1)
+	for col > 0 && !m.visibleColumn(col) {
+		col--
+	}
+	return col
+}
+
 func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
 	hides := m.hidesArchived(colID)
@@ -312,7 +381,7 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 }
 
 // columnCards is the cards shown in column i, and how many cards each one
-// stands for beyond itself when CollapseGroups folds a session's cards into one.
+// stands for beyond itself when the column is folded to one card per session.
 // Orphans are tasks whose column no longer exists in drover.json; they are
 // shown in the first column so they can be moved somewhere valid.
 func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
@@ -328,7 +397,7 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	if m.filter != "" {
 		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, m.filter) })
 	}
-	if m.prefs.CollapseGroups {
+	if m.prefs.CollapsedColumns[col.ID] {
 		return m.collapseGroups(tasks, m.selected[col.ID])
 	}
 	return tasks, nil
@@ -425,7 +494,7 @@ func (m *Model) selectTask(t *store.Task) {
 	}
 	for i, c := range m.columns() {
 		if c.ID == m.columnOf(t) {
-			m.col = i
+			m.col = m.shownColumn(i)
 			m.selected[c.ID] = t.ID
 		}
 	}
@@ -681,9 +750,7 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 		curID, curCol = cur.ID, m.columnOf(cur)
 	}
 	m.snap = snap
-	if m.col >= len(m.columns()) {
-		m.col = len(m.columns()) - 1
-	}
+	m.col = m.shownColumn(m.col)
 	m.moveSel = min(m.moveSel, len(m.moveColumns())-1)
 	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
 		m.selectTask(t)
@@ -760,15 +827,41 @@ func (m Model) scrollPreview(lines int) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// wheelTarget is the session that should get wheel events: its agent reads
-// SGR mouse reports and tmux has no history for the preview to scroll.
-// previewFor guards against flags left over from the previously selected task.
-func (m Model) wheelTarget() (string, bool) {
+// mouseSession is the selected task's session when its agent reads SGR mouse
+// reports. previewFor guards against flags left over from the previously
+// selected task.
+func (m Model) mouseSession() (string, bool) {
 	t := m.current()
-	if t == nil || m.previewFor != t.ID || !m.previewMouse || m.previewHistory != 0 {
+	if t == nil || m.previewFor != t.ID || !m.previewMouse {
 		return "", false
 	}
 	return m.liveSession(t.ID)
+}
+
+// wheelTarget is the session that should get wheel events: tmux has no
+// history for the preview to scroll.
+func (m Model) wheelTarget() (string, bool) {
+	if m.previewHistory != 0 {
+		return "", false
+	}
+	return m.mouseSession()
+}
+
+// clickTarget is the session that should get clicks.
+func (m Model) clickTarget() (string, bool) {
+	if m.mode != modeLive || m.previewScroll != 0 {
+		return "", false
+	}
+	return m.mouseSession()
+}
+
+// assistantClickTarget is the assistant's session when it has focus and its
+// claude reads mouse reports, so clicks go to it instead of focusing the panel.
+func (m Model) assistantClickTarget() (string, bool) {
+	if m.mode != modeAssistant || !m.assist.running() || !m.assist.mouse || m.assist.history != 0 {
+		return "", false
+	}
+	return assistant.SessionName(m.eng.Root), true
 }
 
 // liveSession reads the snapshot instead of the engine, which Tick can keep
@@ -943,9 +1036,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case liveExitKey:
 		m.assist.open = false
 	case "left", "h":
-		m.col = max(0, m.col-1)
+		m.col = m.stepColumn(m.col, -1)
 	case "right", "l":
-		m.col = min(len(cols)-1, m.col+1)
+		m.col = m.stepColumn(m.col, 1)
 	case "up", "k", "down", "j":
 		tasks := m.tasksForColumn(m.col)
 		if len(tasks) == 0 {
@@ -974,11 +1067,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			idx = 0
 		}
-		next := idx + 1
+		dir := 1
 		if msg.String() == "H" || msg.String() == "shift+left" {
-			next = idx - 1
+			dir = -1
 		}
-		if next < 0 || next >= len(cols) {
+		next := m.stepColumn(idx, dir)
+		if next == idx || cols[next].InReviewLane() != cols[idx].InReviewLane() {
 			break
 		}
 		m.col = next
@@ -1188,10 +1282,27 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.prefs.ShowArchived = !m.prefs.ShowArchived
 		m.savePrefs()
 	case "f":
-		m.prefs.CollapseGroups = !m.prefs.CollapseGroups
+		id := cols[m.col].ID
+		if m.prefs.CollapsedColumns[id] {
+			delete(m.prefs.CollapsedColumns, id)
+		} else {
+			if m.prefs.CollapsedColumns == nil {
+				m.prefs.CollapsedColumns = map[string]bool{}
+			}
+			m.prefs.CollapsedColumns[id] = true
+		}
 		m.savePrefs()
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings
+		m.savePrefs()
+	case "R":
+		if !m.hasReviewLane() {
+			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			break
+		}
+		shown := !m.reviewLaneShown()
+		m.prefs.ReviewLane = &shown
+		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
 		m.mode = modeConfig
@@ -1335,7 +1446,7 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if target.ID == m.columnOf(t) {
 		return m, nil
 	}
-	m.col = i
+	m.col = m.shownColumn(i)
 	m.selected[target.ID] = t.ID
 	cmd := m.moveCmd(t, target)
 	return m, cmd
