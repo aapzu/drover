@@ -120,6 +120,11 @@ func (m Model) renderHeader() string {
 	if queued > 0 {
 		stats = append(stats, muted.Render(fmt.Sprintf("◷ %d queued · %d/%d slots", queued, m.snap.Running, m.snap.MaxConcurrent)))
 	}
+	if !m.reviewLaneShown() {
+		if n := m.reviewLaneCards(); n > 0 {
+			stats = append(stats, muted.Render(fmt.Sprintf("◫ %d in review lane (R)", n)))
+		}
+	}
 	if m.filter != "" {
 		stats = append(stats, bold.Render("filter: "+m.filter)+dim.Render(" (esc clears)"))
 	}
@@ -208,15 +213,19 @@ func (m Model) renderMain(l layout) string {
 
 func (m Model) renderBoard(l layout) string {
 	drop := m.dropTarget(l)
-	var cols []string
-	for _, c := range l.cols {
-		cols = append(cols, m.renderColumn(c, l.boardH, c.index == drop))
+	var rows []string
+	for _, boxes := range l.rows {
+		var cols []string
+		for _, c := range boxes {
+			cols = append(cols, m.renderColumn(c, c.height, c.index == drop))
+		}
+		row := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+		if l.hiddenColumns {
+			row = lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, row)
+		}
+		rows = append(rows, row)
 	}
-	board := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-	if l.hiddenColumns {
-		board = lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, board)
-	}
-	return board
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 func columnSummary(c config.Column) string {
@@ -741,6 +750,7 @@ func (m Model) renderHelp() string {
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},
 		{"f", "fold or unfold this column to one card per session"},
+		{"R", "show or hide the review lane (columns with lane \"review\")"},
 		{"t", "show or hide column settings under column names"},
 		{"o", "change settings in drover.local.json and drover.json"},
 		{"O", "change column settings in drover.local.json and drover.json"},

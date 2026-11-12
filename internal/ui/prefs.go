@@ -39,6 +39,9 @@ type prefs struct {
 	ShowHidden       bool            `json:"showHidden,omitempty"`
 	ShowSettings     bool            `json:"showSettings,omitempty"`
 
+	// ReviewLane is what R last set; nil shows the review lane while it holds cards.
+	ReviewLane *bool `json:"reviewLane,omitempty"`
+
 	// AssistantWidth is in columns; 0 means the default share of the screen.
 	AssistantWidth int `json:"assistantWidth,omitempty"`
 }

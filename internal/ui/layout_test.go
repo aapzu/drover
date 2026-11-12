@@ -48,7 +48,7 @@ func sum(ws []int) int {
 
 func TestColumnWindowFillsWidth(t *testing.T) {
 	m := testModel(120, 40, 4, 0)
-	start, widths := m.columnWindow()
+	start, widths := m.columnWindow(m.lanes()[0])
 	if start != 0 || len(widths) != 4 || sum(widths) != 120 {
 		t.Fatalf("got start %d widths %v", start, widths)
 	}
@@ -57,7 +57,7 @@ func TestColumnWindowFillsWidth(t *testing.T) {
 func TestColumnWindowKeepsResizedWidth(t *testing.T) {
 	m := testModel(120, 40, 4, 0)
 	m.prefs.ColumnWidths["c1"] = 50
-	_, widths := m.columnWindow()
+	_, widths := m.columnWindow(m.lanes()[0])
 	if widths[1] != 50 || sum(widths) != 120 {
 		t.Fatalf("got widths %v", widths)
 	}
@@ -66,7 +66,7 @@ func TestColumnWindowKeepsResizedWidth(t *testing.T) {
 func TestColumnWindowScrollsToSelection(t *testing.T) {
 	m := testModel(60, 40, 6, 0)
 	m.col = 5
-	start, widths := m.columnWindow()
+	start, widths := m.columnWindow(m.lanes()[0])
 	if start+len(widths) != 6 || sum(widths) != 60 {
 		t.Fatalf("got start %d widths %v", start, widths)
 	}

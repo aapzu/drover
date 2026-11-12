@@ -235,6 +235,74 @@ func (m *Model) setFlash(s string) {
 
 func (m Model) columns() []config.Column { return m.snap.Board.Columns }
 
+// hasReviewLane reports whether the board has columns in the review lane.
+func (m Model) hasReviewLane() bool {
+	return slices.ContainsFunc(m.columns(), config.Column.InReviewLane)
+}
+
+// reviewLaneCards counts the cards in the review lane's columns, not counting
+// archived or hidden ones.
+func (m Model) reviewLaneCards() int {
+	n := 0
+	for _, t := range m.snap.Tasks {
+		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() && !m.offBoard(t, m.hidesArchived(col.ID)) {
+			n++
+		}
+	}
+	return n
+}
+
+// reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
+// pref, and with none set, while the lane holds cards.
+func (m Model) reviewLaneShown() bool {
+	if shown := m.prefs.ReviewLane; shown != nil {
+		return *shown && m.hasReviewLane()
+	}
+	return m.reviewLaneCards() > 0
+}
+
+// lanes is the indexes of the columns on each row of the board: the main
+// columns, then the review lane's while it is shown.
+func (m Model) lanes() [][]int {
+	var main, review []int
+	for i, c := range m.columns() {
+		if c.InReviewLane() {
+			review = append(review, i)
+		} else {
+			main = append(main, i)
+		}
+	}
+	if len(review) == 0 || !m.reviewLaneShown() {
+		return [][]int{main}
+	}
+	return [][]int{main, review}
+}
+
+// visibleColumn reports whether the board draws column i.
+func (m Model) visibleColumn(i int) bool {
+	return !m.columns()[i].InReviewLane() || m.reviewLaneShown()
+}
+
+// stepColumn is the nearest column from i in direction dir (-1 or 1) that the
+// board draws, or i when there is none.
+func (m Model) stepColumn(i, dir int) int {
+	for j := i + dir; j >= 0 && j < len(m.columns()); j += dir {
+		if m.visibleColumn(j) {
+			return j
+		}
+	}
+	return i
+}
+
+// shownColumn is col if the board draws it, else the nearest one before it.
+func (m Model) shownColumn(col int) int {
+	col = clamp(col, 0, len(m.columns())-1)
+	for col > 0 && !m.visibleColumn(col) {
+		col--
+	}
+	return col
+}
+
 func (m Model) tasksIn(colID string) []*store.Task {
 	var out []*store.Task
 	hides := m.hidesArchived(colID)
@@ -426,7 +494,7 @@ func (m *Model) selectTask(t *store.Task) {
 	}
 	for i, c := range m.columns() {
 		if c.ID == m.columnOf(t) {
-			m.col = i
+			m.col = m.shownColumn(i)
 			m.selected[c.ID] = t.ID
 		}
 	}
@@ -682,9 +750,7 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 		curID, curCol = cur.ID, m.columnOf(cur)
 	}
 	m.snap = snap
-	if m.col >= len(m.columns()) {
-		m.col = len(m.columns()) - 1
-	}
+	m.col = m.shownColumn(m.col)
 	m.moveSel = min(m.moveSel, len(m.moveColumns())-1)
 	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
 		m.selectTask(t)
@@ -970,9 +1036,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case liveExitKey:
 		m.assist.open = false
 	case "left", "h":
-		m.col = max(0, m.col-1)
+		m.col = m.stepColumn(m.col, -1)
 	case "right", "l":
-		m.col = min(len(cols)-1, m.col+1)
+		m.col = m.stepColumn(m.col, 1)
 	case "up", "k", "down", "j":
 		tasks := m.tasksForColumn(m.col)
 		if len(tasks) == 0 {
@@ -1001,11 +1067,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			idx = 0
 		}
-		next := idx + 1
+		dir := 1
 		if msg.String() == "H" || msg.String() == "shift+left" {
-			next = idx - 1
+			dir = -1
 		}
-		if next < 0 || next >= len(cols) {
+		next := m.stepColumn(idx, dir)
+		if next == idx || cols[next].InReviewLane() != cols[idx].InReviewLane() {
 			break
 		}
 		m.col = next
@@ -1228,6 +1295,15 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		m.prefs.ShowSettings = !m.prefs.ShowSettings
 		m.savePrefs()
+	case "R":
+		if !m.hasReviewLane() {
+			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			break
+		}
+		shown := !m.reviewLaneShown()
+		m.prefs.ReviewLane = &shown
+		m.col = m.shownColumn(m.col)
+		m.savePrefs()
 	case "o":
 		m.mode = modeConfig
 		m.configSel = 0
@@ -1370,7 +1446,7 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if target.ID == m.columnOf(t) {
 		return m, nil
 	}
-	m.col = i
+	m.col = m.shownColumn(i)
 	m.selected[target.ID] = t.ID
 	cmd := m.moveCmd(t, target)
 	return m, cmd

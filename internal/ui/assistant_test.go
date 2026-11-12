@@ -109,7 +109,7 @@ func TestAssistantKeyOpensAndFocusesThePanelBesideTheBoard(t *testing.T) {
 		t.Errorf("starts = %d", f.starts)
 	}
 	l := m.layout()
-	if l.assistantW < minAssistantWidth || l.boardW+l.assistantW != m.width || sum(func() []int { _, w := m.columnWindow(); return w }()) != l.boardW {
+	if l.assistantW < minAssistantWidth || l.boardW+l.assistantW != m.width || sum(func() []int { _, w := m.columnWindow(m.lanes()[0]); return w }()) != l.boardW {
 		t.Errorf("board %d + panel %d of %d", l.boardW, l.assistantW, m.width)
 	}
 	if h := l.hitTest(m, l.boardW, l.bodyY+1); h.kind != hitAssistantEdge {
@@ -921,7 +921,7 @@ func TestColumnsStayLeftOfThePanelWhenResized(t *testing.T) {
 		m, _ = update(m, key(">"))
 	}
 	l := m.layout()
-	if sum(func() []int { _, w := m.columnWindow(); return w }()) != l.boardW {
+	if sum(func() []int { _, w := m.columnWindow(m.lanes()[0]); return w }()) != l.boardW {
 		t.Errorf("columns no longer fit the board's %d columns", l.boardW)
 	}
 	for _, w := range m.prefs.ColumnWidths {

@@ -36,6 +36,7 @@ var paletteCommands = []paletteCommand{
 	{"Archive every card in Done", "C"},
 	{"Show or hide archived cards", "v"},
 	{"Fold or unfold this column to one card per session", "f"},
+	{"Show or hide the review lane", "R"},
 	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
 	{"Open the assistant panel and type into it", askKey},
