@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gitx"
@@ -786,6 +787,15 @@ func (m Model) clickTarget() (string, bool) {
 		return "", false
 	}
 	return m.mouseSession()
+}
+
+// assistantClickTarget is the assistant's session when it has focus and its
+// claude reads mouse reports, so clicks go to it instead of focusing the panel.
+func (m Model) assistantClickTarget() (string, bool) {
+	if m.mode != modeAssistant || !m.assist.running() || !m.assist.mouse || m.assist.history != 0 {
+		return "", false
+	}
+	return assistant.SessionName(m.eng.Root), true
 }
 
 // liveSession reads the snapshot instead of the engine, which Tick can keep
