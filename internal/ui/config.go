@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aapzu/drover/internal/config"
@@ -140,25 +141,95 @@ func sourceLabel(layer config.Layer, ok bool) string {
 	return "shared"
 }
 
+// configVisible lists the indices of the options that match the search.
+func (m Model) configVisible() []int {
+	var visible []int
+	for i, opt := range configOptions {
+		if containsAllWords(opt.name+" "+strings.Join(opt.path, "."), m.configFilter) {
+			visible = append(visible, i)
+		}
+	}
+	return visible
+}
+
+// moveConfigSel moves the selection by delta among the visible options.
+func (m Model) moveConfigSel(delta int) Model {
+	visible := m.configVisible()
+	if len(visible) == 0 {
+		return m
+	}
+	pos := slices.Index(visible, m.configSel)
+	if pos < 0 {
+		m.configSel = visible[0]
+		return m
+	}
+	m.configSel = visible[min(len(visible)-1, max(0, pos+delta))]
+	return m
+}
+
 func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.configEditing {
 		return m.updateConfigInput(msg)
 	}
+	if m.configFiltering {
+		return m.updateConfigFilter(msg)
+	}
 	switch msg.String() {
-	case "esc", "q", "o":
+	case "esc":
+		if m.configFilter != "" {
+			m.configFilter = ""
+			break
+		}
 		m.mode = modeBoard
+	case "q", "o":
+		m.mode = modeBoard
+	case "/":
+		m.configFiltering = true
+		m.configFilterInput.SetValue(m.configFilter)
+		m.configFilterInput.CursorEnd()
+		return m, tea.Batch(m.configFilterInput.Focus(), textinput.Blink)
 	case "up", "k":
-		m.configSel = max(0, m.configSel-1)
+		return m.moveConfigSel(-1), nil
 	case "down", "j":
-		m.configSel = min(len(configOptions)-1, m.configSel+1)
+		return m.moveConfigSel(1), nil
 	case "enter":
+		if !slices.Contains(m.configVisible(), m.configSel) {
+			return m, nil
+		}
 		return m.beginConfigEdit()
 	case "x":
+		if !slices.Contains(m.configVisible(), m.configSel) {
+			return m, nil
+		}
 		return m.resetConfig(), nil
 	case "c":
 		return m.openColumns(), nil
 	}
 	return m, nil
+}
+
+// updateConfigFilter narrows the settings as you type. Up and down move
+// through the matches, enter keeps the search, esc clears it.
+func (m Model) updateConfigFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		return m.moveConfigSel(-1), nil
+	case "down":
+		return m.moveConfigSel(1), nil
+	case "esc":
+		m.configFilter = ""
+		m.configFiltering = false
+		m.configFilterInput.Blur()
+		return m, nil
+	case "enter":
+		m.configFiltering = false
+		m.configFilterInput.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.configFilterInput, cmd = m.configFilterInput.Update(msg)
+	m.configFilter = strings.TrimSpace(m.configFilterInput.Value())
+	return m.moveConfigSel(0), cmd
 }
 
 func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
@@ -295,8 +366,16 @@ func configSources(root string) []string {
 func (m Model) renderConfig() string {
 	width := min(76, m.width-4)
 	lines := []string{bold.Render("Settings"), ""}
-	for i, opt := range configOptions {
-		if opt.shared && (i == 0 || !configOptions[i-1].shared) {
+	if m.configFilter != "" && !m.configFiltering {
+		lines = append(lines, dim.Render("search: "+m.configFilter+" (esc clears)"), "")
+	}
+	visible := m.configVisible()
+	if len(visible) == 0 {
+		lines = append(lines, dim.Render("No matching settings"))
+	}
+	for n, i := range visible {
+		opt := configOptions[i]
+		if opt.shared && (n == 0 || !configOptions[visible[n-1]].shared) {
 			lines = append(lines, "", dim.Render("drover.json only"))
 		}
 		selected := i == m.configSel
