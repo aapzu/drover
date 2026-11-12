@@ -3,10 +3,12 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/tmux"
@@ -25,12 +27,12 @@ var (
 	stopAssistant    = assistant.Stop
 	startAssistant   = assistant.Start
 	restartAssistant = assistant.Restart
-	captureAssistant = func(name string, width, height, scrollback int) (out string, history int, mouse bool, err error) {
-		out, history, mouse, err = tmux.CaptureSized(name, width, height, scrollback)
+	captureAssistant = func(name string, width, height, scrollback int) (out string, history int, mouse bool, cur tmux.Cursor, err error) {
+		out, history, mouse, cur, err = tmux.CaptureSized(name, width, height, scrollback)
 		if err != nil && !tmux.Has(name) {
 			err = fmt.Errorf("%w (%w)", errSessionEnded, err)
 		}
-		return out, history, mouse, err
+		return out, history, mouse, cur, err
 	}
 )
 
@@ -46,6 +48,7 @@ type assistantPane struct {
 	at              time.Time
 	history, scroll int
 	mouse           bool
+	cursor          tmux.Cursor
 	tickGen         int
 }
 
@@ -60,7 +63,9 @@ const (
 func (p assistantPane) starting() bool { return p.session == sessionStarting }
 func (p assistantPane) running() bool  { return p.session == sessionRunning }
 
-func (p *assistantPane) clearFrame() { p.txt, p.history, p.scroll, p.mouse = "", 0, 0, false }
+func (p *assistantPane) clearFrame() {
+	p.txt, p.history, p.scroll, p.mouse, p.cursor = "", 0, 0, false, tmux.Cursor{}
+}
 
 func (p *assistantPane) fail(err error) {
 	p.session, p.lastErr = sessionStopped, err
@@ -78,6 +83,7 @@ type assistantFrameMsg struct {
 	txt     string
 	history int
 	mouse   bool
+	cursor  tmux.Cursor
 	err     error
 	at      time.Time
 }
@@ -199,8 +205,8 @@ func (m Model) captureAssistantCmd() tea.Cmd {
 	scrollback := scrollbackFor(m.assist.scroll, h)
 	return func() tea.Msg {
 		at := time.Now()
-		out, history, mouse, err := captureAssistant(name, w, h, scrollback)
-		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, err: err, at: at}
+		out, history, mouse, cur, err := captureAssistant(name, w, h, scrollback)
+		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, cursor: cur, err: err, at: at}
 	}
 }
 
@@ -222,7 +228,7 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 		m.assist.scroll += msg.history - m.assist.history
 	}
 	m.assist.scroll = clamp(m.assist.scroll, 0, msg.history)
-	m.assist.txt, m.assist.history, m.assist.mouse = msg.txt, msg.history, msg.mouse
+	m.assist.txt, m.assist.history, m.assist.mouse, m.assist.cursor = msg.txt, msg.history, msg.mouse, msg.cursor
 }
 
 func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -293,7 +299,11 @@ func (m Model) renderAssistant(width, height int) string {
 		}
 		body = dim.Render(what + reason + ".\n" + hint)
 	default:
-		body = previewWindow(m.assist.txt, height-2, m.assist.scroll)
+		txt := m.assist.txt
+		if focused {
+			txt = paintCursor(txt, m.assist.cursor)
+		}
+		body = previewWindow(txt, height-2, m.assist.scroll)
 	}
 
 	title, hint := " assistant ", "· "+askKey+" to type here "
@@ -312,4 +322,20 @@ func (m Model) renderAssistant(width, height int) string {
 	}
 
 	return titledBox(style, title, body, width, height)
+}
+
+// paintCursor reverses the cell under the pane's cursor, which a capture of
+// its text doesn't carry.
+func paintCursor(txt string, c tmux.Cursor) string {
+	lines := strings.Split(txt, "\n")
+	if !c.Visible || c.Line < 0 || c.Line >= len(lines) {
+		return txt
+	}
+	line := lines[c.Line]
+	if w := ansi.StringWidth(line); w < c.X+1 {
+		line += strings.Repeat(" ", c.X+1-w)
+	}
+	cell := ansi.Strip(ansi.Cut(line, c.X, c.X+1))
+	lines[c.Line] = ansi.Cut(line, 0, c.X) + selStyle.Render(cell) + ansi.Cut(line, c.X+1, ansi.StringWidth(line))
+	return strings.Join(lines, "\n")
 }

@@ -784,11 +784,11 @@ func (m Model) capturePreview() tea.Cmd {
 		if ok {
 			capture := tmux.Capture
 			if l.previewH > 0 {
-				capture = func(name string, scrollback int) (string, int, bool, error) {
+				capture = func(name string, scrollback int) (string, int, bool, tmux.Cursor, error) {
 					return tmux.CaptureSized(name, w, h, scrollback)
 				}
 			}
-			if out, history, mouse, err := capture(name, scrollback); err == nil {
+			if out, history, mouse, _, err := capture(name, scrollback); err == nil {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 				msg.complete = scrollback >= history
 			}

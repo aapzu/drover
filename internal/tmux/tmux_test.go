@@ -16,7 +16,7 @@ func waitFor(t *testing.T, name, want string) string {
 	t.Helper()
 	var out string
 	for range 50 {
-		out, _, _, _ = Capture(name, 0)
+		out, _, _, _, _ = Capture(name, 0)
 		if strings.Contains(out, want) {
 			return out
 		}
@@ -184,7 +184,7 @@ func TestCaptureReturnsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, name, "100")
-	out, history, _, err := Capture(name, 30)
+	out, history, _, _, err := Capture(name, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,6 +193,32 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	}
 	if rows := strings.Count(out, "\n"); rows != 40 {
 		t.Fatalf("got %d rows, want 30 of history plus 10 on screen:\n%s", rows, out)
+	}
+}
+
+func TestCaptureReturnsCursorWithinCapturedLines(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "cursor"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "seq 1 100; printf hi; cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Resize(name, 40, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "hi")
+	for _, scrollback := range []int{0, 30} {
+		out, _, _, cur, err := Capture(name, scrollback)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if !cur.Visible || cur.X != 2 || cur.Line >= len(lines) || ansi.Strip(lines[cur.Line]) != "hi" {
+			t.Fatalf("scrollback %d: cursor %+v, want it visible after the \"hi\" line of %q", scrollback, cur, lines)
+		}
 	}
 }
 
@@ -208,7 +234,7 @@ func TestCaptureSizedResizesOnce(t *testing.T) {
 	}
 	waitFor(t, name, "100")
 	for range 2 {
-		out, history, _, err := CaptureSized(name, 40, 10, 30)
+		out, history, _, _, err := CaptureSized(name, 40, 10, 30)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +266,7 @@ func TestCaptureSizedLeavesAttachedSessionAlone(t *testing.T) {
 		delete(attached, name)
 		attachedMu.Unlock()
 	})
-	if _, _, _, err := CaptureSized(name, 40, 10, 0); err != nil {
+	if _, _, _, _, err := CaptureSized(name, 40, 10, 0); err != nil {
 		t.Fatal(err)
 	}
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
@@ -255,7 +281,7 @@ func TestCaptureMissingSessionFails(t *testing.T) {
 	}
 	useSocket(t)
 
-	if out, _, _, err := CaptureSized("nope", 40, 10, 0); err == nil || out != "" {
+	if out, _, _, _, err := CaptureSized("nope", 40, 10, 0); err == nil || out != "" {
 		t.Fatalf("got %q, %v; want an error and no output", out, err)
 	}
 }
@@ -282,7 +308,7 @@ func TestCaptureReportsMouseTracking(t *testing.T) {
 			}
 			t.Cleanup(func() { Kill(c.name) })
 			waitFor(t, c.name, "ready")
-			if _, _, mouse, err := Capture(c.name, 0); err != nil || mouse != c.want {
+			if _, _, mouse, _, err := Capture(c.name, 0); err != nil || mouse != c.want {
 				t.Fatalf("mouse is %v (err %v), want %v", mouse, err, c.want)
 			}
 		})
