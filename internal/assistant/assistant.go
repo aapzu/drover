@@ -223,7 +223,7 @@ func launch(root, exe string, board *config.Board) error {
 		}
 	}
 	args := append(argv(exe, root, id, resume, systemPrompt(exe, root, board)), "--permission-mode", "dontAsk")
-	return newSession(SessionName(root), root, append([]string{"claude"}, args...), nil)
+	return newSession(SessionName(root), root, append([]string{"claude"}, args...), board.ClaudeEnv())
 }
 
 func Restart(root, exe string, board *config.Board) error {

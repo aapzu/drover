@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1572,6 +1573,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),
 		"DROVER_TASK_TITLE":  t.Title,
 	}
+	maps.Copy(env, e.board.ClaudeEnv())
 	e.mu.Unlock()
 	launch.SystemPrompt = claude.BoardPrompt(e.exe)
 	tmux.Kill(name)

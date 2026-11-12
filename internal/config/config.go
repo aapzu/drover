@@ -41,6 +41,7 @@ type Board struct {
 	Notifications         Notifications `json:"notifications"`
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
+	DisableMouse          bool          `json:"disableMouse,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -214,6 +215,14 @@ func Load(root string) (board *Board, found bool, err error) {
 
 // dropTodo removes columns with the "todo" role, which no longer exists, and
 // remembers their ids in LegacyTodo, plus "todo", the id the default board used.
+// ClaudeEnv is the environment drover adds to every claude session it starts.
+func (b *Board) ClaudeEnv() map[string]string {
+	if b != nil && b.DisableMouse {
+		return map[string]string{"CLAUDE_CODE_DISABLE_MOUSE": "1"}
+	}
+	return nil
+}
+
 func (b *Board) dropTodo() {
 	b.Columns = slices.DeleteFunc(b.Columns, func(c Column) bool {
 		if c.Role != "todo" {
@@ -281,6 +290,7 @@ func (b *Board) applyLocal(root string) error {
 		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
+		DisableMouse       *bool           `json:"disableMouse"`
 		Notifications      json.RawMessage `json:"notifications"`
 		Columns            []localColumn   `json:"columns"`
 	}
@@ -304,6 +314,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.SplitByPR != nil {
 		b.SplitByPR = *local.SplitByPR
+	}
+	if local.DisableMouse != nil {
+		b.DisableMouse = *local.DisableMouse
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
