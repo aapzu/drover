@@ -33,6 +33,7 @@ type panel struct {
 	live  bool
 	calls [][]string
 	dirs  []string
+	envs  []map[string]string
 	stops int
 }
 
@@ -43,7 +44,7 @@ func fakePanel(t *testing.T) *panel {
 	t.Cleanup(func() { hasSession, newSession, stopSession = origHas, origNew, origStop })
 	hasSession = func(string) bool { return p.live }
 	newSession = func(name, dir string, argv []string, env map[string]string) error {
-		p.calls, p.dirs, p.live = append(p.calls, argv), append(p.dirs, dir), true
+		p.calls, p.dirs, p.envs, p.live = append(p.calls, argv), append(p.dirs, dir), append(p.envs, env), true
 		return nil
 	}
 	stopSession = func(string) { p.live, p.stops = false, p.stops+1 }
@@ -954,5 +955,17 @@ func TestBaseBranchInThePrompt(t *testing.T) {
 	}
 	if prompt := systemPrompt("/bin/drover", "/work/my-app", &config.Board{}); !strings.Contains(prompt, "my-app at /work/my-app.\n") || strings.Contains(prompt, "branch from") {
 		t.Errorf("a board without a base branch should not name one:\n%s", prompt)
+	}
+}
+
+func TestPanelEnvFollowsDisableMouse(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		p := fakePanel(t)
+		if _, err := Start(newRoot(t), "/bin/drover", &config.Board{DisableMouse: on}); err != nil {
+			t.Fatal(err)
+		}
+		if has := p.envs[0]["CLAUDE_CODE_DISABLE_MOUSE"] == "1"; has != on {
+			t.Errorf("disableMouse=%t: env = %v", on, p.envs[0])
+		}
 	}
 }

@@ -498,6 +498,18 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local splitByPR:true does not override the shared file")
 				}
 			}},
+		{"disableMouse is off by default", "", "",
+			func(t *testing.T, b *Board) {
+				if b.DisableMouse {
+					t.Error("default board disables the mouse")
+				}
+			}},
+		{"local disableMouse true overrides the shared file", `{"disableMouse":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableMouse":true}`,
+			func(t *testing.T, b *Board) {
+				if !b.DisableMouse {
+					t.Error("local disableMouse:true does not override the shared file")
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,

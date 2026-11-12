@@ -27,6 +27,7 @@ if [ "$1" = "-p" ]; then
 fi
 settings=""; sid=""; prompt=""
 for a in "$@"; do printf '%s\n' "$a"; done >> "$FAKE_LOG"
+echo "mouse=$CLAUDE_CODE_DISABLE_MOUSE" >> "$FAKE_LOG"
 echo "---" >> "$FAKE_LOG"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -275,6 +276,39 @@ func TestPipelineRunsOnAutomations(t *testing.T) {
 	}
 	if !strings.Contains(typed, "typed:/code-review main") {
 		t.Errorf("review message not typed into the agent:\n%s", typed)
+	}
+}
+
+func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Run(fmt.Sprint(on), func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_DISABLE_MOUSE", "")
+			root, log := setupProject(t)
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(`{"disableMouse":%t,"columns":[
+			  {"id":"backlog","name":"Backlog"},
+			  {"id":"exec","name":"Executing","autoSpawn":true},
+			  {"id":"done","name":"Done","role":"done"}]}`, on)), 0o644)
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+
+			task := e.CreateTask("Fix it", "")
+			if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			want := "mouse=\n"
+			if on {
+				want = "mouse=1\n"
+			}
+			waitForAll(t, e, "the agent to log its env", func([]*store.Task) bool {
+				return strings.Contains(readFile(log), "mouse=")
+			})
+			if got := readFile(log); !strings.Contains(got, want) {
+				t.Errorf("launch env missing %q:\n%s", want, got)
+			}
+		})
 	}
 }
 

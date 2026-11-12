@@ -253,7 +253,8 @@ These settings work in `drover.json` and, for you alone, in
   "maxConcurrent": 8,
   "idleTimeoutMinutes": 0,
   "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 },
-  "autoName": true
+  "autoName": true,
+  "disableMouse": false
 }
 ```
 
@@ -272,6 +273,9 @@ These settings work in `drover.json` and, for you alone, in
 - **`autoName`** titles a new session's card with a short summary of your
   first message, written with `claude -p --model haiku`. A title you edit is
   never replaced.
+- **`disableMouse`** (default `false`) starts agents and the assistant with
+  `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
+  your terminal. It applies to sessions started or resumed after you change it.
 
 ## Automations
 
