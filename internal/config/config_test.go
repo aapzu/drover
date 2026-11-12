@@ -401,6 +401,34 @@ func TestDefaultBoard(t *testing.T) {
 	}
 }
 
+func TestDefaultBoardHasReviewLane(t *testing.T) {
+	board := Default()
+	var lane []string
+	for _, c := range board.Columns {
+		if c.InReviewLane() {
+			lane = append(lane, c.ID)
+		}
+	}
+	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
+		t.Errorf("review lane = %v, want %v", lane, want)
+	}
+	f := board.ReviewFlow
+	if f == nil {
+		t.Fatal("default board has no reviewFlow")
+	}
+	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
+		if _, ok := board.Find(ref); !ok {
+			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
+		}
+	}
+	if c, _ := board.Find(f.Done); !c.IsDone() {
+		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
+	}
+	if c, _ := board.Find(f.Updated); len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
+		t.Errorf("reviewFlow.updated column doesn't ask for a re-review on entry: %+v", c.Automations)
+	}
+}
+
 func TestExecutingWaitsForYou(t *testing.T) {
 	const executing = `{"id":"executing","name":"Executing","autoSpawn":true`
 	const waitingForMe = `{"id":"waiting-for-me","name":"Waiting for me"}`
@@ -608,8 +636,10 @@ func TestSave(t *testing.T) {
 	for _, c := range board.Columns {
 		ids = append(ids, c.ID)
 	}
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done"}) || board.PRFlow == nil || board.ArchiveDoneAfter != "7d" {
-		t.Errorf("round trip lost data: ids=%v flow=%+v archive=%q", ids, board.PRFlow, board.ArchiveDoneAfter)
+	lane, _ := board.Find("reviewing")
+	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
+		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
+		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
 	}
 	if err := Default().Save(filepath.Join(dir, "missing")); err == nil {
 		t.Error("saving into a missing directory succeeded")
@@ -627,6 +657,8 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
+		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
 	}
 	for _, tc := range cases {

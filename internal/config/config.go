@@ -100,6 +100,9 @@ const (
 	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
 )
 
+const reReviewMessage = "Review PR #{{prNumber}} ({{prUrl}}) again. " +
+	"Look only at what changed since your last review, and list what is still open."
+
 // Proposes reports whether the agent presents review fixes before applying them.
 func (f *PRFlow) Proposes() bool {
 	if f == nil {
@@ -134,6 +137,7 @@ type Column struct {
 	ID             string      `json:"id"`
 	Name           string      `json:"name"`
 	Role           string      `json:"role,omitempty"`
+	Lane           string      `json:"lane,omitempty"`
 	Color          string      `json:"color,omitempty"`
 	AutoSpawn      bool        `json:"autoSpawn,omitempty"`
 	KeepAgent      bool        `json:"keepAgent,omitempty"`
@@ -167,6 +171,11 @@ type Automation struct {
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
 func (c Column) IsDone() bool { return c.Role == "done" }
+
+const LaneReview = "review"
+
+// InReviewLane reports whether the column belongs to the review lane.
+func (c Column) InReviewLane() bool { return c.Lane == LaneReview }
 
 // IsAgent columns run an agent for the cards in them.
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsDone() }
@@ -380,6 +389,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
 		}
 	}
+	if b.Columns[0].InReviewLane() {
+		return fmt.Errorf("%s: the first column must not be in the %s lane, since new cards land there", FileName, LaneReview)
+	}
 	seen := map[string]bool{}
 	for _, c := range b.Columns {
 		if c.ID == "" || c.Name == "" {
@@ -389,6 +401,9 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
 		}
 		seen[c.ID] = true
+		if c.Lane != "" && !c.InReviewLane() {
+			return fmt.Errorf("%s: column %s has unknown lane %q, only %q is supported", FileName, c.ID, c.Lane, LaneReview)
+		}
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
 			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
 		}
@@ -493,6 +508,16 @@ func Default() *Board {
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
+				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
+			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
+		},
+		ReviewFlow: &ReviewFlow{
+			Started:  "triage",
+			Reviewed: "waiting-on-author",
+			Updated:  "reviewing",
+			Done:     "done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",
