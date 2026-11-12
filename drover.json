@@ -59,6 +59,37 @@
       "name": "Done",
       "role": "done",
       "color": "#10b981"
+    },
+    {
+      "id": "reviewing",
+      "name": "Reviewing",
+      "lane": "review",
+      "color": "#ec4899",
+      "autoSpawn": true,
+      "effortOverride": "high",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Re-review",
+            "type": "send_message",
+            "message": "Review PR #{{prNumber}} ({{prUrl}}) again. Look only at what changed since your last review, and list what is still open.",
+            "conditionScript": "test -n \"$DROVER_PRNUMBER\""
+          }
+        ]
+      }
+    },
+    {
+      "id": "triage",
+      "name": "Triage findings",
+      "lane": "review",
+      "color": "#f97316",
+      "autoSpawn": true
+    },
+    {
+      "id": "waiting-on-author",
+      "name": "Waiting on author",
+      "lane": "review",
+      "color": "#64748b"
     }
   ],
   "prFlow": {
@@ -67,5 +98,11 @@
     "changesRequested": "executing",
     "changesRequestedMode": "propose",
     "merged": "done"
+  },
+  "reviewFlow": {
+    "started": "triage",
+    "reviewed": "waiting-on-author",
+    "updated": "reviewing",
+    "done": "done"
   }
 }
