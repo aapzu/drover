@@ -213,6 +213,114 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 	}
 }
 
+func withDocs(t *testing.T, docs string) {
+	t.Helper()
+	old := Docs
+	Docs = docs
+	t.Cleanup(func() { Docs = old })
+}
+
+func TestPromptPointsAtTheDocs(t *testing.T) {
+	root := "/work/my-app"
+	withDocs(t, "")
+	if got := systemPrompt("/bin/drover", root, &config.Board{}); strings.Contains(got, docsFile) {
+		t.Errorf("prompt names the docs without any:\n%s", got)
+	}
+	withDocs(t, "# drover")
+	got := systemPrompt("/bin/drover", root, &config.Board{})
+	for _, want := range []string{docsPath(root), "Read that file first"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSessionsReadTheDocsFromTheStateDir(t *testing.T) {
+	const docs = "# drover\n\nPress `b` to hide a card.\n"
+	cases := []struct {
+		name string
+		argv func(t *testing.T, root string) []string
+	}{{"ask", askArgv}, {"panel", panelArgv}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withDocs(t, docs)
+			root := newRoot(t)
+			args := tc.argv(t, root)
+
+			if got, err := os.ReadFile(docsPath(root)); err != nil || string(got) != docs {
+				t.Fatalf("docs file = %q, %v", got, err)
+			}
+			allowed := args[slices.Index(args, "--allowedTools")+1 : slices.Index(args, "--disallowedTools")]
+			if want := "Read(/" + docsPath(root) + ")"; !slices.Contains(allowed, want) {
+				t.Errorf("allowed tools lack %q: %q", want, allowed)
+			}
+			if !strings.Contains(flagValue(args, "--append-system-prompt"), docsPath(root)) {
+				t.Error("the prompt doesn't name the docs file")
+			}
+		})
+	}
+}
+
+func TestDocsAreRewrittenWhenTheyChange(t *testing.T) {
+	root := newRoot(t)
+	withDocs(t, "old")
+	if err := writeDocs(root); err != nil {
+		t.Fatal(err)
+	}
+	withDocs(t, "new")
+	if err := writeDocs(root); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(docsPath(root)); string(got) != "new" {
+		t.Errorf("docs file = %q, want new", got)
+	}
+	if _, err := os.Stat(docsPath(root) + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary file left behind: %v", err)
+	}
+}
+
+func TestNoDocsMeansNoDocsRuleOrFile(t *testing.T) {
+	withDocs(t, "")
+	root := newRoot(t)
+	args := askArgv(t, root)
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "Read(") {
+			t.Errorf("rule %q allows reading docs that don't exist", arg)
+		}
+	}
+	if _, err := os.Stat(docsPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a docs file exists without docs: %v", err)
+	}
+}
+
+func TestDocsWriteFailureChangesNothing(t *testing.T) {
+	withDocs(t, "# drover")
+	root := newRoot(t)
+	id := seedID(t, root)
+	if err := os.Mkdir(docsPath(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := fakeClaude(t, "ok", nil)
+	p := fakePanel(t)
+
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); err == nil || !strings.Contains(err.Error(), "docs") {
+		t.Errorf("Ask --new = %v, want a docs error", err)
+	}
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err == nil {
+		t.Error("Start succeeded without writable docs")
+	}
+	p.live = true
+	if err := Restart(root, "/bin/drover", &config.Board{}); err == nil {
+		t.Error("Restart succeeded without writable docs")
+	}
+	if len(*calls) != 0 || len(p.calls) != 0 || p.stops != 0 || !p.live {
+		t.Errorf("a session ran or stopped: %d asks, %d panels, %d stops", len(*calls), len(p.calls), p.stops)
+	}
+	if got := SessionID(root); got != id {
+		t.Errorf("the conversation became %q, want %q kept", got, id)
+	}
+}
+
 func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()
