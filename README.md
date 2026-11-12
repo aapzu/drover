@@ -557,6 +557,8 @@ review by default) has a merged or closed pull request of its own, it offers to 
 card on, to the merged column of your `prFlow` or to Done, and waits for you to
 agree. It runs the commands above, so changes go through the open board like
 any other.
+It also knows drover's own docs, so you can ask it how to do something ("how do
+I hide a card?") and it names the feature and its key.
 It takes no agent slot and isn't a card.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
