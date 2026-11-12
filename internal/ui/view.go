@@ -755,7 +755,7 @@ func (m Model) renderHelp() string {
 		{"f", "fold or unfold this column to one card per session"},
 		{"R", "show or hide the review lane (columns with lane \"review\")"},
 		{"t", "show or hide column settings under column names"},
-		{"o", "change settings in drover.local.json and drover.json (/ searches them)"},
+		{"o", "change settings in drover.local.json and drover.json (press / there to search)"},
 		{"O", "change column settings in drover.local.json and drover.json"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},

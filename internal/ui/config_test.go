@@ -610,7 +610,8 @@ func TestConfigListKeysAreTextInsideTheSearch(t *testing.T) {
 }
 
 func TestConfigSearchWithoutMatchesIsHarmless(t *testing.T) {
-	m := configModel(t, t.TempDir())
+	root := t.TempDir()
+	m := configModel(t, root)
 	m = typeInConfigSearch(t, m, "zzzz")
 	m = pressConfig(t, m, keyPress("enter"))
 	for _, k := range []tea.KeyMsg{keyPress("enter"), key("x"), key("j"), key("k")} {
@@ -618,6 +619,66 @@ func TestConfigSearchWithoutMatchesIsHarmless(t *testing.T) {
 	}
 	if m.configEditing || !strings.Contains(m.renderConfig(), "No matching settings") {
 		t.Error("an empty search misbehaved")
+	}
+	if !m.snap.Board.AutoName || config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Error("enter changed an option that no row shows")
+	}
+}
+
+func TestConfigSearchDoesNotResetAnOptionThatIsHidden(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Auto-name cards")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Fatal("setup: the toggle wasn't saved")
+	}
+	m = typeInConfigSearch(t, m, "zzzz")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, key("x"))
+	if !config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Error("x removed the override of an option that no row shows")
+	}
+}
+
+func TestConfigSearchRowsShowTheirOwnSource(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Split PRs into cards")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = typeInConfigSearch(t, m, "split")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.renderConfig(), "local") {
+		t.Errorf("filtered row lost its source label:\n%s", m.renderConfig())
+	}
+}
+
+func TestConfigSearchEditsANonToggleOptionWhileFiltered(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = typeInConfigSearch(t, m, "base branch")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, keyPress("enter"))
+	if !m.configEditing {
+		t.Fatal("enter didn't open the prompt for the filtered option")
+	}
+	m.configFilterInput.SetValue("base branch")
+	m.configInput.SetValue("develop")
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.DefaultBaseBranch != "develop" {
+		t.Errorf("DefaultBaseBranch=%q", m.snap.Board.DefaultBaseBranch)
+	}
+}
+
+func TestConfigSearchIgnoresWhitespaceOnly(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "  ")
+	if len(m.configVisible()) != len(configOptions) {
+		t.Errorf("visible=%d", len(m.configVisible()))
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if strings.Contains(m.renderConfig(), "search:") {
+		t.Error("a blank search shows a banner")
 	}
 }
 

@@ -157,7 +157,9 @@ func (m Model) configVisible() []int {
 	return visible
 }
 
-// moveConfigSel moves the selection by delta among the visible options.
+// moveConfigSel moves the selection by delta among the visible options. A
+// selection that isn't visible moves to the first visible option, so a delta of
+// 0 re-validates it.
 func (m Model) moveConfigSel(delta int) Model {
 	visible := m.configVisible()
 	if len(visible) == 0 {
