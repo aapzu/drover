@@ -210,7 +210,7 @@ func TestCaptureReturnsCursorWithinCapturedLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, name, "hi")
-	for _, scrollback := range []int{0, 30} {
+	for _, scrollback := range []int{0, 30, 500} {
 		out, _, _, cur, err := Capture(name, scrollback)
 		if err != nil {
 			t.Fatal(err)

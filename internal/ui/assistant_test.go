@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -1174,5 +1175,52 @@ func TestPanelShowsTheCursorOnlyWhileFocused(t *testing.T) {
 	m.mode = modeBoard
 	if view := m.View(); strings.Contains(view, selStyle.Render("h")) {
 		t.Errorf("unfocused panel still shows a cursor:\n%s", view)
+	}
+}
+
+func TestPanelCursorFollowsTheScrolledWindowAndFrameState(t *testing.T) {
+	forceColor(t)
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf("l%02d", i))
+	}
+	frame := func(cur tmux.Cursor) {
+		m, _ = update(m, m.stamped(assistantFrameMsg{txt: strings.Join(lines, "\n"), history: 100, cursor: cur, at: time.Now().Add(time.Second)}))
+	}
+	painted := selStyle.Render("l")
+
+	frame(tmux.Cursor{X: 0, Line: 5, Visible: true})
+	m.assist.scroll = 0
+	if strings.Contains(m.View(), painted) {
+		t.Error("the cursor is painted although its line is above the window")
+	}
+	frame(tmux.Cursor{X: 0, Line: 45, Visible: true})
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor isn't painted on a line inside the window")
+	}
+	m.assist.scroll = 10
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor isn't painted after scrolling while its line stays in the window")
+	}
+	m.assist.scroll = 40
+	if strings.Contains(m.View(), painted) {
+		t.Error("the cursor is painted although scrolling moved its line out of the window")
+	}
+
+	m.assist.scroll = 0
+	frame(tmux.Cursor{X: 0, Line: 59})
+	if strings.Contains(m.View(), painted) {
+		t.Error("a hidden cursor is painted")
+	}
+	frame(tmux.Cursor{X: 0, Line: 59, Visible: true})
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor on the last line isn't painted")
+	}
+	m.assist.fail(errSessionEnded)
+	if m.assist.cursor != (tmux.Cursor{}) {
+		t.Errorf("cursor %+v survives a failed session", m.assist.cursor)
 	}
 }
