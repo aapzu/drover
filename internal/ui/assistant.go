@@ -257,7 +257,7 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 	}
 	up := msg.Button == tea.MouseButtonWheelUp
 	if m.assist.mouse && m.assist.history == 0 {
-		x, y := clamp(msg.X-l.boardW, 1, l.assistantW-2), clamp(msg.Y-l.bodyY, 1, l.bodyH-2)
+		x, y := l.assistantCell(msg)
 		m.keys.send(wheelJob(assistant.SessionName(m.eng.Root), up, x, y))
 		return m, nil
 	}

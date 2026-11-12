@@ -355,8 +355,8 @@ the session's own card, which moves to the `prFlow` opened column once the
 agent's turn ends. Every further PR gets its own card (unless `splitByPR` is
 off), so one session can ship several. The cards are marked `⧉ 1/3`, `⧉ 2/3`
 and so on, and the marker has the same color on every card of the group. `f`
-folds each column to one card per session (`⧉ 1/3 +2` stands for two more in
-that column), so a pile of merged PRs doesn't fill Done.
+folds the current column to one card per session (`⧉ 1/3 +2` stands for two
+more in that column), so a pile of merged PRs doesn't fill Done.
 
 - The cards share one agent, worktree and conversation. `enter`, `tab`, `s`
   and the preview all reach the same agent from any of them.
@@ -416,6 +416,8 @@ board uses:
   board with a message and no mode keeps fixing.
 - **merged:** where a merged PR card goes, for example to verify it in a
   develop environment.
+- A PR closed without merging moves a card in `opened` to Done, if the board
+  has a Done column.
 - **released:** once the merge commit reaches `releaseBranch` on origin
   (default `master`, else `main`), a card in `merged` moves here.
 
