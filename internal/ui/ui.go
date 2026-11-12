@@ -146,8 +146,6 @@ type Model struct {
 	configInput   textinput.Model
 	configSrc     []string
 
-	configFilter      string
-	configFiltering   bool
 	configFilterInput textinput.Model
 
 	columnSel     int
@@ -1313,10 +1311,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
-		m.mode = modeConfig
-		m.configSel = 0
-		m.configFilter = ""
-		m.configSrc = configSources(m.eng.Root)
+		m = m.openConfig()
 	case "O":
 		return m.openColumns(), nil
 	case "W":

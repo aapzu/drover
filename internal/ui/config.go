@@ -141,11 +141,16 @@ func sourceLabel(layer config.Layer, ok bool) string {
 	return "shared"
 }
 
+// configQuery is the committed or in-progress search.
+func (m Model) configQuery() string {
+	return strings.TrimSpace(m.configFilterInput.Value())
+}
+
 // configVisible lists the indices of the options that match the search.
 func (m Model) configVisible() []int {
 	var visible []int
 	for i, opt := range configOptions {
-		if containsAllWords(opt.name+" "+strings.Join(opt.path, "."), m.configFilter) {
+		if containsAllWords(opt.name+" "+strings.Join(opt.path, "."), m.configQuery()) {
 			visible = append(visible, i)
 		}
 	}
@@ -163,29 +168,42 @@ func (m Model) moveConfigSel(delta int) Model {
 		m.configSel = visible[0]
 		return m
 	}
-	m.configSel = visible[min(len(visible)-1, max(0, pos+delta))]
+	m.configSel = visible[clamp(pos+delta, 0, len(visible)-1)]
 	return m
+}
+
+// openConfig shows the settings list with no search.
+func (m Model) openConfig() Model {
+	m.mode = modeConfig
+	m.configSel = 0
+	m.configFilterInput.SetValue("")
+	m.configFilterInput.Blur()
+	m.configSrc = configSources(m.eng.Root)
+	return m
+}
+
+// configSelVisible is false when the search matches nothing, so no option is selected.
+func (m Model) configSelVisible() bool {
+	return slices.Contains(m.configVisible(), m.configSel)
 }
 
 func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.configEditing {
 		return m.updateConfigInput(msg)
 	}
-	if m.configFiltering {
+	if m.configFilterInput.Focused() {
 		return m.updateConfigFilter(msg)
 	}
 	switch msg.String() {
 	case "esc":
-		if m.configFilter != "" {
-			m.configFilter = ""
+		if m.configQuery() != "" {
+			m.configFilterInput.SetValue("")
 			break
 		}
 		m.mode = modeBoard
 	case "q", "o":
 		m.mode = modeBoard
 	case "/":
-		m.configFiltering = true
-		m.configFilterInput.SetValue(m.configFilter)
 		m.configFilterInput.CursorEnd()
 		return m, tea.Batch(m.configFilterInput.Focus(), textinput.Blink)
 	case "up", "k":
@@ -193,15 +211,13 @@ func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		return m.moveConfigSel(1), nil
 	case "enter":
-		if !slices.Contains(m.configVisible(), m.configSel) {
-			return m, nil
+		if m.configSelVisible() {
+			return m.beginConfigEdit()
 		}
-		return m.beginConfigEdit()
 	case "x":
-		if !slices.Contains(m.configVisible(), m.configSel) {
-			return m, nil
+		if m.configSelVisible() {
+			return m.resetConfig(), nil
 		}
-		return m.resetConfig(), nil
 	case "c":
 		return m.openColumns(), nil
 	}
@@ -217,18 +233,15 @@ func (m Model) updateConfigFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down":
 		return m.moveConfigSel(1), nil
 	case "esc":
-		m.configFilter = ""
-		m.configFiltering = false
+		m.configFilterInput.SetValue("")
 		m.configFilterInput.Blur()
 		return m, nil
 	case "enter":
-		m.configFiltering = false
 		m.configFilterInput.Blur()
 		return m, nil
 	}
 	var cmd tea.Cmd
 	m.configFilterInput, cmd = m.configFilterInput.Update(msg)
-	m.configFilter = strings.TrimSpace(m.configFilterInput.Value())
 	return m.moveConfigSel(0), cmd
 }
 
@@ -366,8 +379,8 @@ func configSources(root string) []string {
 func (m Model) renderConfig() string {
 	width := min(76, m.width-4)
 	lines := []string{bold.Render("Settings"), ""}
-	if m.configFilter != "" && !m.configFiltering {
-		lines = append(lines, dim.Render("search: "+m.configFilter+" (esc clears)"), "")
+	if query := m.configQuery(); query != "" && !m.configFilterInput.Focused() {
+		lines = append(lines, dim.Render("search: "+query+" (esc clears)"), "")
 	}
 	visible := m.configVisible()
 	if len(visible) == 0 {

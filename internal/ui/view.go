@@ -144,7 +144,7 @@ func (m Model) renderFooter() string {
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
-	if m.mode == modeConfig && m.configFiltering {
+	if m.mode == modeConfig && m.configFilterInput.Focused() {
 		return " " + bold.Render("Search ›") + " " + m.configFilterInput.View()
 	}
 	if m.flash != "" {
