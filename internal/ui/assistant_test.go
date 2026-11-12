@@ -1125,10 +1125,15 @@ func TestPanelEdgeStillResizesWhenClaudeTracksMouse(t *testing.T) {
 	}
 }
 
-func TestPaintCursorReversesTheCellUnderIt(t *testing.T) {
+func forceColor(t *testing.T) {
+	t.Helper()
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+}
+
+func TestPaintCursorReversesTheCellUnderIt(t *testing.T) {
+	forceColor(t)
 
 	for _, c := range []struct {
 		name, txt, text, cell string
@@ -1155,9 +1160,7 @@ func TestPaintCursorReversesTheCellUnderIt(t *testing.T) {
 }
 
 func TestPanelShowsTheCursorOnlyWhileFocused(t *testing.T) {
-	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
-	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	forceColor(t)
 
 	f := fakePanel(t)
 	f.screen = "❯ hi\n"

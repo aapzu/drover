@@ -332,10 +332,11 @@ func paintCursor(txt string, c tmux.Cursor) string {
 		return txt
 	}
 	line := lines[c.Line]
-	if w := ansi.StringWidth(line); w < c.X+1 {
+	w := ansi.StringWidth(line)
+	if w < c.X+1 {
 		line += strings.Repeat(" ", c.X+1-w)
+		w = c.X + 1
 	}
-	cell := ansi.Strip(ansi.Cut(line, c.X, c.X+1))
-	lines[c.Line] = ansi.Cut(line, 0, c.X) + selStyle.Render(cell) + ansi.Cut(line, c.X+1, ansi.StringWidth(line))
+	lines[c.Line] = reverseSpan(line, c.X, c.X+1, w)
 	return strings.Join(lines, "\n")
 }
