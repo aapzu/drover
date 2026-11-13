@@ -126,9 +126,28 @@ func TestWheelPagesAgentThatHasNoHistoryAndIgnoresTheMouse(t *testing.T) {
 	t.Run("not when tmux has history", func(t *testing.T) {
 		m := setup(modeLive)
 		m.previewHistory = 100
-		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		next, _ := m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
 		if job, ok := sentJob(m); ok {
 			t.Fatalf("sent %+v despite history", job)
+		}
+		if got := next.(Model).previewScroll; got != 3 {
+			t.Fatalf("previewScroll = %d, want 3", got)
+		}
+	})
+	t.Run("not for a stale preview", func(t *testing.T) {
+		m := setup(modeLive)
+		m.previewFor = "other"
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v for another task's preview", job)
+		}
+	})
+	t.Run("not when the agent isn't running", func(t *testing.T) {
+		m := setup(modeLive)
+		m.snap.Live = nil
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v without a live session", job)
 		}
 	})
 }

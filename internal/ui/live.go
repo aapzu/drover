@@ -92,6 +92,13 @@ func wheelJob(session string, up bool, x, y int) keyJob {
 	return sgrMouseJob(session, code, x, y, true)
 }
 
+func pageJob(session string, up bool) keyJob {
+	if up {
+		return keyJob{session: session, key: tmuxKeyNames["pgup"]}
+	}
+	return keyJob{session: session, key: tmuxKeyNames["pgdown"]}
+}
+
 // mouseJob reports a click, release or drag to the agent as an SGR mouse
 // sequence at pane cell (x, y), 1-based.
 func mouseJob(session string, msg tea.MouseMsg, x, y int) keyJob {
