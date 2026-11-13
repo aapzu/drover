@@ -214,7 +214,10 @@ func (m Model) renderMain(l layout) string {
 func (m Model) renderBoard(l layout) string {
 	drop := m.dropTarget(l)
 	var rows []string
-	for _, boxes := range l.rows {
+	for k, boxes := range l.rows {
+		if k > 0 && l.laneH > 0 {
+			rows = append(rows, m.renderLaneDivider(l.boardW))
+		}
 		var cols []string
 		for _, c := range boxes {
 			cols = append(cols, m.renderColumn(c, c.height, c.index == drop))
@@ -226,6 +229,15 @@ func (m Model) renderBoard(l layout) string {
 		rows = append(rows, row)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
+func (m Model) renderLaneDivider(width int) string {
+	label := "── review lane "
+	style := dim
+	if m.drag.kind == dragLane {
+		style = lipgloss.NewStyle().Foreground(accent)
+	}
+	return style.Render(ansi.Truncate(label+strings.Repeat("─", width), width, ""))
 }
 
 func columnSummary(c config.Column) string {
@@ -770,6 +782,7 @@ func (m Model) renderHelp() string {
 		{"double-click", "attach"},
 		{"drag column edge", "resize the column"},
 		{"drag preview top", "resize the preview"},
+		{"drag lane divider", "resize the review lane"},
 		{"drag assistant edge", "resize the assistant"},
 		{"click preview", "type into the agent"},
 		{"click assistant", "type into the assistant"},

@@ -53,8 +53,8 @@ Then bring in the Claude Code work you already have:
 Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
-a card to attach, drag a column's right edge or the preview's top border to
-resize, click the preview to type into the agent, and click the assistant
+a card to attach, drag a column's right edge, the preview's top border or the review lane's
+divider to resize, click the preview to type into the agent, and click the assistant
 panel to type into it. Dragging over the live preview selects text and
 copies it. To select text anywhere else with the terminal's own selection
 (double and triple click included), hold Option on macOS or Shift elsewhere
@@ -481,7 +481,8 @@ a lane of its own: a second row of columns below the main ones. Give a column
 shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
-card within its lane only; use `m` to move it between them.
+card within its lane only; use `m` to move it between them. Drag the divider
+above the lane to resize it; `0` resets the layout.
 
 The default lane is Reviewing, Triage findings and Waiting on author, with a
 `reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on

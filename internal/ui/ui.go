@@ -1219,6 +1219,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "0":
 		m.prefs.PreviewHeight, m.prefs.AssistantWidth, m.prefs.ColumnWidths, m.prefs.Density = 0, 0, map[string]int{}, densityNormal
+		m.prefs.ReviewLaneHeight = 0
 		m.savePrefs()
 	case "z":
 		m.prefs.Density = (m.prefs.Density + 1) % 3
