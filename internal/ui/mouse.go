@@ -60,6 +60,11 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				cmd := m.requestPreview(true)
 				return m, cmd
 			}
+			if name, ok := m.pagerTarget(); ok {
+				m.keys.send(pageJob(name, msg.Button == tea.MouseButtonWheelUp))
+				cmd := m.requestPreview(true)
+				return m, cmd
+			}
 			if msg.Button == tea.MouseButtonWheelUp {
 				return m.scrollPreview(3)
 			}

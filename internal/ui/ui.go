@@ -851,6 +851,17 @@ func (m Model) wheelTarget() (string, bool) {
 	return m.mouseSession()
 }
 
+// pagerTarget is the live session that should get PgUp/PgDn for the wheel:
+// tmux has no history and the agent doesn't read mouse reports, as when
+// claude runs full-screen with its mouse support disabled.
+func (m Model) pagerTarget() (string, bool) {
+	t := m.current()
+	if m.mode != modeLive || t == nil || m.previewFor != t.ID || m.previewHistory != 0 || m.previewMouse {
+		return "", false
+	}
+	return m.liveSession(t.ID)
+}
+
 // clickTarget is the session that should get clicks.
 func (m Model) clickTarget() (string, bool) {
 	if m.mode != modeLive || m.previewScroll != 0 {

@@ -88,6 +88,70 @@ func sentJob(m Model) (keyJob, bool) {
 	}
 }
 
+func TestWheelPagesAgentThatHasNoHistoryAndIgnoresTheMouse(t *testing.T) {
+	setup := func(md mode) Model {
+		m := testModel(120, 40, 1, 1)
+		id := m.snap.Tasks[0].ID
+		m.snap.Live = map[string]string{id: "sess"}
+		m.keys = &keySender{jobs: make(chan keyJob, 4)}
+		m.previewFor = id
+		m.mode = md
+		return m
+	}
+	y := setup(modeLive).layout().previewY + 3
+	for _, c := range []struct {
+		name   string
+		button tea.MouseButton
+		want   string
+	}{
+		{"up", tea.MouseButtonWheelUp, "PPage"},
+		{"down", tea.MouseButtonWheelDown, "NPage"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := setup(modeLive)
+			m.Update(mouse(tea.MouseActionPress, c.button, 10, y))
+			job, ok := sentJob(m)
+			if !ok || job.session != "sess" || job.key != c.want {
+				t.Fatalf("sent %+v (sent=%v), want key %q to sess", job, ok, c.want)
+			}
+		})
+	}
+	t.Run("not on the board", func(t *testing.T) {
+		m := setup(modeBoard)
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v from the board", job)
+		}
+	})
+	t.Run("not when tmux has history", func(t *testing.T) {
+		m := setup(modeLive)
+		m.previewHistory = 100
+		next, _ := m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v despite history", job)
+		}
+		if got := next.(Model).previewScroll; got != 3 {
+			t.Fatalf("previewScroll = %d, want 3", got)
+		}
+	})
+	t.Run("not for a stale preview", func(t *testing.T) {
+		m := setup(modeLive)
+		m.previewFor = "other"
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v for another task's preview", job)
+		}
+	})
+	t.Run("not when the agent isn't running", func(t *testing.T) {
+		m := setup(modeLive)
+		m.snap.Live = nil
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v without a live session", job)
+		}
+	})
+}
+
 func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 	setup := func() Model {
 		m := testModel(120, 40, 1, 1)

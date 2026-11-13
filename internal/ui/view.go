@@ -770,7 +770,7 @@ var helpMouse = [][2]string{
 
 var helpLive = [][2]string{
 	{"ctrl+q", "back to board"},
-	{"mouse wheel", "scroll the agent's history"},
+	{"mouse wheel", "scroll the agent's history, or page it"},
 	{"click", "goes to agents that track the mouse"},
 	{"typing", "jumps back to the bottom"},
 	{"anything else", "goes to the agent"},
