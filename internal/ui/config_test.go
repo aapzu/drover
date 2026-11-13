@@ -28,6 +28,7 @@ func configModel(t *testing.T, root string) Model {
 	m.snap.Board = board
 	m.eng = eng
 	m.configInput = textinput.New()
+	m.columnPrompt = newColumnPrompt()
 	return m
 }
 
@@ -507,5 +508,27 @@ func TestConfigFooterAndRows(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("view is missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestConfigColumnsRowOpensTheColumnEditor(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m.mode = modeConfig
+	m.configSrc = configSources(m.eng.Root)
+	for range len(configOptions) + 5 {
+		m = pressConfig(t, m, key("j"))
+	}
+	if !m.onColumnsRow() {
+		t.Fatalf("configSel = %d", m.configSel)
+	}
+	if out := m.renderConfig(); !strings.Contains(out, "Columns…") {
+		t.Errorf("view is missing the link:\n%s", out)
+	}
+	if got := pressConfig(t, m, key("x")); got.mode != modeConfig || got.flash != "" {
+		t.Errorf("x on the link did something: mode=%v flash=%q", got.mode, got.flash)
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.mode != modeColumns || m.columnsFrom != modeConfig {
+		t.Errorf("mode=%v from=%v", m.mode, m.columnsFrom)
 	}
 }

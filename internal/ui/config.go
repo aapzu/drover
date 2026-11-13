@@ -19,6 +19,7 @@ const (
 	optText
 	optNumber
 	optChoice
+	optPrompt
 )
 
 // configOption is a setting the config view can change. A shared option only
@@ -150,16 +151,26 @@ func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		m.configSel = max(0, m.configSel-1)
 	case "down", "j":
-		m.configSel = min(len(configOptions)-1, m.configSel+1)
+		m.configSel = min(len(configOptions), m.configSel+1)
 	case "enter":
+		if m.onColumnsRow() {
+			return m.openColumns(), nil
+		}
 		return m.beginConfigEdit()
 	case "x":
+		if m.onColumnsRow() {
+			return m, nil
+		}
 		return m.resetConfig(), nil
 	case "c":
 		return m.openColumns(), nil
 	}
 	return m, nil
 }
+
+// onColumnsRow reports whether the selection is the "Columns…" link below the
+// options.
+func (m Model) onColumnsRow() bool { return m.configSel == len(configOptions) }
 
 func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
 	opt := configOptions[m.configSel]
@@ -311,6 +322,15 @@ func (m Model) renderConfig() string {
 		}
 		lines = append(lines, prefix+name+value+"  "+note)
 	}
-	lines = append(lines, "", dim.Render("c edits columns. Flows and automations live in drover.json only."))
+	prefix, name := "  ", fmt.Sprintf("%-32s", "Columns…")
+	if m.onColumnsRow() {
+		prefix, name = "▸ ", bold.Render(name)
+	}
+	count := fmt.Sprintf("%d columns", len(m.snap.Board.Columns))
+	if len(m.snap.Board.Columns) == 1 {
+		count = "1 column"
+	}
+	lines = append(lines, "", prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
+	lines = append(lines, "", dim.Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

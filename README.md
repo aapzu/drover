@@ -192,11 +192,15 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
   allow either, and `x` removes the override. Flows stay in `drover.json`.
-  `c` (or `O` on the board) opens the same view for a column's settings: pick
-  a column, then its name, color, permission mode, model, effort, `autoSpawn`,
-  `keepAgent`, `planExitTarget` or `noWorktree`. Only color, permission mode,
-  model and effort can go in `drover.local.json`. Columns can't be added,
-  removed or reordered there, and automations stay in `drover.json`.
+  The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
+  column's settings: pick a column, then its name, color, permission mode,
+  model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or
+  `noWorktree`. Only color, permission mode, model and effort can go in
+  `drover.local.json`. The opening prompt is the first `onEnter` row, when it is
+  a `send_message` without a condition: Enter edits it in a multi-line box (Ctrl+S
+  saves, an empty prompt removes the row) and adds the row if the column has
+  none. Columns can't be added, removed or reordered there, and other
+  automations stay in `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
