@@ -415,6 +415,49 @@ func TestDragFromThePreviewBorderResizesThePreviewAndSavesIt(t *testing.T) {
 	}
 }
 
+func TestDragFromTheLaneDividerResizesTheReviewLaneAndSavesIt(t *testing.T) {
+	m := laneModel(t)
+	l := m.layout()
+	lo, hi := laneBounds(l.boardH)
+	m, _ = update(m, mousePress(10, l.bodyY+l.laneY))
+	if m.drag.kind != dragLane {
+		t.Fatalf("drag = %v", m.drag.kind)
+	}
+
+	for _, tt := range []struct{ y, want int }{{l.bodyY + l.boardH - 15, 15}, {0, hi}, {l.bodyY + l.boardH, lo}} {
+		m, _ = update(m, mouseMotion(10, tt.y))
+		if got := m.layout().laneH; got != tt.want {
+			t.Errorf("pointer at row %d: lane is %d rows, want %d", tt.y, got, tt.want)
+		}
+	}
+	m, _ = update(m, mouseMotion(10, l.bodyY+l.boardH-15))
+	if loadPrefs(m.eng.Root).ReviewLaneHeight != 0 {
+		t.Error("the layout was saved before the drag ended")
+	}
+	m, _ = update(m, mouseRelease(10, l.bodyY+l.boardH-15))
+	if got := loadPrefs(m.eng.Root).ReviewLaneHeight; got != 15 || m.drag.kind != dragNone {
+		t.Errorf("saved lane height %d, drag %v", got, m.drag.kind)
+	}
+}
+
+func TestDraggingTheLaneDividerOnABoardTooShortToResizeSavesNothing(t *testing.T) {
+	m := laneModel(t)
+	m.height = 8
+	l := m.layout()
+	if l.laneH == 0 {
+		t.Fatal("no divider to drag")
+	}
+	if lo, hi := laneBounds(l.boardH); lo <= hi {
+		t.Fatalf("board of %d rows can be resized", l.boardH)
+	}
+	m, _ = update(m, mousePress(10, l.bodyY+l.laneY))
+	m, _ = update(m, mouseMotion(10, l.bodyY+l.laneY-2))
+	m, _ = update(m, mouseRelease(10, l.bodyY+l.laneY-2))
+	if got := m.prefs.ReviewLaneHeight; got != 0 {
+		t.Errorf("lane height %d saved", got)
+	}
+}
+
 func TestClickingThePreviewTypesIntoTheAgentOnlyWhenOneRuns(t *testing.T) {
 	m := mouseModel(t)
 	m, _ = update(m, mousePress(10, m.layout().previewY+3))

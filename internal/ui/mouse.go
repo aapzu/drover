@@ -17,6 +17,7 @@ const (
 	dragCard
 	dragColumn
 	dragPreview
+	dragLane
 	dragAssistant
 	dragSelect
 	dragForward
@@ -102,6 +103,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag = dragState{kind: dragColumn, col: h.col, colX: h.box.x}
 		case hitPreviewEdge:
 			m.drag = dragState{kind: dragPreview}
+		case hitLaneEdge:
+			m.drag = dragState{kind: dragLane}
 		case hitAssistantEdge:
 			m.drag = dragState{kind: dragAssistant}
 		case hitPreview:
@@ -135,6 +138,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.boardWidth())
 		case dragPreview:
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
+		case dragLane:
+			if lo, hi := laneBounds(l.boardH); lo <= hi {
+				m.prefs.ReviewLaneHeight = clamp(l.bodyY+l.boardH-msg.Y, lo, hi)
+			}
 		case dragAssistant:
 			m.prefs.AssistantWidth = m.clampAssistantWidth(m.width - msg.X)
 		case dragSelect:
@@ -156,7 +163,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.col = h.col
 			m.selected[target.ID] = t.ID
 			return m, m.moveCmd(t, target)
-		case dragColumn, dragPreview, dragAssistant:
+		case dragColumn, dragPreview, dragLane, dragAssistant:
 			m.savePrefs()
 		case dragSelect:
 			if text := m.selectedText(); strings.TrimSpace(text) != "" {
