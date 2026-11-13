@@ -66,7 +66,8 @@ In live mode (`tab` or a click on the preview) every key goes to the agent,
 the agent. `ctrl+q` returns to the board.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
-`pgdown` on the board. Typing in live mode jumps back to the bottom.
+`pgdown` on the board. When the agent has no history and doesn't read mouse
+reports (for example with `disableMouse`), the wheel sends it `pgup` / `pgdown`. Typing in live mode jumps back to the bottom.
 
 ## Columns
 
