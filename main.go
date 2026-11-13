@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gitx"
@@ -47,6 +48,7 @@ func main() {
 		}
 		return
 	}
+	assistant.Docs = helpDocs()
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 		fmt.Print(usage)
 		return
