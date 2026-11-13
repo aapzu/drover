@@ -151,6 +151,8 @@ type Model struct {
 	columnID      string
 	columnOptSel  int
 	columnEditing bool
+	columnsFrom   mode
+	columnPrompt  textarea.Model
 	columnSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
@@ -198,6 +200,7 @@ func New(eng *engine.Engine) Model {
 
 		paletteInput: newPaletteInput(),
 		configInput:  textinput.New(),
+		columnPrompt: newColumnPrompt(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
@@ -505,6 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.promptInput.SetWidth(min(100, m.width-8))
+		m.columnPrompt.SetWidth(min(72, m.width-10))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)

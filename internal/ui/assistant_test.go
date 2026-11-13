@@ -58,6 +58,7 @@ func assistantModel(t *testing.T) Model {
 	m.eng = &engine.Engine{Root: t.TempDir()}
 	m.keys = &keySender{jobs: make(chan keyJob, 16)}
 	m.promptInput = textarea.New()
+	m.columnPrompt = newColumnPrompt()
 	return m
 }
 

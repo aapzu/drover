@@ -159,7 +159,7 @@ func (m Model) renderFooter() string {
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
-		modeConfig:    "↑↓ select  enter change  x reset  c columns  esc close",
+		modeConfig:    "↑↓ select  enter change/open  x reset  c columns  esc close",
 	}
 	if m.configEditing {
 		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
