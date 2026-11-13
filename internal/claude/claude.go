@@ -264,10 +264,11 @@ var (
 )
 
 // AsksForPR reports whether a prompt asks the agent to open a pull request,
-// like "open a PR" or "create pull requests". Slash commands never count.
+// like "open a PR" or "create pull requests". Slash commands and background
+// agent notifications never count.
 func AsksForPR(prompt string) bool {
 	prompt = strings.TrimSpace(prompt)
-	if strings.HasPrefix(prompt, "/") {
+	if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "<task-notification>") {
 		return false
 	}
 	for _, m := range prAsk.FindAllStringIndex(prompt, -1) {

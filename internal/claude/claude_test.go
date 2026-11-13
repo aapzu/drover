@@ -374,6 +374,8 @@ func TestAsksForPR(t *testing.T) {
 		"Don’t open a PR yet":                        false,
 		"Do not, under any circumstances, open a PR": false,
 		"Wait before you open a PR":                  false,
+		"<task-notification>\n<result>OPEN PRs are polled</result>\n</task-notification>": false,
+		"<task-notification>\n<result>Now open a PR</result>\n</task-notification>":       false,
 	} {
 		if got := AsksForPR(prompt); got != want {
 			t.Errorf("AsksForPR(%q) = %v, want %v", prompt, got, want)
