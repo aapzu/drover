@@ -625,10 +625,12 @@ What the assistant may do is the same in the panel and in `drover ask`:
   `ls-tree`, `shortlog`, `rev-parse`, `describe` and `cat-file`. Everything
   else is refused: no edit or write tool, no other shell commands, and no git
   subcommand that changes the repo, a branch or a worktree.
-- `gh` is allowed without restriction or prompting: it reads live pull request
-  state, checks, reviews, runs and issues, and could also merge, comment, close
-  or change the local repo (`gh pr checkout`). It is told to change GitHub only
-  when you ask, but nothing enforces it.
+- `gh` is allowed without prompting: it reads live pull request state, checks,
+  reviews, runs and issues, and could also merge, comment or close. It is told
+  to change GitHub only when you ask, but nothing enforces it. The `gh`
+  commands that change the local checkout or run programs (`pr checkout`,
+  `repo clone` and `sync`, `run download`, `alias`, `extension`, `config`,
+  `pr merge --delete-branch`) are denied.
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -112,6 +113,15 @@ var gitReadOnly = []string{"status", "log", "show", "diff", "blame", "ls-files",
 // otherwise read-only subcommand write a file, run a program or read outside the
 // repo.
 var gitDenied = []string{"git *--output*", "git *--ext-diff*", "git *--textconv*", "git *--no-index*", "git blame *--cont*"}
+
+// ghDenied are known examples, not a complete list, of gh commands that change
+// the local checkout, write files or run a program, which gh otherwise could
+// despite the read-only repo.
+var ghDenied = []string{
+	"gh pr checkout *", "gh co *", "gh repo clone *", "gh repo sync *", "gh run download *", "gh gist clone *",
+	"gh pr merge *--delete-branch*", "gh pr merge *-d*",
+	"gh alias *", "gh extension *", "gh config *",
+}
 
 // runClaude is replaced in tests.
 var runClaude = func(ctx context.Context, dir string, argv []string, stdin string) (string, error) {
@@ -338,14 +348,14 @@ func settings(root string) string {
 }
 
 // rules lists what the assistant may do: read the repo, run read-only git
-// commands, run any gh command without prompting, and run the board's own CLI without
-// the forced removal that discards uncommitted work.
+// commands, run gh except the commands in ghDenied, and run the board's own CLI
+// without the forced removal that discards uncommitted work.
 func rules(exe string) (allow, deny []string) {
 	allow = append(allow, "Bash(gh *)", "Bash(gh)")
 	for _, sub := range gitReadOnly {
 		allow = append(allow, fmt.Sprintf("Bash(git %s *)", sub), fmt.Sprintf("Bash(git %s)", sub))
 	}
-	for _, pattern := range gitDenied {
+	for _, pattern := range append(slices.Clone(gitDenied), ghDenied...) {
 		deny = append(deny, fmt.Sprintf("Bash(%s)", pattern))
 	}
 	deny = append(deny, "Edit", "Write", "NotebookEdit")
@@ -380,7 +390,7 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"It is as the board last saw it: the board polls open pull requests about once a minute while it runs, and never polls a merged or closed one again, nor any card in a done column. " +
 		"Never answer whether a pull request is merged or closed from git history or merge commits. " +
 		"For anything newer or beyond that, such as a `state` that is unknown, an `error`, checks, reviews, comments, workflow runs or issues, run `gh` in the repository (`gh pr view`, `gh pr checks`, `gh run list`, `gh issue view`). " +
-		"`gh` can also change GitHub and the local repository (merge, close, comment, `gh api` writes, `gh pr checkout`), so do that only when the user asks.\n" +
+		"`gh` can also change GitHub (merge, close, comment, `gh api` writes), so do that only when the user asks. Commands that change the local checkout or run programs (`gh pr checkout`, `gh repo sync`, `gh alias`, `gh extension`) are denied.\n" +
 		moveOffer(board) +
 		"`" + cmd + " move <number> <column>` moves a card; columns are ids or names, and an unknown one is refused with the valid ones. " +
 		"`add <title> [-p prompt] [-c column]`, `edit <number> [--title t] [--prompt p]` and `rm <number>` change cards. " +

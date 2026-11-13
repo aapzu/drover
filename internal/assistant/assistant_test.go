@@ -797,7 +797,7 @@ func TestSessionIsLockedDown(t *testing.T) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
 			}
-			for _, pattern := range gitDenied {
+			for _, pattern := range append(slices.Clone(gitDenied), ghDenied...) {
 				if want := "Bash(" + pattern + ")"; !slices.Contains(denied, want) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
