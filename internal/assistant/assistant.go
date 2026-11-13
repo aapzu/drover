@@ -35,6 +35,12 @@ const (
 
 const maxErrorLen = 600
 
+const docsFile = "drover-docs.md"
+
+// Docs is drover's own documentation, which the assistant reads to tell users
+// what the board can do and how to do it.
+var Docs string
+
 var (
 	hasSession    = tmux.Has
 	newSession    = tmux.NewSession
@@ -158,6 +164,9 @@ func Ask(ctx context.Context, root, exe, question string, fresh bool) (string, e
 	if err != nil {
 		return "", fmt.Errorf("load the board: %w", err)
 	}
+	if err := writeDocs(root); err != nil {
+		return "", err
+	}
 	if fresh {
 		if err := forget(root); err != nil {
 			return "", err
@@ -205,6 +214,9 @@ func Start(root, exe string, board *config.Board) (created bool, err error) {
 	if running(root) {
 		return false, nil
 	}
+	if err := writeDocs(root); err != nil {
+		return false, err
+	}
 	if err := launch(root, exe, board); err != nil {
 		return false, err
 	}
@@ -235,6 +247,9 @@ func Restart(root, exe string, board *config.Board) error {
 		return err
 	}
 	defer unlock()
+	if err := writeDocs(root); err != nil {
+		return err
+	}
 	if err := stopAndVerify(root); err != nil {
 		return err
 	}
@@ -257,6 +272,30 @@ func Reset(root string) error {
 	return forget(root)
 }
 
+func docsPath(root string) string {
+	return filepath.Join(store.Dir(root), docsFile)
+}
+
+// writeDocs puts the current docs where the assistant can read them, so they
+// match the running drover rather than the repository's checkout.
+func writeDocs(root string) error {
+	if Docs == "" {
+		return nil
+	}
+	path := docsPath(root)
+	if old, err := os.ReadFile(path); err == nil && string(old) == Docs {
+		return nil
+	}
+	err := os.MkdirAll(filepath.Dir(path), 0o755)
+	if err == nil {
+		err = writeAtomic(path, []byte(Docs))
+	}
+	if err != nil {
+		return fmt.Errorf("write drover's docs for the assistant: %w", err)
+	}
+	return nil
+}
+
 func sessionPath(root string) string {
 	return filepath.Join(store.Dir(root), sessionFile)
 }
@@ -272,6 +311,10 @@ func argv(exe, root, id string, resume bool, prompt string) []string {
 	allow, deny := rules(exe)
 	args := []string{"--model", model, "--append-system-prompt", prompt, "--setting-sources", "", "--settings", settings(root), "--tools", strings.Join(append([]string{"Bash"}, repoTools...), ","), "--allowedTools"}
 	args = append(args, allow...)
+	if Docs != "" {
+		// A leading // makes the rule an absolute path.
+		args = append(args, "Read(/"+docsPath(root)+")")
+	}
 	args = append(args, "--disallowedTools")
 	args = append(args, deny...)
 	if resume {
@@ -326,6 +369,7 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"The repository is read-only to you: read and search it with Read, Grep and Glob, and its history with git, using only these subcommands: " + strings.Join(gitReadOnly, ", ") + ". " +
 		"What you read is the main checkout; each card's own work is in its worktree, whose path `list --json` gives and which you can read when it is inside the repository; a card whose column skips the worktree (noWorktree) has none yet and works in the main checkout. " +
 		"You cannot edit files, run other shell commands, or change branches or worktrees, so never try.\n" +
+		docsGuide(root) +
 		"When the user wants a change to the code, say that you can't make it and offer a card for it, with a clear title and a prompt that says what to change and why. " +
 		"Run `add` only after the user agrees to the card.\n" +
 		"`" + cmd + " list --json` shows every card: number, title, column, branch, worktree, issue, pull request and what its agent is doing. " +
@@ -344,6 +388,16 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"`rm` refuses while the worktree has uncommitted changes; " +
 		"report that instead of working around it, and never pass --force.\n" +
 		"Answer briefly, in plain text without markdown headings, and always write cards as #<number> and their title."
+}
+
+// docsGuide tells the assistant where drover's own documentation is.
+func docsGuide(root string) string {
+	if Docs == "" {
+		return ""
+	}
+	return "Drover's own documentation (its features, columns, automations, keyboard shortcuts, command line and configuration) is in " + docsPath(root) + ". " +
+		"When the user asks how to do something in drover, or whether it can, Read that file first and answer with the name of the feature and the key, command or setting that does it, for example: it's the hide card feature, press `b`. " +
+		"If the documentation doesn't cover it, say so instead of guessing.\n"
 }
 
 func baseBranch(b *config.Board) string {
@@ -422,9 +476,12 @@ func conversation(root string) (id string, resume bool, err error) {
 }
 
 func save(root, id string) error {
-	path := sessionPath(root)
+	return writeAtomic(sessionPath(root), []byte(id+"\n"))
+}
+
+func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	err := os.WriteFile(tmp, []byte(id+"\n"), 0o644)
+	err := os.WriteFile(tmp, data, 0o644)
 	if err == nil {
 		err = os.Rename(tmp, path)
 	}
