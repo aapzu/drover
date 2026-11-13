@@ -30,24 +30,26 @@ func stubTranscript(t *testing.T, has bool, err error) {
 }
 
 type panel struct {
-	live  bool
-	calls [][]string
-	dirs  []string
-	envs  []map[string]string
-	stops int
+	live     bool
+	calls    [][]string
+	dirs     []string
+	envs     []map[string]string
+	stops    int
+	mouseOff int
 }
 
 func fakePanel(t *testing.T) *panel {
 	t.Helper()
 	p := &panel{}
-	origHas, origNew, origStop := hasSession, newSession, stopSession
-	t.Cleanup(func() { hasSession, newSession, stopSession = origHas, origNew, origStop })
+	origHas, origNew, origStop, origMouse := hasSession, newSession, stopSession, disableMouse
+	t.Cleanup(func() { hasSession, newSession, stopSession, disableMouse = origHas, origNew, origStop, origMouse })
 	hasSession = func(string) bool { return p.live }
 	newSession = func(name, dir string, argv []string, env map[string]string) error {
 		p.calls, p.dirs, p.envs, p.live = append(p.calls, argv), append(p.dirs, dir), append(p.envs, env), true
 		return nil
 	}
 	stopSession = func(string) { p.live, p.stops = false, p.stops+1 }
+	disableMouse = func(string) error { p.mouseOff++; return nil }
 	return p
 }
 
@@ -966,6 +968,9 @@ func TestPanelEnvFollowsDisableMouse(t *testing.T) {
 		}
 		if has := p.envs[0]["CLAUDE_CODE_DISABLE_MOUSE"] == "1"; has != on {
 			t.Errorf("disableMouse=%t: env = %v", on, p.envs[0])
+		}
+		if (p.mouseOff == 1) != on {
+			t.Errorf("disableMouse=%t: tmux mouse turned off %d times", on, p.mouseOff)
 		}
 	}
 }

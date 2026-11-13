@@ -149,6 +149,13 @@ func NewSession(name, dir string, argv []string, env map[string]string) error {
 	return err
 }
 
+// DisableMouse stops tmux from capturing the mouse in the session, so the
+// terminal handles selection and scrolling when you attach.
+func DisableMouse(name string) error {
+	_, err := run("set-option", "-t", "="+name+":", "mouse", "off")
+	return err
+}
+
 func Has(name string) bool {
 	_, err := run("has-session", "-t", "="+name)
 	return err == nil

@@ -38,6 +38,7 @@ const maxErrorLen = 600
 var (
 	hasSession    = tmux.Has
 	newSession    = tmux.NewSession
+	disableMouse  = tmux.DisableMouse
 	stopSession   = tmux.Stop
 	hasTranscript = func(root, id string) (bool, error) {
 		_, err := os.Stat(claude.TranscriptPath(id, root))
@@ -223,7 +224,14 @@ func launch(root, exe string, board *config.Board) error {
 		}
 	}
 	args := append(argv(exe, root, id, resume, systemPrompt(exe, root, board)), "--permission-mode", "dontAsk")
-	return newSession(SessionName(root), root, append([]string{"claude"}, args...), board.ClaudeEnv())
+	name := SessionName(root)
+	if err := newSession(name, root, append([]string{"claude"}, args...), board.ClaudeEnv()); err != nil {
+		return err
+	}
+	if board.DisableMouse {
+		disableMouse(name)
+	}
+	return nil
 }
 
 func Restart(root, exe string, board *config.Board) error {
