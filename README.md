@@ -53,8 +53,8 @@ Then bring in the Claude Code work you already have:
 Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
-a card to attach, drag a column's right edge or the preview's top border to
-resize, click the preview to type into the agent, and click the assistant
+a card to attach, drag a column's right edge, the preview's top border or the review lane's
+divider to resize, click the preview to type into the agent, and click the assistant
 panel to type into it. Dragging over the live preview selects text and
 copies it. To select text anywhere else with the terminal's own selection
 (double and triple click included), hold Option on macOS or Shift elsewhere
@@ -66,7 +66,9 @@ In live mode (`tab` or a click on the preview) every key goes to the agent,
 the agent. `ctrl+q` returns to the board.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
-`pgdown` on the board. Typing in live mode jumps back to the bottom.
+`pgdown` on the board. When the agent has no history and doesn't read mouse
+reports (for example with `disableMouse`), the wheel sends it `pgup` /
+`pgdown`. Typing in live mode jumps back to the bottom.
 
 ## Columns
 
@@ -191,13 +193,17 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. `/` searches the options by name or
-  JSON key (esc clears the search). Flows stay in `drover.json`.
-  `c` (or `O` on the board) opens the same view for a column's settings: pick
-  a column, then its name, color, permission mode, model, effort, `autoSpawn`,
-  `keepAgent`, `planExitTarget` or `noWorktree`. Only color, permission mode,
-  model and effort can go in `drover.local.json`. Columns can't be added,
-  removed or reordered there, and automations stay in `drover.json`.
+  allow either, and `x` removes the override. `/` searches the options by name or JSON key
+  (esc clears the search). Flows stay in `drover.json`.
+  The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
+  column's settings: pick a column, then its name, color, permission mode,
+  model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or
+  `noWorktree`. Only color, permission mode, model and effort can go in
+  `drover.local.json`. The opening prompt is the first `onEnter` row, when it is
+  a `send_message` without a condition: Enter edits it in a multi-line box (Ctrl+S
+  saves, an empty prompt removes the row) and adds the row if the column has
+  none. Columns can't be added, removed or reordered there, and other
+  automations stay in `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
@@ -482,7 +488,8 @@ a lane of its own: a second row of columns below the main ones. Give a column
 shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
-card within its lane only; use `m` to move it between them.
+card within its lane only; use `m` to move it between them. Drag the divider
+above the lane to resize it; `0` resets the layout.
 
 The default lane is Reviewing, Triage findings and Waiting on author, with a
 `reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on

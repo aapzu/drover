@@ -30,6 +30,7 @@ func configModel(t *testing.T, root string) Model {
 	m.configInput = textinput.New()
 	m.configFilterInput = textinput.New()
 	m.configSrc = configSources(root)
+	m.columnPrompt = newColumnPrompt()
 	return m
 }
 
@@ -749,5 +750,46 @@ func TestConfigReopeningFromTheBoardClearsTheSearch(t *testing.T) {
 	m = next.(Model)
 	if m.configQuery() != "" || m.configFilterInput.Focused() {
 		t.Errorf("filter=%q filtering=%v", m.configQuery(), m.configFilterInput.Focused())
+	}
+}
+
+func TestConfigColumnsRowOpensTheColumnEditor(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m.mode = modeConfig
+	m.configSrc = configSources(m.eng.Root)
+	for range len(configOptions) + 5 {
+		m = pressConfig(t, m, key("j"))
+	}
+	if !m.onColumnsRow() {
+		t.Fatalf("configSel = %d", m.configSel)
+	}
+	if out := m.renderConfig(); !strings.Contains(out, "Columns…") {
+		t.Errorf("view is missing the link:\n%s", out)
+	}
+	if got := pressConfig(t, m, key("x")); got.mode != modeConfig || got.flash != "" {
+		t.Errorf("x on the link did something: mode=%v flash=%q", got.mode, got.flash)
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.mode != modeColumns || m.columnsFrom != modeConfig {
+		t.Errorf("mode=%v from=%v", m.mode, m.columnsFrom)
+	}
+}
+
+func TestConfigSearchHidesTheColumnsLink(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m.mode = modeConfig
+	for range len(configOptions) + 1 {
+		m = pressConfig(t, m, key("j"))
+	}
+	if !m.onColumnsRow() {
+		t.Fatalf("configSel=%d", m.configSel)
+	}
+	m = typeInConfigSearch(t, m, "zzzz")
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.onColumnsRow() || strings.Contains(m.renderConfig(), "Columns…") {
+		t.Error("the columns link is still reachable while a search matches nothing")
+	}
+	if got := pressConfig(t, m, keyPress("enter")); got.mode != modeConfig {
+		t.Errorf("enter opened %v", got.mode)
 	}
 }

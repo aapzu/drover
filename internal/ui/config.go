@@ -20,6 +20,7 @@ const (
 	optText
 	optNumber
 	optChoice
+	optPrompt
 )
 
 // configOption is a setting the config view can change. A shared option only
@@ -157,11 +158,20 @@ func (m Model) configVisible() []int {
 	return visible
 }
 
-// moveConfigSel moves the selection by delta among the visible options. A
-// selection that isn't visible moves to the first visible option, so a delta of
-// 0 re-validates it.
+// configStops lists what the selection can rest on: the visible options, then
+// the "Columns…" link unless a search is narrowing the list.
+func (m Model) configStops() []int {
+	stops := m.configVisible()
+	if m.configQuery() == "" {
+		stops = append(stops, len(configOptions))
+	}
+	return stops
+}
+
+// moveConfigSel moves the selection by delta among the stops. A selection that
+// isn't one moves to the first stop, so a delta of 0 re-validates it.
 func (m Model) moveConfigSel(delta int) Model {
-	visible := m.configVisible()
+	visible := m.configStops()
 	if len(visible) == 0 {
 		return m
 	}
@@ -184,7 +194,8 @@ func (m Model) openConfig() Model {
 	return m
 }
 
-// configSelVisible is false when the search matches nothing, so no option is selected.
+// configSelVisible reports whether the selected option matches the search. It is
+// false when nothing matches, because the selection then stays on a hidden row.
 func (m Model) configSelVisible() bool {
 	return slices.Contains(m.configVisible(), m.configSel)
 }
@@ -213,11 +224,14 @@ func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		return m.moveConfigSel(1), nil
 	case "enter":
+		if m.onColumnsRow() {
+			return m.openColumns(), nil
+		}
 		if m.configSelVisible() {
 			return m.beginConfigEdit()
 		}
 	case "x":
-		if m.configSelVisible() {
+		if !m.onColumnsRow() && m.configSelVisible() {
 			return m.resetConfig(), nil
 		}
 	case "c":
@@ -245,6 +259,12 @@ func (m Model) updateConfigFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.configFilterInput, cmd = m.configFilterInput.Update(msg)
 	return m.moveConfigSel(0), cmd
+}
+
+// onColumnsRow reports whether the selection is the "Columns…" link below the
+// options, which a search hides.
+func (m Model) onColumnsRow() bool {
+	return m.configSel == len(configOptions) && m.configQuery() == ""
 }
 
 func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
@@ -405,6 +425,17 @@ func (m Model) renderConfig() string {
 		}
 		lines = append(lines, prefix+name+value+"  "+note)
 	}
-	lines = append(lines, "", dim.Render("c edits columns. Flows and automations live in drover.json only."))
+	if m.configQuery() == "" {
+		prefix, name := "  ", fmt.Sprintf("%-32s", "Columns…")
+		if m.onColumnsRow() {
+			prefix, name = "▸ ", bold.Render(name)
+		}
+		count := fmt.Sprintf("%d columns", len(m.snap.Board.Columns))
+		if len(m.snap.Board.Columns) == 1 {
+			count = "1 column"
+		}
+		lines = append(lines, "", prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
+	}
+	lines = append(lines, "", dim.Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

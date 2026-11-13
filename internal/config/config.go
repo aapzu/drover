@@ -171,6 +171,9 @@ type Automation struct {
 // Conditional reports whether the row is gated.
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
+// OpensAgent reports whether the row can be the first prompt of a new agent.
+func (a Automation) OpensAgent() bool { return a.Type == "send_message" && !a.Conditional() }
+
 func (c Column) IsDone() bool { return c.Role == "done" }
 
 const LaneReview = "review"
