@@ -149,6 +149,13 @@ func NewSession(name, dir string, argv []string, env map[string]string) error {
 	return err
 }
 
+// DisableMouse stops tmux from capturing the mouse in the session, so the
+// terminal handles selection and scrolling when you attach.
+func DisableMouse(name string) error {
+	_, err := run("set-option", "-t", "="+name+":", "mouse", "off")
+	return err
+}
+
 func Has(name string) bool {
 	_, err := run("has-session", "-t", "="+name)
 	return err == nil
@@ -191,31 +198,39 @@ func Stop(name string) {
 	Kill(name)
 }
 
+// Cursor is where the pane's app has parked the terminal cursor, as a column
+// and an index into the lines of a capture, and whether the app shows it.
+type Cursor struct {
+	X, Line int
+	Visible bool
+}
+
 // Capture returns the visible screen plus up to scrollback lines of history,
-// with colors, how many lines of history the pane has, and whether its app has
-// enabled mouse tracking with SGR encoding. Alternate-screen apps have no history.
-func Capture(name string, scrollback int) (out string, history int, mouse bool, err error) {
-	out, _, history, mouse, err = capture(name, scrollback)
-	return out, history, mouse, err
+// with colors, how many lines of history the pane has, whether its app has
+// enabled mouse tracking with SGR encoding, and where its cursor is.
+// Alternate-screen apps have no history.
+func Capture(name string, scrollback int) (out string, history int, mouse bool, cur Cursor, err error) {
+	out, _, history, mouse, cur, err = capture(name, scrollback)
+	return out, history, mouse, cur, err
 }
 
 // CaptureSized is Capture after resizing the window to width x height, unless
 // a terminal is attached to it.
-func CaptureSized(name string, width, height, scrollback int) (out string, history int, mouse bool, err error) {
-	out, size, history, mouse, err := capture(name, scrollback)
+func CaptureSized(name string, width, height, scrollback int) (out string, history int, mouse bool, cur Cursor, err error) {
+	out, size, history, mouse, cur, err := capture(name, scrollback)
 	if err != nil || size == fmt.Sprintf("%dx%d", width, height) {
-		return out, history, mouse, err
+		return out, history, mouse, cur, err
 	}
 	attachedMu.Lock()
 	defer attachedMu.Unlock()
 	if attached[name] {
-		return out, history, mouse, nil
+		return out, history, mouse, cur, nil
 	}
 	if _, err := run("resize-window", "-t", "="+name+":", "-x", fmt.Sprint(width), "-y", fmt.Sprint(height)); err != nil {
-		return out, history, mouse, nil
+		return out, history, mouse, cur, nil
 	}
-	out, _, history, mouse, err = capture(name, scrollback)
-	return out, history, mouse, err
+	out, _, history, mouse, cur, err = capture(name, scrollback)
+	return out, history, mouse, cur, err
 }
 
 // captureTimeout keeps a hung tmux from stalling the preview, which waits for
@@ -224,24 +239,27 @@ const captureTimeout = 5 * time.Second
 
 // capture reads the window's size and the pane's state in the same tmux call
 // as the pane itself.
-func capture(name string, scrollback int) (out, size string, history int, mouse bool, err error) {
+func capture(name string, scrollback int) (out, size string, history int, mouse bool, cur Cursor, err error) {
 	target := "=" + name + ":"
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 	raw, err := output(rawCommand(ctx,
-		"display-message", "-p", "-t", target, "#{window_width}x#{window_height} #{history_size} #{mouse_any_flag}#{mouse_sgr_flag}", ";",
+		"display-message", "-p", "-t", target, "#{window_width}x#{window_height} #{history_size} #{mouse_any_flag}#{mouse_sgr_flag} #{cursor_x} #{cursor_y} #{cursor_flag}", ";",
 		"capture-pane", "-p", "-e", "-t", target, "-S", fmt.Sprintf("-%d", scrollback),
 	), "display-message; capture-pane")
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, Cursor{}, err
 	}
 	info, out, _ := strings.Cut(raw, "\n")
 	fields := strings.Fields(info)
-	if len(fields) != 3 {
-		return "", "", 0, false, fmt.Errorf("tmux display-message: unexpected output %q", info)
+	if len(fields) != 6 {
+		return "", "", 0, false, Cursor{}, fmt.Errorf("tmux display-message: unexpected output %q", info)
 	}
 	history, _ = strconv.Atoi(fields[1])
-	return out, fields[0], history, fields[2] == "11", nil
+	x, _ := strconv.Atoi(fields[3])
+	y, _ := strconv.Atoi(fields[4])
+	cur = Cursor{X: x, Line: min(scrollback, history) + y, Visible: fields[5] == "1"}
+	return out, fields[0], history, fields[2] == "11", cur, nil
 }
 
 // Screen returns the visible screen as plain text.

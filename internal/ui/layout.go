@@ -16,6 +16,7 @@ const (
 	minResizedWidth    = 16
 	minPreviewHeight   = 6
 	minBoardHeight     = 8
+	laneDividerHeight  = 1
 )
 
 // colBox is a column's place on the board. y is relative to the top of the
@@ -31,6 +32,7 @@ type layout struct {
 	boardH             int
 	boardW, assistantW int
 	previewY, previewH int
+	laneY, laneH       int
 	cols               []colBox
 	rows               [][]colBox
 }
@@ -51,16 +53,21 @@ func (m Model) layout() layout {
 	l.previewY = l.bodyY + l.boardH
 
 	lanes := m.lanes()
-	heights := laneHeights(l.boardH, len(lanes), m.prefs.Density.cardHeight())
+	heights := laneHeights(l.boardH, len(lanes), m.prefs.Density.cardHeight(), m.prefs.ReviewLaneHeight)
 	y := 0
 	for k, idxs := range lanes {
 		start, widths := m.columnWindow(idxs)
-		slots := max(1, (heights[k]-columnHeaderHeight)/m.prefs.Density.cardHeight())
+		top, height := y, heights[k]
+		if k > 0 && heights[k] > laneDividerHeight {
+			l.laneY, l.laneH = y, heights[k]
+			top, height = y+laneDividerHeight, heights[k]-laneDividerHeight
+		}
+		slots := max(1, (height-columnHeaderHeight)/m.prefs.Density.cardHeight())
 		var row []colBox
 		x := 0
 		for j, w := range widths {
 			i := idxs[start+j]
-			box := colBox{index: i, x: x, y: y, width: w, height: heights[k], slots: slots}
+			box := colBox{index: i, x: x, y: top, width: w, height: height, slots: slots}
 			if i == m.col {
 				if sel := m.selectedIndex(); sel >= slots {
 					box.first = sel - slots + 1
@@ -76,14 +83,26 @@ func (m Model) layout() layout {
 	return l
 }
 
-// laneHeights splits the board's height between its lanes. The review lane
-// gets two fifths, but at least room for a card, up to half the board.
-func laneHeights(total, lanes, cardHeight int) []int {
+// laneHeights splits the board's height between its lanes. The review lane's
+// share includes its divider. It gets pref rows when set, else two fifths, but
+// at least room for a card, up to half the board.
+func laneHeights(total, lanes, cardHeight, pref int) []int {
 	if lanes < 2 {
 		return []int{total}
 	}
-	review := max(total*2/5, min(total/2, columnHeaderHeight+cardHeight))
+	lo, hi := laneBounds(total)
+	review := max(total*2/5, min(total/2, laneDividerHeight+columnHeaderHeight+cardHeight))
+	if pref > 0 && lo <= hi {
+		review = clamp(pref, lo, hi)
+	}
 	return []int{total - review, review}
+}
+
+// laneBounds is the smallest and largest height of the review lane, divider
+// included, that leaves each lane its header and a row of cards. lo > hi when
+// the board is too short to resize.
+func laneBounds(total int) (lo, hi int) {
+	return laneDividerHeight + columnHeaderHeight + 1, total - columnHeaderHeight - 1
 }
 
 // columnWindow picks the columns of one lane, given by their indexes, that fit
@@ -149,6 +168,7 @@ const (
 	hitCard
 	hitColumn
 	hitColumnEdge
+	hitLaneEdge
 	hitPreview
 	hitPreviewEdge
 	hitAssistant
@@ -187,6 +207,9 @@ func (l layout) hitTest(m Model, x, y int) hit {
 	}
 	if y < l.bodyY || y >= l.bodyY+l.boardH {
 		return hit{}
+	}
+	if l.laneH > 0 && y == l.bodyY+l.laneY {
+		return hit{kind: hitLaneEdge}
 	}
 	for _, c := range l.cols {
 		if x < c.x || x >= c.x+c.width || y < l.bodyY+c.y || y >= l.bodyY+c.y+c.height {

@@ -30,24 +30,26 @@ func stubTranscript(t *testing.T, has bool, err error) {
 }
 
 type panel struct {
-	live  bool
-	calls [][]string
-	dirs  []string
-	envs  []map[string]string
-	stops int
+	live     bool
+	calls    [][]string
+	dirs     []string
+	envs     []map[string]string
+	stops    int
+	mouseOff int
 }
 
 func fakePanel(t *testing.T) *panel {
 	t.Helper()
 	p := &panel{}
-	origHas, origNew, origStop := hasSession, newSession, stopSession
-	t.Cleanup(func() { hasSession, newSession, stopSession = origHas, origNew, origStop })
+	origHas, origNew, origStop, origMouse := hasSession, newSession, stopSession, disableMouse
+	t.Cleanup(func() { hasSession, newSession, stopSession, disableMouse = origHas, origNew, origStop, origMouse })
 	hasSession = func(string) bool { return p.live }
 	newSession = func(name, dir string, argv []string, env map[string]string) error {
 		p.calls, p.dirs, p.envs, p.live = append(p.calls, argv), append(p.dirs, dir), append(p.envs, env), true
 		return nil
 	}
 	stopSession = func(string) { p.live, p.stops = false, p.stops+1 }
+	disableMouse = func(string) error { p.mouseOff++; return nil }
 	return p
 }
 
@@ -210,6 +212,114 @@ func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
 	}
 	if strings.Index(got, "Planning (id") > strings.Index(got, "Done (id") {
 		t.Error("columns are not in board order")
+	}
+}
+
+func withDocs(t *testing.T, docs string) {
+	t.Helper()
+	old := Docs
+	Docs = docs
+	t.Cleanup(func() { Docs = old })
+}
+
+func TestPromptPointsAtTheDocs(t *testing.T) {
+	root := "/work/my-app"
+	withDocs(t, "")
+	if got := systemPrompt("/bin/drover", root, &config.Board{}); strings.Contains(got, docsFile) {
+		t.Errorf("prompt names the docs without any:\n%s", got)
+	}
+	withDocs(t, "# drover")
+	got := systemPrompt("/bin/drover", root, &config.Board{})
+	for _, want := range []string{docsPath(root), "Read that file first"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestSessionsReadTheDocsFromTheStateDir(t *testing.T) {
+	const docs = "# drover\n\nPress `b` to hide a card.\n"
+	cases := []struct {
+		name string
+		argv func(t *testing.T, root string) []string
+	}{{"ask", askArgv}, {"panel", panelArgv}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withDocs(t, docs)
+			root := newRoot(t)
+			args := tc.argv(t, root)
+
+			if got, err := os.ReadFile(docsPath(root)); err != nil || string(got) != docs {
+				t.Fatalf("docs file = %q, %v", got, err)
+			}
+			allowed := args[slices.Index(args, "--allowedTools")+1 : slices.Index(args, "--disallowedTools")]
+			if want := "Read(/" + docsPath(root) + ")"; !slices.Contains(allowed, want) {
+				t.Errorf("allowed tools lack %q: %q", want, allowed)
+			}
+			if !strings.Contains(flagValue(args, "--append-system-prompt"), docsPath(root)) {
+				t.Error("the prompt doesn't name the docs file")
+			}
+		})
+	}
+}
+
+func TestDocsAreRewrittenWhenTheyChange(t *testing.T) {
+	root := newRoot(t)
+	withDocs(t, "old")
+	if err := writeDocs(root); err != nil {
+		t.Fatal(err)
+	}
+	withDocs(t, "new")
+	if err := writeDocs(root); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(docsPath(root)); string(got) != "new" {
+		t.Errorf("docs file = %q, want new", got)
+	}
+	if _, err := os.Stat(docsPath(root) + ".tmp"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temporary file left behind: %v", err)
+	}
+}
+
+func TestNoDocsMeansNoDocsRuleOrFile(t *testing.T) {
+	withDocs(t, "")
+	root := newRoot(t)
+	args := askArgv(t, root)
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "Read(") {
+			t.Errorf("rule %q allows reading docs that don't exist", arg)
+		}
+	}
+	if _, err := os.Stat(docsPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a docs file exists without docs: %v", err)
+	}
+}
+
+func TestDocsWriteFailureChangesNothing(t *testing.T) {
+	withDocs(t, "# drover")
+	root := newRoot(t)
+	id := seedID(t, root)
+	if err := os.Mkdir(docsPath(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := fakeClaude(t, "ok", nil)
+	p := fakePanel(t)
+
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); err == nil || !strings.Contains(err.Error(), "docs") {
+		t.Errorf("Ask --new = %v, want a docs error", err)
+	}
+	if _, err := Start(root, "/bin/drover", &config.Board{}); err == nil {
+		t.Error("Start succeeded without writable docs")
+	}
+	p.live = true
+	if err := Restart(root, "/bin/drover", &config.Board{}); err == nil {
+		t.Error("Restart succeeded without writable docs")
+	}
+	if len(*calls) != 0 || len(p.calls) != 0 || p.stops != 0 || !p.live {
+		t.Errorf("a session ran or stopped: %d asks, %d panels, %d stops", len(*calls), len(p.calls), p.stops)
+	}
+	if got := SessionID(root); got != id {
+		t.Errorf("the conversation became %q, want %q kept", got, id)
 	}
 }
 
@@ -649,13 +759,19 @@ func TestSessionIsLockedDown(t *testing.T) {
 			for _, rule := range allowed {
 				switch {
 				case strings.Contains(rule, exe):
+				case rule == "Bash(gh)" || rule == "Bash(gh *)":
 				case strings.HasPrefix(rule, "Bash(git "):
 					sub := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(rule, "Bash("), ")"))[1]
 					if !slices.Contains(gitReadOnly, sub) {
 						t.Errorf("rule %q allows git %s", rule, sub)
 					}
 				default:
-					t.Errorf("rule %q is neither the drover binary nor read-only git", rule)
+					t.Errorf("rule %q is neither the drover binary, gh nor read-only git", rule)
+				}
+			}
+			for _, want := range []string{"Bash(gh)", "Bash(gh *)"} {
+				if !slices.Contains(allowed, want) {
+					t.Errorf("allowed tools lack %q", want)
 				}
 			}
 			wantGit := []string{"status", "log", "show", "diff", "blame", "ls-files", "ls-tree", "shortlog", "rev-parse", "describe", "cat-file"}
@@ -683,7 +799,7 @@ func TestSessionIsLockedDown(t *testing.T) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
 			}
-			for _, pattern := range gitDenied {
+			for _, pattern := range append(slices.Clone(gitDenied), ghDenied...) {
 				if want := "Bash(" + pattern + ")"; !slices.Contains(denied, want) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
@@ -697,8 +813,8 @@ func TestSessionIsLockedDown(t *testing.T) {
 			for _, want := range []string{
 				"'" + exe + "' list --json", "never pass --force", "wait for the user to agree",
 				"read-only to you", "offer a card", "Run `add` only after the user agrees",
-				"A card's `pr` has", "never answer that from git history", "never run `gh`",
-				"may be out of date instead of guessing", "A card without `pr`",
+				"A card's `pr` has", "Never answer whether a pull request is merged or closed from git history",
+				"run `gh` in the repository", "do that only when the user asks", "A card without `pr`",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("the prompt lacks %q", want)
@@ -966,6 +1082,9 @@ func TestPanelEnvFollowsDisableMouse(t *testing.T) {
 		}
 		if has := p.envs[0]["CLAUDE_CODE_DISABLE_MOUSE"] == "1"; has != on {
 			t.Errorf("disableMouse=%t: env = %v", on, p.envs[0])
+		}
+		if (p.mouseOff == 1) != on {
+			t.Errorf("disableMouse=%t: tmux mouse turned off %d times", on, p.mouseOff)
 		}
 	}
 }

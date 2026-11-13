@@ -53,8 +53,8 @@ Then bring in the Claude Code work you already have:
 Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
-a card to attach, drag a column's right edge or the preview's top border to
-resize, click the preview to type into the agent, and click the assistant
+a card to attach, drag a column's right edge, the preview's top border or the review lane's
+divider to resize, click the preview to type into the agent, and click the assistant
 panel to type into it. Dragging over the live preview selects text and
 copies it. To select text anywhere else with the terminal's own selection
 (double and triple click included), hold Option on macOS or Shift elsewhere
@@ -66,7 +66,9 @@ In live mode (`tab` or a click on the preview) every key goes to the agent,
 the agent. `ctrl+q` returns to the board.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
-`pgdown` on the board. Typing in live mode jumps back to the bottom.
+`pgdown` on the board. When the agent has no history and doesn't read mouse
+reports (for example with `disableMouse`), the wheel sends it `pgup` /
+`pgdown`. Typing in live mode jumps back to the bottom.
 
 ## Columns
 
@@ -191,12 +193,17 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. Flows stay in `drover.json`.
-  `c` (or `O` on the board) opens the same view for a column's settings: pick
-  a column, then its name, color, permission mode, model, effort, `autoSpawn`,
-  `keepAgent`, `planExitTarget` or `noWorktree`. Only color, permission mode,
-  model and effort can go in `drover.local.json`. Columns can't be added,
-  removed or reordered there, and automations stay in `drover.json`.
+  allow either, and `x` removes the override. `/` searches the options by name or JSON key
+  (esc clears the search). Flows stay in `drover.json`.
+  The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
+  column's settings: pick a column, then its name, color, permission mode,
+  model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or
+  `noWorktree`. Only color, permission mode, model and effort can go in
+  `drover.local.json`. The opening prompt is the first `onEnter` row, when it is
+  a `send_message` without a condition: Enter edits it in a multi-line box (Ctrl+S
+  saves, an empty prompt removes the row) and adds the row if the column has
+  none. Columns can't be added, removed or reordered there, and other
+  automations stay in `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
@@ -281,8 +288,9 @@ These settings work in `drover.json` and, for you alone, in
   first message, written with `claude -p --model haiku`. A title you edit is
   never replaced.
 - **`disableMouse`** (default `false`) starts agents and the assistant with
-  `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
-  your terminal. It applies to sessions started or resumed after you change it.
+  `CLAUDE_CODE_DISABLE_MOUSE=1` and turns tmux's mouse mode off in their
+  sessions, so your terminal handles selection and scrolling when you attach.
+  It applies to sessions started or resumed after you change it.
 
 ## Automations
 
@@ -481,7 +489,8 @@ a lane of its own: a second row of columns below the main ones. Give a column
 shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
-card within its lane only; use `m` to move it between them.
+card within its lane only; use `m` to move it between them. Drag the divider
+above the lane to resize it; `0` resets the layout.
 
 The default lane is Reviewing, Triage findings and Waiting on author, with a
 `reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
@@ -586,7 +595,10 @@ review by default) has a merged or closed pull request of its own, it offers to 
 card on, to the merged column of your `prFlow` or to Done, and waits for you to
 agree. It runs the commands above, so changes go through the open board like
 any other.
-It takes no agent slot and isn't a card.
+It also knows drover's own docs, so you can ask it how to do something ("how do
+I hide a card?") and it names the feature and its key.
+It takes no agent slot and isn't a card, so `idleTimeoutMinutes` and slot
+evictions never suspend it.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
@@ -604,17 +616,23 @@ It takes no agent slot and isn't a card.
 
 What the assistant may do is the same in the panel and in `drover ask`:
 
-- Besides read-only git (below), it may only run `drover list`, `move`, `add`,
-  `edit` and `rm`, and never `--force`. Anything else is denied without asking
-  (`dontAsk` mode in the panel). It is told to ask you before deleting a card,
-  which removes its worktree. In a one-off `drover ask` you answer that in the
-  next question.
-- The repo is read-only to it, enforced in the tool permissions: Read, Grep and
-  Glob, which Claude limits to the repo, and the git subcommands `status`,
-  `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,
-  `rev-parse`, `describe` and `cat-file`. Everything else is refused: no edit
-  or write tool, no other shell commands, and no git subcommand that changes
-  the repo, a branch or a worktree.
+- Besides read-only git (below) and `gh`, it may only run `drover list`,
+  `move`, `add`, `edit` and `rm`, and never `--force`. Anything else is denied
+  without asking (`dontAsk` mode in the panel). It is told to ask you before
+  deleting a card, which removes its worktree. In a one-off `drover ask` you
+  answer that in the next question.
+- Apart from `gh` (below), the repo is read-only to it, enforced in the tool
+  permissions: Read, Grep and Glob, which Claude limits to the repo, and the
+  git subcommands `status`, `log`, `show`, `diff`, `blame`, `ls-files`,
+  `ls-tree`, `shortlog`, `rev-parse`, `describe` and `cat-file`. Everything
+  else is refused: no edit or write tool, no other shell commands, and no git
+  subcommand that changes the repo, a branch or a worktree.
+- `gh` is allowed without prompting: it reads live pull request state, checks,
+  reviews, runs and issues, and could also merge, comment or close. It is told
+  to change GitHub only when you ask, but nothing enforces it. The `gh`
+  commands that change the local checkout or run programs (`pr checkout`,
+  `repo clone` and `sync`, `run download`, `alias`, `extension`, `config`,
+  `pr merge --delete-branch`) are denied.
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow
