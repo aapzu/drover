@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aapzu/drover/internal/config"
@@ -141,36 +142,130 @@ func sourceLabel(layer config.Layer, ok bool) string {
 	return "shared"
 }
 
+// configQuery is the committed or in-progress search.
+func (m Model) configQuery() string {
+	return strings.TrimSpace(m.configFilterInput.Value())
+}
+
+// configVisible lists the indices of the options that match the search.
+func (m Model) configVisible() []int {
+	var visible []int
+	for i, opt := range configOptions {
+		if containsAllWords(opt.name+" "+strings.Join(opt.path, "."), m.configQuery()) {
+			visible = append(visible, i)
+		}
+	}
+	return visible
+}
+
+// configStops lists what the selection can rest on: the visible options, then
+// the "Columns…" link unless a search is narrowing the list.
+func (m Model) configStops() []int {
+	stops := m.configVisible()
+	if m.configQuery() == "" {
+		stops = append(stops, len(configOptions))
+	}
+	return stops
+}
+
+// moveConfigSel moves the selection by delta among the stops. A selection that
+// isn't one moves to the first stop, so a delta of 0 re-validates it.
+func (m Model) moveConfigSel(delta int) Model {
+	visible := m.configStops()
+	if len(visible) == 0 {
+		return m
+	}
+	pos := slices.Index(visible, m.configSel)
+	if pos < 0 {
+		m.configSel = visible[0]
+		return m
+	}
+	m.configSel = visible[clamp(pos+delta, 0, len(visible)-1)]
+	return m
+}
+
+// openConfig shows the settings list with no search.
+func (m Model) openConfig() Model {
+	m.mode = modeConfig
+	m.configSel = 0
+	m.configFilterInput.SetValue("")
+	m.configFilterInput.Blur()
+	m.configSrc = configSources(m.eng.Root)
+	return m
+}
+
+// configSelVisible reports whether the selected option matches the search. It is
+// false when nothing matches, because the selection then stays on a hidden row.
+func (m Model) configSelVisible() bool {
+	return slices.Contains(m.configVisible(), m.configSel)
+}
+
 func (m Model) updateConfig(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.configEditing {
 		return m.updateConfigInput(msg)
 	}
+	if m.configFilterInput.Focused() {
+		return m.updateConfigFilter(msg)
+	}
 	switch msg.String() {
-	case "esc", "q", "o":
+	case "esc":
+		if m.configQuery() != "" {
+			m.configFilterInput.SetValue("")
+			break
+		}
 		m.mode = modeBoard
+	case "q", "o":
+		m.mode = modeBoard
+	case "/":
+		m.configFilterInput.CursorEnd()
+		return m, tea.Batch(m.configFilterInput.Focus(), textinput.Blink)
 	case "up", "k":
-		m.configSel = max(0, m.configSel-1)
+		return m.moveConfigSel(-1), nil
 	case "down", "j":
-		m.configSel = min(len(configOptions), m.configSel+1)
+		return m.moveConfigSel(1), nil
 	case "enter":
 		if m.onColumnsRow() {
 			return m.openColumns(), nil
 		}
-		return m.beginConfigEdit()
-	case "x":
-		if m.onColumnsRow() {
-			return m, nil
+		if m.configSelVisible() {
+			return m.beginConfigEdit()
 		}
-		return m.resetConfig(), nil
+	case "x":
+		if !m.onColumnsRow() && m.configSelVisible() {
+			return m.resetConfig(), nil
+		}
 	case "c":
 		return m.openColumns(), nil
 	}
 	return m, nil
 }
 
+// updateConfigFilter narrows the settings as you type. Up and down move
+// through the matches, enter keeps the search, esc clears it.
+func (m Model) updateConfigFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up":
+		return m.moveConfigSel(-1), nil
+	case "down":
+		return m.moveConfigSel(1), nil
+	case "esc":
+		m.configFilterInput.SetValue("")
+		m.configFilterInput.Blur()
+		return m, nil
+	case "enter":
+		m.configFilterInput.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.configFilterInput, cmd = m.configFilterInput.Update(msg)
+	return m.moveConfigSel(0), cmd
+}
+
 // onColumnsRow reports whether the selection is the "Columns…" link below the
-// options.
-func (m Model) onColumnsRow() bool { return m.configSel == len(configOptions) }
+// options, which a search hides.
+func (m Model) onColumnsRow() bool {
+	return m.configSel == len(configOptions) && m.configQuery() == ""
+}
 
 func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
 	opt := configOptions[m.configSel]
@@ -306,8 +401,16 @@ func configSources(root string) []string {
 func (m Model) renderConfig() string {
 	width := min(76, m.width-4)
 	lines := []string{bold.Render("Settings"), ""}
-	for i, opt := range configOptions {
-		if opt.shared && (i == 0 || !configOptions[i-1].shared) {
+	if query := m.configQuery(); query != "" && !m.configFilterInput.Focused() {
+		lines = append(lines, dim.Render("search: "+query+" (esc clears)"), "")
+	}
+	visible := m.configVisible()
+	if len(visible) == 0 {
+		lines = append(lines, dim.Render("No matching settings"))
+	}
+	for n, i := range visible {
+		opt := configOptions[i]
+		if opt.shared && (n == 0 || !configOptions[visible[n-1]].shared) {
 			lines = append(lines, "", dim.Render("drover.json only"))
 		}
 		selected := i == m.configSel
@@ -322,15 +425,17 @@ func (m Model) renderConfig() string {
 		}
 		lines = append(lines, prefix+name+value+"  "+note)
 	}
-	prefix, name := "  ", fmt.Sprintf("%-32s", "Columns…")
-	if m.onColumnsRow() {
-		prefix, name = "▸ ", bold.Render(name)
+	if m.configQuery() == "" {
+		prefix, name := "  ", fmt.Sprintf("%-32s", "Columns…")
+		if m.onColumnsRow() {
+			prefix, name = "▸ ", bold.Render(name)
+		}
+		count := fmt.Sprintf("%d columns", len(m.snap.Board.Columns))
+		if len(m.snap.Board.Columns) == 1 {
+			count = "1 column"
+		}
+		lines = append(lines, "", prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
 	}
-	count := fmt.Sprintf("%d columns", len(m.snap.Board.Columns))
-	if len(m.snap.Board.Columns) == 1 {
-		count = "1 column"
-	}
-	lines = append(lines, "", prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
 	lines = append(lines, "", dim.Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

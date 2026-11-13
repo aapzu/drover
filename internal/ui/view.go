@@ -144,6 +144,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
+	if m.mode == modeConfig && m.configFilterInput.Focused() {
+		return " " + bold.Render("Search ›") + " " + m.configFilterInput.View()
+	}
 	if m.flash != "" {
 		return " " + muted.Render(ansi.Truncate(m.flash, m.width-2, "…"))
 	}
@@ -159,7 +162,7 @@ func (m Model) renderFooter() string {
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
-		modeConfig:    "↑↓ select  enter change/open  x reset  c columns  esc close",
+		modeConfig:    "↑↓ select  enter change/open  / search  x reset  c columns  esc close",
 	}
 	if m.configEditing {
 		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
@@ -763,7 +766,7 @@ var helpKeys = [][2]string{
 	{"f", "fold or unfold this column to one card per session"},
 	{"R", "show or hide the review lane (columns with lane \"review\")"},
 	{"t", "show or hide column settings under column names"},
-	{"o", "change settings in drover.local.json and drover.json"},
+	{"o", "change settings in drover.local.json and drover.json (press / there to search)"},
 	{"O", "change column settings in drover.local.json and drover.json"},
 	{"W", "write the default board to drover.json"},
 	{"q", "quit (agents keep running in tmux)"},

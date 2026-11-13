@@ -193,7 +193,8 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. Flows stay in `drover.json`.
+  allow either, and `x` removes the override. `/` searches the options by name or JSON key
+  (esc clears the search). Flows stay in `drover.json`.
   The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
   column's settings: pick a column, then its name, color, permission mode,
   model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or

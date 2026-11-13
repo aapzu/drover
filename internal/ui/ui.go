@@ -146,6 +146,8 @@ type Model struct {
 	configInput   textinput.Model
 	configSrc     []string
 
+	configFilterInput textinput.Model
+
 	columnSel     int
 	columnOpen    bool
 	columnID      string
@@ -200,8 +202,11 @@ func New(eng *engine.Engine) Model {
 
 		paletteInput: newPaletteInput(),
 		configInput:  textinput.New(),
-		columnPrompt: newColumnPrompt(),
+
+		configFilterInput: textinput.New(),
+		columnPrompt:      newColumnPrompt(),
 	}
+	m.configFilterInput.Placeholder = "Words to match"
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
 	}
@@ -512,6 +517,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
+		m.configFilterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
@@ -1321,9 +1327,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
-		m.mode = modeConfig
-		m.configSel = 0
-		m.configSrc = configSources(m.eng.Root)
+		m = m.openConfig()
 	case "O":
 		return m.openColumns(), nil
 	case "W":

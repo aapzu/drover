@@ -28,6 +28,8 @@ func configModel(t *testing.T, root string) Model {
 	m.snap.Board = board
 	m.eng = eng
 	m.configInput = textinput.New()
+	m.configFilterInput = textinput.New()
+	m.configSrc = configSources(root)
 	m.columnPrompt = newColumnPrompt()
 	return m
 }
@@ -511,6 +513,246 @@ func TestConfigFooterAndRows(t *testing.T) {
 	}
 }
 
+func typeInConfigSearch(t *testing.T, m Model, text string) Model {
+	t.Helper()
+	m.mode = modeConfig
+	m = pressConfig(t, m, key("/"))
+	for _, r := range text {
+		m = pressConfig(t, m, key(string(r)))
+	}
+	return m
+}
+
+func visibleConfigNames(m Model) []string {
+	var names []string
+	for _, i := range m.configVisible() {
+		names = append(names, configOptions[i].name)
+	}
+	return names
+}
+
+func TestConfigSearchNarrowsLiveAndKeepsOnEnter(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "notify")
+	if !m.configFilterInput.Focused() {
+		t.Fatal("/ didn't open the search")
+	}
+	if got := visibleConfigNames(m); len(got) != 4 {
+		t.Errorf("visible=%v", got)
+	}
+	if configOptions[m.configSel].name != "Notify when a turn ends" {
+		t.Errorf("selected %q", configOptions[m.configSel].name)
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.configFilterInput.Focused() || m.configQuery() != "notify" {
+		t.Errorf("filtering=%v filter=%q", m.configFilterInput.Focused(), m.configQuery())
+	}
+	if !strings.Contains(m.renderConfig(), "search: notify") {
+		t.Error("committed search isn't shown")
+	}
+}
+
+func TestConfigSearchEscClearsBeforeClosing(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "mouse")
+	m = pressConfig(t, m, keyPress("esc"))
+	if m.configFilterInput.Focused() || m.configQuery() != "" || m.mode != modeConfig {
+		t.Errorf("filtering=%v filter=%q mode=%v", m.configFilterInput.Focused(), m.configQuery(), m.mode)
+	}
+
+	m = typeInConfigSearch(t, m, "mouse")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, keyPress("esc"))
+	if m.configQuery() != "" || m.mode != modeConfig {
+		t.Errorf("first esc: filter=%q mode=%v", m.configQuery(), m.mode)
+	}
+	m = pressConfig(t, m, keyPress("esc"))
+	if m.mode != modeBoard {
+		t.Error("second esc didn't close the view")
+	}
+}
+
+func TestConfigSearchMatchesTheJSONKey(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "disableMouse")
+	if got := visibleConfigNames(m); len(got) != 1 || got[0] != "Disable mouse in agents" {
+		t.Errorf("visible=%v", got)
+	}
+}
+
+func TestConfigSearchMovesOverVisibleRowsAndEditsTheRightOption(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = typeInConfigSearch(t, m, "notify")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, key("j"))
+	if name := configOptions[m.configSel].name; name != "Notify when an agent needs you" {
+		t.Fatalf("selected %q", name)
+	}
+	for range 10 {
+		m = pressConfig(t, m, key("j"))
+	}
+	if name := configOptions[m.configSel].name; name != "Notify when an agent exits" {
+		t.Errorf("selected %q after moving past the end", name)
+	}
+	m = selectOption(t, m, "Notify when an agent needs you")
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.Notifications.NeedsYou {
+		t.Error("toggling the filtered option didn't save it")
+	}
+}
+
+func TestConfigListKeysAreTextInsideTheSearch(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "qxoj")
+	if m.mode != modeConfig || !m.configFilterInput.Focused() || m.configFilterInput.Value() != "qxoj" {
+		t.Errorf("mode=%v filtering=%v value=%q", m.mode, m.configFilterInput.Focused(), m.configFilterInput.Value())
+	}
+}
+
+func TestConfigSearchWithoutMatchesIsHarmless(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = typeInConfigSearch(t, m, "zzzz")
+	m = pressConfig(t, m, keyPress("enter"))
+	for _, k := range []tea.KeyMsg{keyPress("enter"), key("x"), key("j"), key("k")} {
+		m = pressConfig(t, m, k)
+	}
+	if m.configEditing || !strings.Contains(m.renderConfig(), "No matching settings") {
+		t.Error("an empty search misbehaved")
+	}
+	if !m.snap.Board.AutoName || config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Error("enter changed an option that no row shows")
+	}
+}
+
+func TestConfigSearchDoesNotResetAnOptionThatIsHidden(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Auto-name cards")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Fatal("setup: the toggle wasn't saved")
+	}
+	m = typeInConfigSearch(t, m, "zzzz")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, key("x"))
+	if !config.Sets(root, config.Local, []string{"autoName"}) {
+		t.Error("x removed the override of an option that no row shows")
+	}
+}
+
+func TestConfigSearchRowsShowTheirOwnSource(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = selectOption(t, m, "Split PRs into cards")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = typeInConfigSearch(t, m, "split")
+	m = pressConfig(t, m, keyPress("enter"))
+	if !strings.Contains(m.renderConfig(), "local") {
+		t.Errorf("filtered row lost its source label:\n%s", m.renderConfig())
+	}
+}
+
+func TestConfigSearchEditsANonToggleOptionWhileFiltered(t *testing.T) {
+	root := t.TempDir()
+	m := configModel(t, root)
+	m = typeInConfigSearch(t, m, "base branch")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, keyPress("enter"))
+	if !m.configEditing {
+		t.Fatal("enter didn't open the prompt for the filtered option")
+	}
+	m.configFilterInput.SetValue("base branch")
+	m.configInput.SetValue("develop")
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.DefaultBaseBranch != "develop" {
+		t.Errorf("DefaultBaseBranch=%q", m.snap.Board.DefaultBaseBranch)
+	}
+}
+
+func TestConfigSearchIgnoresWhitespaceOnly(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "  ")
+	if len(m.configVisible()) != len(configOptions) {
+		t.Errorf("visible=%d", len(m.configVisible()))
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if strings.Contains(m.renderConfig(), "search:") {
+		t.Error("a blank search shows a banner")
+	}
+}
+
+func TestConfigSearchShowsTheSharedLabelOnlyForSharedRows(t *testing.T) {
+	labels := func(m Model) int { return strings.Count(m.renderConfig(), "drover.json only") - 1 }
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "mouse")
+	if labels(m) != 0 {
+		t.Error("label shown without a shared row")
+	}
+	m = pressConfig(t, m, keyPress("esc"))
+	m = typeInConfigSearch(t, m, "init script")
+	if labels(m) != 1 {
+		t.Error("label missing for a shared row")
+	}
+}
+
+func TestConfigFooterShowsTheSearchPrompt(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "abc")
+	if footer := m.renderFooter(); !strings.Contains(footer, "Search ›") || !strings.Contains(footer, "abc") {
+		t.Errorf("footer=%q", footer)
+	}
+}
+
+func TestConfigSearchReopensWithTheCommittedText(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "notify")
+	m = pressConfig(t, m, keyPress("enter"))
+	m = pressConfig(t, m, key("/"))
+	if m.configFilterInput.Value() != "notify" {
+		t.Errorf("value=%q", m.configFilterInput.Value())
+	}
+}
+
+func TestConfigSearchSelectionRecoversAfterNoMatches(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "zzz")
+	for range 3 {
+		m = pressConfig(t, m, keyPress("backspace"))
+	}
+	for _, r := range "notify" {
+		m = pressConfig(t, m, key(string(r)))
+	}
+	if name := configOptions[m.configSel].name; name != "Notify when a turn ends" {
+		t.Errorf("selected %q", name)
+	}
+}
+
+func TestConfigSearchArrowsMoveWhileTyping(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "notify")
+	m = pressConfig(t, m, keyPress("down"))
+	if name := configOptions[m.configSel].name; name != "Notify when an agent needs you" {
+		t.Errorf("down selected %q", name)
+	}
+	m = pressConfig(t, m, keyPress("up"))
+	if name := configOptions[m.configSel].name; name != "Notify when a turn ends" {
+		t.Errorf("up selected %q", name)
+	}
+}
+
+func TestConfigReopeningFromTheBoardClearsTheSearch(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = typeInConfigSearch(t, m, "notify")
+	m.mode = modeBoard
+	next, _ := m.updateBoard(key("o"))
+	m = next.(Model)
+	if m.configQuery() != "" || m.configFilterInput.Focused() {
+		t.Errorf("filter=%q filtering=%v", m.configQuery(), m.configFilterInput.Focused())
+	}
+}
+
 func TestConfigColumnsRowOpensTheColumnEditor(t *testing.T) {
 	m := configModel(t, t.TempDir())
 	m.mode = modeConfig
@@ -530,5 +772,24 @@ func TestConfigColumnsRowOpensTheColumnEditor(t *testing.T) {
 	m = pressConfig(t, m, keyPress("enter"))
 	if m.mode != modeColumns || m.columnsFrom != modeConfig {
 		t.Errorf("mode=%v from=%v", m.mode, m.columnsFrom)
+	}
+}
+
+func TestConfigSearchHidesTheColumnsLink(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m.mode = modeConfig
+	for range len(configOptions) + 1 {
+		m = pressConfig(t, m, key("j"))
+	}
+	if !m.onColumnsRow() {
+		t.Fatalf("configSel=%d", m.configSel)
+	}
+	m = typeInConfigSearch(t, m, "zzzz")
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.onColumnsRow() || strings.Contains(m.renderConfig(), "Columns…") {
+		t.Error("the columns link is still reachable while a search matches nothing")
+	}
+	if got := pressConfig(t, m, keyPress("enter")); got.mode != modeConfig {
+		t.Errorf("enter opened %v", got.mode)
 	}
 }
