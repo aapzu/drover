@@ -201,6 +201,34 @@ func TestBoardKeysResizeAndResetTheLayout(t *testing.T) {
 	}
 }
 
+func TestNarrowingTheLastColumnWorksWhenEveryColumnIsResized(t *testing.T) {
+	m := realModel(t, "a")
+	m.prefs.ColumnWidths = map[string]int{}
+	for _, c := range m.columns() {
+		m.prefs.ColumnWidths[c.ID] = minResizedWidth
+	}
+	last := m.layout().rows[0]
+	m.col = last[len(last)-1].index
+	width := func(m Model) int {
+		for _, c := range m.layout().cols {
+			if c.index == m.col {
+				return c.width
+			}
+		}
+		return 0
+	}
+	before := width(m)
+	m, _ = update(m, key(">"))
+	m, _ = update(m, key(">"))
+	if got := width(m); got != before+8 {
+		t.Errorf("> widened the last column to %d, want %d", got, before+8)
+	}
+	m, _ = update(m, key("<"))
+	if got := width(m); got != before+4 {
+		t.Errorf("< left the last column at %d, want %d", got, before+4)
+	}
+}
+
 func TestPreviewResizeKeysStayWithinTheScreen(t *testing.T) {
 	m := realModel(t, "a")
 	m.prefs.PreviewHeight = minPreviewHeight

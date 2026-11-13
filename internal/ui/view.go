@@ -226,10 +226,7 @@ func (m Model) renderBoard(l layout) string {
 			cols = append(cols, m.renderColumn(c, c.height, c.index == drop))
 		}
 		row := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-		if l.hiddenColumns {
-			row = lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, row)
-		}
-		rows = append(rows, row)
+		rows = append(rows, lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, row))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }

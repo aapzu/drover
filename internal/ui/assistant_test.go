@@ -936,6 +936,22 @@ func TestColumnsStayLeftOfThePanelWhenResized(t *testing.T) {
 	}
 }
 
+func TestPanelStaysAtTheBoardEdgeWhenResizedColumnsLeaveRoom(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m.prefs.HidePreview = true
+	m.prefs.ColumnWidths = map[string]int{}
+	for _, c := range m.columns() {
+		m.prefs.ColumnWidths[c.ID] = minResizedWidth
+	}
+	for i, line := range strings.Split(m.renderMain(m.layout()), "\n") {
+		if w := lipgloss.Width(line); w != m.width {
+			t.Fatalf("line %d is %d wide, want %d", i, w, m.width)
+		}
+	}
+}
+
 func TestVanishedSessionIsReportedWithItsCauseAndNotOwned(t *testing.T) {
 	_, _, _, _, err := captureAssistant("drover-test-no-such-session", 10, 5, 0)
 	if !errors.Is(err, errSessionEnded) {
