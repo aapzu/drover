@@ -33,7 +33,6 @@ type layout struct {
 	previewY, previewH int
 	cols               []colBox
 	rows               [][]colBox
-	hiddenColumns      bool
 }
 
 func (m Model) bodyHeight() int { return max(0, m.height-headerHeight-footerHeight) }
@@ -56,7 +55,6 @@ func (m Model) layout() layout {
 	y := 0
 	for k, idxs := range lanes {
 		start, widths := m.columnWindow(idxs)
-		l.hiddenColumns = l.hiddenColumns || start > 0 || start+len(widths) < len(idxs)
 		slots := max(1, (heights[k]-columnHeaderHeight)/m.prefs.Density.cardHeight())
 		var row []colBox
 		x := 0
@@ -131,11 +129,10 @@ func (m Model) columnWindow(idxs []int) (start int, widths []int) {
 			auto = append(auto, i-start)
 		}
 	}
-	slack := width - used
 	if len(auto) == 0 {
-		widths[len(widths)-1] += slack
 		return start, widths
 	}
+	slack := width - used
 	for k, i := range auto {
 		widths[i] += slack / len(auto)
 		if k == len(auto)-1 {
