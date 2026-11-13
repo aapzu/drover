@@ -191,12 +191,12 @@ func TestBoardKeysResizeAndResetTheLayout(t *testing.T) {
 		}
 	}
 
-	m.prefs = prefs{PreviewHeight: 10, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
+	m.prefs = prefs{PreviewHeight: 10, ReviewLaneHeight: 12, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
 	m, _ = update(m, key("0"))
-	if m.prefs.PreviewHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
+	if m.prefs.PreviewHeight != 0 || m.prefs.ReviewLaneHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
 		t.Errorf("0 left %+v", m.prefs)
 	}
-	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.Density != densityNormal {
+	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.ReviewLaneHeight != 0 || got.Density != densityNormal {
 		t.Errorf("saved %+v", got)
 	}
 }

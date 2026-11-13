@@ -151,6 +151,8 @@ type Model struct {
 	columnID      string
 	columnOptSel  int
 	columnEditing bool
+	columnsFrom   mode
+	columnPrompt  textarea.Model
 	columnSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
@@ -198,6 +200,7 @@ func New(eng *engine.Engine) Model {
 
 		paletteInput: newPaletteInput(),
 		configInput:  textinput.New(),
+		columnPrompt: newColumnPrompt(),
 	}
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
@@ -505,6 +508,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.promptInput.SetWidth(min(100, m.width-8))
+		m.columnPrompt.SetWidth(min(72, m.width-10))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
@@ -784,11 +788,11 @@ func (m Model) capturePreview() tea.Cmd {
 		if ok {
 			capture := tmux.Capture
 			if l.previewH > 0 {
-				capture = func(name string, scrollback int) (string, int, bool, error) {
+				capture = func(name string, scrollback int) (string, int, bool, tmux.Cursor, error) {
 					return tmux.CaptureSized(name, w, h, scrollback)
 				}
 			}
-			if out, history, mouse, err := capture(name, scrollback); err == nil {
+			if out, history, mouse, _, err := capture(name, scrollback); err == nil {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 				msg.complete = scrollback >= history
 			}
@@ -845,6 +849,17 @@ func (m Model) wheelTarget() (string, bool) {
 		return "", false
 	}
 	return m.mouseSession()
+}
+
+// pagerTarget is the live session that should get PgUp/PgDn for the wheel:
+// tmux has no history and the agent doesn't read mouse reports, as when
+// claude runs full-screen with its mouse support disabled.
+func (m Model) pagerTarget() (string, bool) {
+	t := m.current()
+	if m.mode != modeLive || t == nil || m.previewFor != t.ID || m.previewHistory != 0 || m.previewMouse {
+		return "", false
+	}
+	return m.liveSession(t.ID)
 }
 
 // clickTarget is the session that should get clicks.
@@ -1219,6 +1234,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "0":
 		m.prefs.PreviewHeight, m.prefs.AssistantWidth, m.prefs.ColumnWidths, m.prefs.Density = 0, 0, map[string]int{}, densityNormal
+		m.prefs.ReviewLaneHeight = 0
 		m.savePrefs()
 	case "z":
 		m.prefs.Density = (m.prefs.Density + 1) % 3
