@@ -596,7 +596,8 @@ agree. It runs the commands above, so changes go through the open board like
 any other.
 It also knows drover's own docs, so you can ask it how to do something ("how do
 I hide a card?") and it names the feature and its key.
-It takes no agent slot and isn't a card.
+It takes no agent slot and isn't a card, so `idleTimeoutMinutes` and slot
+evictions never suspend it.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
@@ -614,17 +615,23 @@ It takes no agent slot and isn't a card.
 
 What the assistant may do is the same in the panel and in `drover ask`:
 
-- Besides read-only git (below), it may only run `drover list`, `move`, `add`,
-  `edit` and `rm`, and never `--force`. Anything else is denied without asking
-  (`dontAsk` mode in the panel). It is told to ask you before deleting a card,
-  which removes its worktree. In a one-off `drover ask` you answer that in the
-  next question.
-- The repo is read-only to it, enforced in the tool permissions: Read, Grep and
-  Glob, which Claude limits to the repo, and the git subcommands `status`,
-  `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,
-  `rev-parse`, `describe` and `cat-file`. Everything else is refused: no edit
-  or write tool, no other shell commands, and no git subcommand that changes
-  the repo, a branch or a worktree.
+- Besides read-only git (below) and `gh`, it may only run `drover list`,
+  `move`, `add`, `edit` and `rm`, and never `--force`. Anything else is denied
+  without asking (`dontAsk` mode in the panel). It is told to ask you before
+  deleting a card, which removes its worktree. In a one-off `drover ask` you
+  answer that in the next question.
+- Apart from `gh` (below), the repo is read-only to it, enforced in the tool
+  permissions: Read, Grep and Glob, which Claude limits to the repo, and the
+  git subcommands `status`, `log`, `show`, `diff`, `blame`, `ls-files`,
+  `ls-tree`, `shortlog`, `rev-parse`, `describe` and `cat-file`. Everything
+  else is refused: no edit or write tool, no other shell commands, and no git
+  subcommand that changes the repo, a branch or a worktree.
+- `gh` is allowed without prompting: it reads live pull request state, checks,
+  reviews, runs and issues, and could also merge, comment or close. It is told
+  to change GitHub only when you ask, but nothing enforces it. The `gh`
+  commands that change the local checkout or run programs (`pr checkout`,
+  `repo clone` and `sync`, `run download`, `alias`, `extension`, `config`,
+  `pr merge --delete-branch`) are denied.
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow

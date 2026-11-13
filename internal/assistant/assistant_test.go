@@ -757,13 +757,19 @@ func TestSessionIsLockedDown(t *testing.T) {
 			for _, rule := range allowed {
 				switch {
 				case strings.Contains(rule, exe):
+				case rule == "Bash(gh)" || rule == "Bash(gh *)":
 				case strings.HasPrefix(rule, "Bash(git "):
 					sub := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(rule, "Bash("), ")"))[1]
 					if !slices.Contains(gitReadOnly, sub) {
 						t.Errorf("rule %q allows git %s", rule, sub)
 					}
 				default:
-					t.Errorf("rule %q is neither the drover binary nor read-only git", rule)
+					t.Errorf("rule %q is neither the drover binary, gh nor read-only git", rule)
+				}
+			}
+			for _, want := range []string{"Bash(gh)", "Bash(gh *)"} {
+				if !slices.Contains(allowed, want) {
+					t.Errorf("allowed tools lack %q", want)
 				}
 			}
 			wantGit := []string{"status", "log", "show", "diff", "blame", "ls-files", "ls-tree", "shortlog", "rev-parse", "describe", "cat-file"}
@@ -791,7 +797,7 @@ func TestSessionIsLockedDown(t *testing.T) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
 			}
-			for _, pattern := range gitDenied {
+			for _, pattern := range append(slices.Clone(gitDenied), ghDenied...) {
 				if want := "Bash(" + pattern + ")"; !slices.Contains(denied, want) {
 					t.Errorf("%q isn't denied: %q", want, denied)
 				}
@@ -805,8 +811,8 @@ func TestSessionIsLockedDown(t *testing.T) {
 			for _, want := range []string{
 				"'" + exe + "' list --json", "never pass --force", "wait for the user to agree",
 				"read-only to you", "offer a card", "Run `add` only after the user agrees",
-				"A card's `pr` has", "never answer that from git history", "never run `gh`",
-				"may be out of date instead of guessing", "A card without `pr`",
+				"A card's `pr` has", "Never answer whether a pull request is merged or closed from git history",
+				"run `gh` in the repository", "do that only when the user asks", "A card without `pr`",
 			} {
 				if !strings.Contains(prompt, want) {
 					t.Errorf("the prompt lacks %q", want)
