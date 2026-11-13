@@ -1574,6 +1574,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		"DROVER_TASK_TITLE":  t.Title,
 	}
 	maps.Copy(env, e.board.ClaudeEnv())
+	disableMouse := e.board.DisableMouse
 	e.mu.Unlock()
 	launch.SystemPrompt = claude.BoardPrompt(e.exe)
 	tmux.Kill(name)
@@ -1585,6 +1586,9 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		})
 		e.notify("#%d: starting agent failed: %v", t.Number, err)
 		return err
+	}
+	if disableMouse {
+		tmux.DisableMouse(name)
 	}
 	verb := "Started"
 	if launch.Resume {

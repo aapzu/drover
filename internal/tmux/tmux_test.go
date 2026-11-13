@@ -315,6 +315,29 @@ func TestCaptureReportsMouseTracking(t *testing.T) {
 	}
 }
 
+func TestDisableMouseAffectsOnlyThatSession(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	for _, name := range []string{"quiet", "loud"} {
+		if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "cat"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { Kill(name) })
+	}
+	if err := DisableMouse("quiet"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"quiet": "off", "loud": "on"} {
+		got, err := run("show-options", "-Av", "-t", name, "mouse")
+		if err != nil || strings.TrimSpace(got) != want {
+			t.Errorf("%s: mouse is %q (err %v), want %q", name, got, err, want)
+		}
+	}
+}
+
 func TestPaneOfFindsPaneByAncestor(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
