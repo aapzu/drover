@@ -501,6 +501,7 @@ same column targets as `prFlow`:
 "reviewFlow": {
   "started": "reviewing",
   "reviewed": "waiting-on-author",
+  "approved": "review-done",
   "updated": "reviewing",
   "done": "review-done"
 }
@@ -511,8 +512,11 @@ same column targets as `prFlow`:
 - **reviewed:** where it goes, from any column, when a review of yours shows up
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
+- **approved:** where it goes instead of `reviewed` when your review approves
+  the PR. A card in a Done column is no longer refreshed, so later pushes by
+  the author aren't followed.
 - **updated:** you get a notice when the author pushes after your review. A
-  card in `reviewed` also moves here.
+  card in `reviewed` or `approved` also moves here.
 - **done:** where it goes once the PR merges or closes. A PR that was already
   merged or closed when drover first sees it moves nothing.
 
@@ -535,8 +539,9 @@ review lane.
 
 The default lane is Reviewing, Triage findings, Waiting on author and its own
 Done (id `review-done`), with a `reviewFlow` that sends `started` to Triage
-findings, `reviewed` to Waiting on author, `updated` back to Reviewing when the
-author pushes, and `done` to the lane's Done. A board with a
+findings, `reviewed` to Waiting on author (`approved` goes to the lane's Done
+instead when you approve), `updated` back to Reviewing when the author pushes,
+and `done` to the lane's Done. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 
