@@ -398,13 +398,22 @@ func (e *Engine) summarize(taskID, key, reply string) {
 	})
 }
 
+// SuggestTitle asks Haiku for a short title for a task with the given prompt,
+// or returns "" if it can't.
+func (e *Engine) SuggestTitle(prompt string) string {
+	answer, err := claude.AskHaiku(e.stopping, e.Root,
+		"Write a title of at most six words for this coding task. Reply with the title only.\n\n<task>\n"+truncatePrompt(prompt)+"\n</task>")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(strings.Trim(claude.FirstLine(answer), "\"'` *"), ".")
+}
+
 // autoName replaces the placeholder title of a new session's card with a
 // short summary of your first message, unless the title changed meanwhile.
 func (e *Engine) autoName(taskID, prompt, placeholder string) {
-	answer, err := claude.AskHaiku(e.stopping, e.Root,
-		"Write a title of at most six words for this coding task. Reply with the title only.\n\n<task>\n"+truncatePrompt(prompt)+"\n</task>")
-	title := strings.TrimRight(strings.Trim(claude.FirstLine(answer), "\"'` *"), ".")
-	if err != nil || title == "" {
+	title := e.SuggestTitle(prompt)
+	if title == "" {
 		return
 	}
 	e.with(func() {
