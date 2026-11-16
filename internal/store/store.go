@@ -103,8 +103,10 @@ type Session struct {
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
 	Pending            []Pending `json:"pending,omitempty"`
-	LastReply          string    `json:"lastReply,omitempty"`
-	Summary            string    `json:"summary,omitempty"`
+	// Schedules are the runs the agent set up for itself, soonest first.
+	Schedules []Schedule `json:"schedules,omitempty"`
+	LastReply string     `json:"lastReply,omitempty"`
+	Summary   string     `json:"summary,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -216,6 +218,7 @@ func (t *Task) Clone() *Task {
 		sc := *s
 		sc.Pending = append([]Pending(nil), s.Pending...)
 		sc.Background = slices.Clone(s.Background)
+		sc.Schedules = slices.Clone(s.Schedules)
 		c.Sessions[k] = &sc
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)

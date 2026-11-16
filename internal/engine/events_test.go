@@ -267,3 +267,53 @@ func TestBackgroundScansDropFinishedTasks(t *testing.T) {
 		t.Errorf("the finished scan was not released: %d scans", len(again))
 	}
 }
+
+func TestScheduleToolsFillTheSessionsSchedules(t *testing.T) {
+	s := &store.Session{}
+	consumeLines(t, s,
+		`{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_use_id":"tu1","tool_input":{"delaySeconds":600,"prompt":"check"},"tool_response":{"scheduledFor":4102444800000}}`,
+		`{"hook_event_name":"PostToolUse","tool_name":"CronCreate","tool_input":{"cron":"*/3 * * * *","prompt":"poll"},"tool_response":{"id":"c1","recurring":true,"nextFireAt":4102444900000}}`,
+	)
+	if len(s.Schedules) != 2 || !s.Polling() {
+		t.Fatalf("schedules = %+v", s.Schedules)
+	}
+	s.EventsOffset = 0
+	consumeLines(t, s, `{"hook_event_name":"PostToolUse","tool_name":"CronDelete","tool_input":{"id":"c1"},"tool_response":{"id":"c1"}}`)
+	if len(s.Schedules) != 1 || s.Schedules[0].ID != "tu1" {
+		t.Errorf("schedules after the delete = %+v", s.Schedules)
+	}
+}
+
+func TestExpireSchedulesClearsStoppedAgents(t *testing.T) {
+	e := bareEngine(t)
+	now := time.Now()
+	running := &store.Session{Status: store.StatusRunning}
+	suspended := &store.Session{Status: store.StatusSuspended}
+	for _, s := range []*store.Session{running, suspended} {
+		s.ApplySchedule(claude.ScheduleCall{Wakeup: true, ID: "w", Prompt: "p", NextAt: now.Add(time.Hour)})
+	}
+	e.state.Tasks = []*store.Task{{ID: "t1", Sessions: map[string]*store.Session{"a": running, "b": suspended}}}
+	e.expireSchedules(now)
+	if !running.Polling() || suspended.Polling() {
+		t.Errorf("running polls %v, suspended polls %v; want true, false", running.Polling(), suspended.Polling())
+	}
+}
+
+func TestPollingAgentsAreNotSuspendedForIdleness(t *testing.T) {
+	e := bareEngine(t)
+	e.board.IdleTimeoutMinutes = 1
+	long := time.Now().Add(-time.Hour)
+	polling := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, UpdatedAt: long}
+	polling.ApplySchedule(claude.ScheduleCall{Wakeup: true, ID: "w", Prompt: "p", NextAt: time.Now().Add(time.Hour)})
+	plain := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, UpdatedAt: long, Tmux: "plain"}
+	e.state.Tasks = []*store.Task{
+		{ID: "polling", Sessions: map[string]*store.Session{store.MainSession: polling}},
+		{ID: "plain", Sessions: map[string]*store.Session{store.MainSession: plain}},
+	}
+	if got := len(e.idleTimeouts()); got != 1 {
+		t.Errorf("%d agents to suspend, want only the one that doesn't poll", got)
+	}
+	if victim := e.freeSlot(&store.Task{ID: "new"}); victim != "plain" || polling.Status != store.StatusRunning {
+		t.Errorf("freeSlot suspended %q, want only the agent that doesn't poll", victim)
+	}
+}

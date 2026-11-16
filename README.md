@@ -267,10 +267,10 @@ These settings work in `drover.json` and, for you alone, in
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
   except that a start you make suspends the agent that has been idle longest,
-  but never one in a `keepAgent` column.
+  but never one in a `keepAgent` column or one with runs scheduled.
 - **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
-  except one in a `keepAgent` column.
-  `r` resumes it. 0, the default, never does.
+  except one in a `keepAgent` column or one with runs scheduled (see
+  [Polling agents](#polling-agents)). `r` resumes it. 0, the default, never does.
 - **`notifications`** shows a desktop notification and a notice on the board
   when an agent finishes a turn and stays idle, asks for a permission, has a
   plan for you to approve, or exits by itself. Each is on by default and fires
@@ -283,6 +283,23 @@ These settings work in `drover.json` and, for you alone, in
 - **`disableMouse`** (default `false`) starts agents and the assistant with
   `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
   your terminal. It applies to sessions started or resumed after you change it.
+
+### Polling agents
+
+An agent that sets up its own runs, with `/loop`, `ScheduleWakeup` or
+`CronCreate`, is polling. The board reads those calls from the agent's hooks and
+shows the wait instead of plain idle:
+
+- The card shows `⏲ in 4m12s`, the time to the agent's next run, and `+N` when
+  it has more runs scheduled. The header counts polling agents apart from idle
+  ones.
+- `i` lists the card's runs: when, wakeup or cron, how often it ran, and why.
+- `T` opens a timeline with a row for each polling card and a mark where each
+  run falls in the next hour, six hours or day (`←` `→` change the span, `enter`
+  goes to the card).
+- An agent with runs scheduled is not suspended by `idleTimeoutMinutes` or to
+  free a slot, because Claude Code loses its runs when the agent stops. They are
+  dropped from the board when the agent stops running.
 
 ## Automations
 

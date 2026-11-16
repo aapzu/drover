@@ -41,6 +41,7 @@ const (
 	modeAssistant
 	modeConfig
 	modeColumns
+	modeSchedules
 )
 
 type tickMsg time.Time
@@ -163,6 +164,8 @@ type Model struct {
 	suspendAll bool
 
 	detail viewport.Model
+
+	scheduleSel, scheduleWindow int
 
 	assist assistantPane
 
@@ -714,6 +717,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfig(msg)
 		case modeColumns:
 			return m.updateColumns(msg)
+		case modeSchedules:
+			return m.updateSchedules(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -1238,6 +1243,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.SetContent(m.renderDetail(t))
 			m.detail.GotoTop()
 		}
+	case scheduleKey:
+		m.mode = modeSchedules
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd

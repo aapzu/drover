@@ -68,6 +68,7 @@ func (e *Engine) Tick() {
 				}
 			}
 		}
+		e.expireSchedules(time.Now())
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
 		followUps = append(followUps, e.backgroundScans()...)
@@ -129,6 +130,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking
 			s.Started = true
@@ -152,6 +154,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if c, ok := ev.ScheduleCall(time.Now()); ok {
+				s.ApplySchedule(c)
+			}
 			if id, ok := ev.BackgroundAgent(); ok {
 				s.Background = append(s.Background, id)
 			}
@@ -224,6 +229,20 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		}
 	}
 	return out
+}
+
+// expireSchedules drops the schedules of agents that stopped running, which
+// lose them, and those that missed their run. Called with mu held.
+func (e *Engine) expireSchedules(now time.Time) {
+	for _, t := range e.state.Tasks {
+		for _, s := range t.Sessions {
+			if s.Status == store.StatusRunning {
+				s.ExpireSchedules(now)
+			} else {
+				s.ClearSchedules()
+			}
+		}
+	}
 }
 
 // backgroundScans returns follow-ups that read the transcripts of sessions with

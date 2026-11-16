@@ -51,6 +51,8 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderImport(bodyHeight))
 	case modeDetail:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
+	case modeSchedules:
+		body = panelStyle.Width(m.width-2).Height(bodyHeight-2).Padding(0, 1).Render(m.renderSchedules(m.width-6, bodyHeight-2))
 	default:
 		l := m.layout()
 		body = m.renderMain(l)
@@ -82,7 +84,7 @@ func (m Model) place(height int, content string) string {
 }
 
 func (m Model) renderHeader() string {
-	var working, waiting, attention, queued int
+	var working, waiting, polling, attention, queued int
 	cost := 0.0
 	for _, t := range m.snap.Tasks {
 		for _, s := range t.Sessions {
@@ -96,6 +98,8 @@ func (m Model) renderHeader() string {
 			switch {
 			case s.Activity == store.ActivityPermission || stuckStarting(s):
 				attention++
+			case s.Activity == store.ActivityIdle && !s.HasBackground() && s.Polling():
+				polling++
 			case s.Activity == store.ActivityIdle && !s.HasBackground():
 				waiting++
 			default:
@@ -113,6 +117,9 @@ func (m Model) renderHeader() string {
 	}
 	if waiting > 0 {
 		stats = append(stats, idle.Render(fmt.Sprintf("● %d idle", waiting)))
+	}
+	if polling > 0 {
+		stats = append(stats, idle.Render(fmt.Sprintf("⏲ %d polling", polling)))
 	}
 	if attention > 0 {
 		stats = append(stats, needsYou.Render(fmt.Sprintf("◆ %d need you", attention)))
@@ -158,6 +165,7 @@ func (m Model) renderFooter() string {
 		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
+		modeSchedules: "↑↓ select  ←→ window  enter go to card  esc close",
 		modeHelp:      "any key closes",
 		modeConfig:    "↑↓ select  enter change  x reset  c columns  esc close",
 	}
@@ -362,6 +370,9 @@ func (m Model) status(t *store.Task) string {
 	case store.ActivityIdle:
 		if s.HasBackground() {
 			return thinking.Render("◌ background tasks") + pending
+		}
+		if s.Polling() {
+			return idle.Render(m.pollingLabel(s)) + pending
 		}
 		return idle.Render("● idle") + pending
 	case store.ActivityStarting:
@@ -743,6 +754,7 @@ func (m Model) renderHelp() string {
 		{"opt/shift+drag", "select text anywhere (opt on macOS, shift elsewhere)"},
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
+		{"T", "timeline of the runs agents have scheduled (/loop, ScheduleWakeup, CronCreate)"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 		{"B", "show or hide hidden cards"},
@@ -837,6 +849,12 @@ func (m Model) renderDetail(t *store.Task) string {
 		fmt.Fprintf(&b, "\n%s\n", muted.Render("Sessions"))
 		for key, s := range owner.Sessions {
 			fmt.Fprintf(&b, "  %s  %s/%s  %s  tmux:%s\n", key, s.Status, s.Activity, dim.Render(s.AgentSessionID), s.Tmux)
+		}
+	}
+	if runs := m.scheduleRowFor(t); len(runs) > 0 {
+		fmt.Fprintf(&b, "\n%s\n", muted.Render("Schedules"))
+		for _, sc := range runs {
+			fmt.Fprintf(&b, "  %s\n", m.scheduleLine(sc, m.width-10))
 		}
 	}
 	if s := m.sessionFor(t); s != nil && s.LastReply != "" {

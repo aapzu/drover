@@ -75,9 +75,10 @@ func (e *Engine) alertTurnDone(taskID, key, reply string) {
 	}
 }
 
-// idleFor reports whether s has been idle for at least d.
+// idleFor reports whether s has been idle for at least d, and isn't waiting for
+// a scheduled run.
 func idleFor(s *store.Session, d time.Duration) bool {
-	return s != nil && idle(s) && time.Since(s.UpdatedAt) >= d
+	return s != nil && idle(s) && !s.Polling() && time.Since(s.UpdatedAt) >= d
 }
 
 // idle reports whether s is a started agent waiting for you with nothing

@@ -228,7 +228,12 @@ type Event struct {
 	PermissionMode       string `json:"permission_mode"`
 	Error                string `json:"error"`
 	ToolInput            struct {
-		Command string `json:"command"`
+		Command      string `json:"command"`
+		ID           string `json:"id"`
+		Cron         string `json:"cron"`
+		DelaySeconds int    `json:"delaySeconds"`
+		Prompt       string `json:"prompt"`
+		Reason       string `json:"reason"`
 	} `json:"tool_input"`
 	ToolResponse    json.RawMessage  `json:"tool_response"`
 	BackgroundTasks []BackgroundTask `json:"background_tasks"`
