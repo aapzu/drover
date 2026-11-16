@@ -267,6 +267,7 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"board", modeBoard, nil, "Planning"},
 		{"form", modeForm, func(m Model) Model { m.openForm(m.current()); return m }, "Edit task"},
 		{"send", modeSend, func(m Model) Model { m.modalTask = m.current().ID; m.sendInput.Focus(); return m }, "Send ›"},
+		{"rename", modeRename, func(m Model) Model { m.modalTask = m.current().ID; m.renameInput.Focus(); return m }, "Rename ›"},
 		{"confirm", modeConfirm, func(m Model) Model { m.confirmText = "Really? (y/N)"; return m }, "Really?"},
 		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #1 to…"},
 		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},

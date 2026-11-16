@@ -63,6 +63,17 @@ func TestColumnWindowKeepsResizedWidth(t *testing.T) {
 	}
 }
 
+func TestColumnWindowLeavesRoomEmptyWhenEveryColumnIsResized(t *testing.T) {
+	m := testModel(120, 40, 4, 0)
+	for _, id := range []string{"c0", "c1", "c2", "c3"} {
+		m.prefs.ColumnWidths[id] = 20
+	}
+	_, widths := m.columnWindow(m.lanes()[0])
+	if !slices.Equal(widths, []int{20, 20, 20, 20}) {
+		t.Fatalf("got widths %v", widths)
+	}
+}
+
 func TestColumnWindowScrollsToSelection(t *testing.T) {
 	m := testModel(60, 40, 6, 0)
 	m.col = 5
