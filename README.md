@@ -166,8 +166,9 @@ open, and to Done once it merges:
 | Reviewing | Agent, in the review lane, at `high` effort; on entry it asks for a re-review of the new commits |
 | Triage findings | Agent, in the review lane |
 | Waiting on author | Plain, in the review lane; the agent is suspended |
+| Done | Done, in the review lane |
 
-The last three are the [review lane](#the-review-lane) and come with a
+The last four are the [review lane](#the-review-lane) and come with a
 `reviewFlow` that moves the cards of PRs you review through them.
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, or hands the work back for you to review, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. A custom board gets this row by default when its `executing` column has no `onTurnEnd` and the board has a column with id or name `waiting-for-me`, `Waiting for me` or `waiting`; set `"onTurnEnd": []` to turn it off.
@@ -464,7 +465,7 @@ same column targets as `prFlow`:
   "started": "reviewing",
   "reviewed": "waiting-on-author",
   "updated": "reviewing",
-  "done": "done"
+  "done": "review-done"
 }
 ```
 
@@ -492,9 +493,10 @@ from Done into the lane, and skip it while it is hidden. `H` and `L` move a
 card within its lane only; use `m` to move it between them. Drag the divider
 above the lane to resize it; `0` resets the layout.
 
-The default lane is Reviewing, Triage findings and Waiting on author, with a
-`reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
-author, `updated` back to Reviewing when the author pushes, and `done` to Done. A board with a
+The default lane is Reviewing, Triage findings, Waiting on author and its own
+Done (id `review-done`), with a `reviewFlow` that sends `started` to Triage
+findings, `reviewed` to Waiting on author, `updated` back to Reviewing when the
+author pushes, and `done` to the lane's Done. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 
