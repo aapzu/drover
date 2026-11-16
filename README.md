@@ -618,18 +618,21 @@ What the assistant may do is the same in the panel and in `drover ask`:
 
 - Besides read-only git (below) and `gh`, it may only run `drover list`,
   `move`, `add`, `edit` and `rm`, and never `--force`. Anything else is denied
-  without asking (`dontAsk` mode in the panel). It is told to ask you before
+  in `drover ask`, and the panel asks you first. It is told to ask you before
   deleting a card, which removes its worktree. In a one-off `drover ask` you
   answer that in the next question.
 - Apart from `gh` (below), the repo is read-only to it, enforced in the tool
   permissions: Read, Grep and Glob, which Claude limits to the repo, and the
   git subcommands `status`, `log`, `show`, `diff`, `blame`, `ls-files`,
   `ls-tree`, `shortlog`, `rev-parse`, `describe` and `cat-file`. Everything
-  else is refused: no edit or write tool, no other shell commands, and no git
-  subcommand that changes the repo, a branch or a worktree.
+  else is refused in `drover ask`, and the panel asks you first: other shell
+  commands, git subcommands that change the repo, a branch or a worktree, and
+  reads outside the repo. The edit and write tools are denied in both.
 - `gh` is allowed without prompting: it reads live pull request state, checks,
   reviews, runs and issues, and could also merge, comment or close. It is told
-  to change GitHub only when you ask, but nothing enforces it. The `gh`
+  to change GitHub only when you ask, but nothing enforces it. Its sandbox
+  allows `api.github.com`, `github.com` and `*.githubusercontent.com`; a
+  `deniedHosts` entry in managed settings still wins over that. The `gh`
   commands that change the local checkout or run programs (`pr checkout`,
   `repo clone` and `sync`, `run download`, `alias`, `extension`, `config`,
   `pr merge --delete-branch`) are denied.

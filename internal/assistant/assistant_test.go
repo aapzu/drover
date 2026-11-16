@@ -478,7 +478,7 @@ func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 	if args[0] != "claude" || slices.Contains(args, "-p") {
 		t.Errorf("the panel should run the interactive claude: %q", args)
 	}
-	if flagValue(args, "--permission-mode") != "dontAsk" || flagValue(args, "--tools") != "Bash,Read,Grep,Glob" || !slices.Contains(args, "--setting-sources") {
+	if slices.Contains(args, "--permission-mode") || flagValue(args, "--tools") != "Bash,Read,Grep,Glob" || !slices.Contains(args, "--setting-sources") {
 		t.Errorf("permission mode %q, tools %q", flagValue(args, "--permission-mode"), flagValue(args, "--tools"))
 	}
 	if !slices.Contains(args, "Bash("+exe+" list)") || !slices.Contains(args, "Bash("+exe+" rm *-force*)") {
@@ -732,8 +732,8 @@ func TestSessionIsLockedDown(t *testing.T) {
 			}
 		}},
 		{"panel", panelArgv, func(t *testing.T, args []string) {
-			if tail := args[len(args)-2:]; !slices.Equal(tail, []string{"--permission-mode", "dontAsk"}) {
-				t.Errorf("the panel must end in dontAsk mode: %q", tail)
+			if slices.Contains(args, "--permission-mode") {
+				t.Errorf("the panel should ask about commands the rules don't cover: %q", args)
 			}
 		}},
 	}
@@ -828,6 +828,7 @@ func TestSessionIsLockedDown(t *testing.T) {
 				Env     map[string]string
 				Sandbox struct {
 					Filesystem struct{ DenyWrite, AllowWrite []string }
+					Network    struct{ AllowedDomains []string }
 				}
 			}
 			if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &got); err != nil {
@@ -836,6 +837,9 @@ func TestSessionIsLockedDown(t *testing.T) {
 			fs := got.Sandbox.Filesystem
 			if !slices.Equal(fs.DenyWrite, []string{root}) || !slices.Equal(fs.AllowWrite, []string{store.Dir(root)}) {
 				t.Errorf("sandbox filesystem = %+v", fs)
+			}
+			if !slices.Equal(got.Sandbox.Network.AllowedDomains, ghHosts) {
+				t.Errorf("sandbox network = %+v, gh needs %q", got.Sandbox.Network, ghHosts)
 			}
 			if got.Env["GIT_OPTIONAL_LOCKS"] != "0" {
 				t.Errorf("env = %v", got.Env)
