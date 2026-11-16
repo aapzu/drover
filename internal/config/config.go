@@ -535,12 +535,13 @@ func Default() *Board {
 				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
+			{ID: "review-done", Name: "Done", Role: "done", Lane: LaneReview, Color: "#10b981"},
 		},
 		ReviewFlow: &ReviewFlow{
 			Started:  "triage",
 			Reviewed: "waiting-on-author",
 			Updated:  "reviewing",
-			Done:     "done",
+			Done:     "review-done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",

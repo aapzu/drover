@@ -90,6 +90,13 @@
       "name": "Waiting on author",
       "lane": "review",
       "color": "#64748b"
+    },
+    {
+      "id": "review-done",
+      "name": "Done",
+      "role": "done",
+      "lane": "review",
+      "color": "#10b981"
     }
   ],
   "prFlow": {
@@ -103,6 +110,6 @@
     "started": "triage",
     "reviewed": "waiting-on-author",
     "updated": "reviewing",
-    "done": "done"
+    "done": "review-done"
   }
 }
