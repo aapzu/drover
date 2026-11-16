@@ -409,7 +409,7 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 			lane = append(lane, c.ID)
 		}
 	}
-	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
+	if want := []string{"reviewing", "triage", "waiting-on-author", "review-done"}; !slices.Equal(lane, want) {
 		t.Errorf("review lane = %v, want %v", lane, want)
 	}
 	f := board.ReviewFlow
@@ -667,7 +667,7 @@ func TestSave(t *testing.T) {
 		ids = append(ids, c.ID)
 	}
 	lane, _ := board.Find("reviewing")
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
+	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author", "review-done"}) ||
 		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
 		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
 	}

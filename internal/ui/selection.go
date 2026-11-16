@@ -95,9 +95,14 @@ func (m Model) highlight(window []string, end int) []string {
 		if from >= to {
 			continue
 		}
-		window[i] = ansi.Cut(line, 0, from) + selStyle.Render(ansi.Strip(ansi.Cut(line, from, to))) + ansi.Cut(line, to, w)
+		window[i] = reverseSpan(line, from, to, w)
 	}
 	return window
+}
+
+// reverseSpan reverses columns from to to of line, which is w columns wide.
+func reverseSpan(line string, from, to, w int) string {
+	return ansi.Cut(line, 0, from) + selStyle.Render(ansi.Strip(ansi.Cut(line, from, to))) + ansi.Cut(line, to, w)
 }
 
 type copiedMsg struct {
