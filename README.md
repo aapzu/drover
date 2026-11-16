@@ -283,6 +283,17 @@ These settings work in `drover.json` and, for you alone, in
 - **`disableMouse`** (default `false`) starts agents and the assistant with
   `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
   your terminal. It applies to sessions started or resumed after you change it.
+- **`assistantPlugins`** and **`assistantTools`** (both empty by default) give
+  the assistant MCP tools, such as Slack's, so you can ask it to read a source and
+  turn what it finds into cards. `assistantPlugins` lists Claude Code plugin ids
+  to enable, like `"slack@claude-plugins-official"`; `assistantTools` lists the
+  tool patterns it may use without asking, each starting with `mcp__`, like
+  `"mcp__plugin_slack_slack__slack_read_*"`. Allow only read tools unless you
+  want it to write. A value in `drover.local.json` replaces the shared one.
+  What those tools return can come from anyone, so the assistant is told to
+  treat it as data and to ask before adding cards from it. An enabled plugin
+  runs as a whole, hooks included, and those aren't limited by the
+  assistant's tool rules, so list only plugins you trust.
 
 ## Automations
 
@@ -618,7 +629,8 @@ What the assistant may do is the same in the panel and in `drover ask`:
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow
-  rules or `env` apply, but CLAUDE.md files still load. Managed settings still
+  rules or `env` apply, but CLAUDE.md files still load. Only the plugins and
+  tools in `assistantPlugins` and `assistantTools` are added. Managed settings still
   apply. If they auto-allow sandboxed Bash commands, the permission rules no
   longer limit what it runs; the sandbox does, and drover denies it writes to
   the repo there.

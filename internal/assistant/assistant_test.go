@@ -969,3 +969,71 @@ func TestPanelEnvFollowsDisableMouse(t *testing.T) {
 		}
 	}
 }
+
+func allowedRules(args []string) []string {
+	return args[slices.Index(args, "--allowedTools")+1 : slices.Index(args, "--disallowedTools")]
+}
+
+func deniedRules(args []string) []string {
+	return args[slices.Index(args, "--disallowedTools")+1 : slices.Index(args, "--session-id")]
+}
+
+func TestAssistantMCPSettingsComeFromTheBoardAndOnlyAddAllowRules(t *testing.T) {
+	const plugin, tool = "slack@claude-plugins-official", "mcp__plugin_slack_slack__slack_read_*"
+	plain := panelArgv(t, newRoot(t))
+	if strings.Contains(flagValue(plain, "--settings"), "enabledPlugins") || strings.Contains(flagValue(plain, "--append-system-prompt"), tool) {
+		t.Errorf("a board without assistant MCP settings must not enable plugins or name MCP tools: %q", plain)
+	}
+
+	board := &config.Board{AssistantPlugins: []string{plugin}, AssistantTools: []string{tool}}
+	panel := func(t *testing.T) []string {
+		p := fakePanel(t)
+		if _, err := Start(newRoot(t), "/bin/drover", board); err != nil {
+			t.Fatal(err)
+		}
+		return p.calls[0]
+	}
+	ask := func(t *testing.T) []string {
+		fakePanel(t)
+		root := newRoot(t)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data := `{"assistantPlugins":["` + plugin + `"],"assistantTools":["` + tool + `"],"columns":[{"id":"a","name":"A"}]}`
+		if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return askArgv(t, root)
+	}
+	for name, run := range map[string]func(*testing.T) []string{"panel": panel, "ask": ask} {
+		t.Run(name, func(t *testing.T) {
+			args := run(t)
+			var settings struct {
+				EnabledPlugins map[string]bool `json:"enabledPlugins"`
+			}
+			if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil || !settings.EnabledPlugins[plugin] {
+				t.Errorf("--settings does not enable %s: %v %s", plugin, err, flagValue(args, "--settings"))
+			}
+			if !slices.Contains(allowedRules(args), tool) {
+				t.Errorf("allowed tools lack %q: %q", tool, allowedRules(args))
+			}
+			if !strings.Contains(flagValue(args, "--append-system-prompt"), tool) {
+				t.Error("the prompt does not name the MCP tool")
+			}
+			if !slices.Contains(args, "--setting-sources") || flagValue(args, "--setting-sources") != "" {
+				t.Errorf("settings sources must stay empty: %q", args)
+			}
+			if flagValue(args, "--tools") != flagValue(plain, "--tools") {
+				t.Errorf("--tools changed: %q", flagValue(args, "--tools"))
+			}
+			if !slices.Equal(deniedRules(args), deniedRules(plain)) {
+				t.Errorf("deny rules changed: %q", deniedRules(args))
+			}
+			for _, rule := range allowedRules(args) {
+				if rule == "Edit" || rule == "Write" || rule == "Bash(git *)" {
+					t.Errorf("rule %q must not be allowed", rule)
+				}
+			}
+		})
+	}
+}
