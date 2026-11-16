@@ -308,6 +308,11 @@ func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
 			if got := readFile(log); !strings.Contains(got, want) {
 				t.Errorf("launch env missing %q:\n%s", want, got)
 			}
+			name, _ := e.LiveSession(task.ID)
+			out, err := exec.Command("tmux", "-L", tmux.Socket, "show-options", "-Av", "-t", name, "mouse").Output()
+			if wantMouse := map[bool]string{true: "off", false: "on"}[on]; err != nil || strings.TrimSpace(string(out)) != wantMouse {
+				t.Errorf("tmux mouse = %q (err %v), want %q", out, err, wantMouse)
+			}
 		})
 	}
 }
