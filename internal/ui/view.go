@@ -130,8 +130,13 @@ func (m Model) renderHeader() string {
 		stats = append(stats, muted.Render(fmt.Sprintf("◷ %d queued · %d/%d slots", queued, m.snap.Running, m.snap.MaxConcurrent)))
 	}
 	if !m.reviewLaneShown() {
-		if n := m.reviewLaneCards(); n > 0 {
+		if n := m.laneCards(true); n > 0 {
 			stats = append(stats, muted.Render(fmt.Sprintf("◫ %d in review lane (R)", n)))
+		}
+	}
+	if m.mainLaneHidden() {
+		if n := m.laneCards(false); n > 0 {
+			stats = append(stats, muted.Render(fmt.Sprintf("▤ %d in main lane (X)", n)))
 		}
 	}
 	if m.filter != "" {
@@ -806,6 +811,7 @@ var helpKeys = [][2]string{
 	{"v", "show or hide archived cards"},
 	{"f", "fold or unfold this column to one card per session"},
 	{"R", "show or hide the review lane (columns with lane \"review\")"},
+	{"X", "show only the review lane, or bring the main columns back"},
 	{"t", "show or hide column settings under column names"},
 	{"o", "change settings in drover.local.json and drover.json (press / there to search)"},
 	{"O", "change column settings in drover.local.json and drover.json"},

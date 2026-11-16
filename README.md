@@ -528,7 +528,10 @@ shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
 card within its lane only; use `m` to move it between them. Drag the divider
-above the lane to resize it; `0` resets the layout.
+above the lane to resize it; `0` resets the layout. `X` hides the main columns so
+only the review lane shows, and remembers it per repo too; the header counts the
+hidden cards. `X` brings the main columns back; `R` does too, and hides the
+review lane.
 
 The default lane is Reviewing, Triage findings, Waiting on author and its own
 Done (id `review-done`), with a `reviewFlow` that sends `started` to Triage

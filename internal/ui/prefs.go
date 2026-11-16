@@ -42,6 +42,8 @@ type prefs struct {
 	// ReviewLane is what R last set; nil shows the review lane while it holds cards.
 	ReviewLane *bool `json:"reviewLane,omitempty"`
 
+	HideMainLane bool `json:"hideMainLane,omitempty"`
+
 	// ReviewLaneHeight is in rows, divider included; 0 means the default share of the board.
 	ReviewLaneHeight int `json:"reviewLaneHeight,omitempty"`
 

@@ -253,47 +253,65 @@ func (m Model) hasReviewLane() bool {
 	return slices.ContainsFunc(m.columns(), config.Column.InReviewLane)
 }
 
-// reviewLaneCards counts the cards in the review lane's columns, not counting
-// archived or hidden ones.
-func (m Model) reviewLaneCards() int {
+// laneCards counts the cards in the columns of the review lane, or of the main
+// lane when review is false, not counting archived or hidden ones.
+func (m Model) laneCards(review bool) int {
 	n := 0
 	for _, t := range m.snap.Tasks {
-		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() && !m.offBoard(t, m.hidesArchived(col.ID)) {
+		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() == review && !m.offBoard(t, m.hidesArchived(col.ID)) {
 			n++
 		}
 	}
 	return n
 }
 
-// reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
-// pref, and with none set, while the lane holds cards.
+// mainLaneHidden reports whether only the review lane is drawn. A board with
+// no review lane always draws its main columns.
+func (m Model) mainLaneHidden() bool {
+	return m.prefs.HideMainLane && m.hasReviewLane()
+}
+
+// reviewLaneShown reports whether the review lane is drawn: always while the
+// main lane is hidden, else per the ReviewLane pref, and with none set, while
+// the lane holds cards.
 func (m Model) reviewLaneShown() bool {
+	if m.mainLaneHidden() {
+		return true
+	}
 	if shown := m.prefs.ReviewLane; shown != nil {
 		return *shown && m.hasReviewLane()
 	}
-	return m.reviewLaneCards() > 0
+	return m.laneCards(true) > 0
 }
 
 // lanes is the indexes of the columns on each row of the board: the main
-// columns, then the review lane's while it is shown.
+// columns, then the review lane's, each while it is shown.
 func (m Model) lanes() [][]int {
 	var main, review []int
 	for i, c := range m.columns() {
-		if c.InReviewLane() {
+		switch {
+		case !m.visibleColumn(i):
+		case c.InReviewLane():
 			review = append(review, i)
-		} else {
+		default:
 			main = append(main, i)
 		}
 	}
-	if len(review) == 0 || !m.reviewLaneShown() {
-		return [][]int{main}
+	var rows [][]int
+	for _, row := range [][]int{main, review} {
+		if len(row) > 0 {
+			rows = append(rows, row)
+		}
 	}
-	return [][]int{main, review}
+	return rows
 }
 
 // visibleColumn reports whether the board draws column i.
 func (m Model) visibleColumn(i int) bool {
-	return !m.columns()[i].InReviewLane() || m.reviewLaneShown()
+	if m.columns()[i].InReviewLane() {
+		return m.reviewLaneShown()
+	}
+	return !m.mainLaneHidden()
 }
 
 // stepColumn is the nearest column from i in direction dir (-1 or 1) that the
@@ -307,13 +325,17 @@ func (m Model) stepColumn(i, dir int) int {
 	return i
 }
 
-// shownColumn is col if the board draws it, else the nearest one before it.
+// shownColumn is col if the board draws it, else the nearest one before it, or
+// after it when none before it is drawn.
 func (m Model) shownColumn(col int) int {
 	col = clamp(col, 0, len(m.columns())-1)
-	for col > 0 && !m.visibleColumn(col) {
-		col--
+	if m.visibleColumn(col) {
+		return col
 	}
-	return col
+	if prev := m.stepColumn(col, -1); prev != col {
+		return prev
+	}
+	return m.stepColumn(col, 1)
 }
 
 func (m Model) tasksIn(colID string) []*store.Task {
@@ -1354,6 +1376,17 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		shown := !m.reviewLaneShown()
 		m.prefs.ReviewLane = &shown
+		if !shown {
+			m.prefs.HideMainLane = false
+		}
+		m.col = m.shownColumn(m.col)
+		m.savePrefs()
+	case "X":
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.prefs.HideMainLane = !m.prefs.HideMainLane
 		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
