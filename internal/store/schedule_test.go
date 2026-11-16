@@ -91,7 +91,7 @@ func TestRunSchedulesKeepsACronItCantRead(t *testing.T) {
 	s.ApplySchedule(claude.ScheduleCall{ID: "c", Cron: "0 9 * * 7", Prompt: "poll", Recurring: true, NextAt: base})
 	s.RunSchedules("poll", base)
 	next, ok := s.NextSchedule()
-	if !ok || !next.NextAt.Equal(base.Add(claude.UnknownRun)) {
+	if !ok || !next.NextAt.Equal(base.Add(time.Hour)) {
 		t.Errorf("schedule = %+v, %v; want it kept with a guessed next run", next, ok)
 	}
 }

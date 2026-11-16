@@ -121,8 +121,6 @@ type Session struct {
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
 
-	// Schedules are the runs the agent set up for itself, in no order. They end
-	// with the agent's process.
 	Schedules []Schedule `json:"schedules,omitempty"`
 }
 

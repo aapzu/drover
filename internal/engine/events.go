@@ -130,7 +130,6 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
-			// A scheduled run arrives as a prompt carrying the schedule's text.
 			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking

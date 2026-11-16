@@ -215,26 +215,26 @@ func waitPlanGate(path string, every, timeout time.Duration) {
 }
 
 type Event struct {
-	Name                 string           `json:"hook_event_name"`
-	SessionID            string           `json:"session_id"`
-	Source               string           `json:"source"`
-	ToolName             string           `json:"tool_name"`
-	ToolUseID            string           `json:"tool_use_id"`
-	NotificationType     string           `json:"notification_type"`
-	Message              string           `json:"message"`
-	Prompt               string           `json:"prompt"`
-	TranscriptPath       string           `json:"transcript_path"`
-	LastAssistantMessage string           `json:"last_assistant_message"`
-	PermissionMode       string           `json:"permission_mode"`
-	Error                string           `json:"error"`
-	ToolInput            json.RawMessage  `json:"tool_input"`
-	ToolResponse         json.RawMessage  `json:"tool_response"`
-	BackgroundTasks      []BackgroundTask `json:"background_tasks"`
+	Name                 string `json:"hook_event_name"`
+	SessionID            string `json:"session_id"`
+	Source               string `json:"source"`
+	ToolName             string `json:"tool_name"`
+	ToolUseID            string `json:"tool_use_id"`
+	NotificationType     string `json:"notification_type"`
+	Message              string `json:"message"`
+	Prompt               string `json:"prompt"`
+	TranscriptPath       string `json:"transcript_path"`
+	LastAssistantMessage string `json:"last_assistant_message"`
+	PermissionMode       string `json:"permission_mode"`
+	Error                string `json:"error"`
+	// ToolInput stays raw: other tools put any type in the fields a typed struct
+	// would name, and ReadEvents drops an event that fails to decode.
+	ToolInput       json.RawMessage  `json:"tool_input"`
+	ToolResponse    json.RawMessage  `json:"tool_response"`
+	BackgroundTasks []BackgroundTask `json:"background_tasks"`
 }
 
-// Command returns the shell command of a Bash call. Tool inputs stay raw so
-// that a field of an unrelated tool, which has any type, can't make ReadEvents
-// drop the event.
+// Command returns the shell command of a Bash call.
 func (e Event) Command() string {
 	var in struct {
 		Command string `json:"command"`

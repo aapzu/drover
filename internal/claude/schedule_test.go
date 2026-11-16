@@ -82,7 +82,7 @@ func TestScheduleCallToleratesWhatCodeClaudeSends(t *testing.T) {
 		t.Errorf("a cron without nextFireAt = %+v, %v; want the next match", got, ok)
 	}
 	got, ok = scheduleEvent(t, `{"hook_event_name":"PostToolUse","tool_name":"CronCreate","tool_input":{"cron":"nonsense","prompt":"poll"},"tool_response":{"id":"c1","recurring":true}}`).ScheduleCall(now)
-	if !ok || !got.NextAt.Equal(now.Add(UnknownRun)) {
+	if !ok || !got.NextAt.Equal(now.Add(unknownRun)) {
 		t.Errorf("an unreadable cron = %+v, %v; want a guess", got, ok)
 	}
 	got, _ = scheduleEvent(t, `{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_use_id":"tu1","tool_input":{"delaySeconds":90,"prompt":"p"},"tool_response":{"scheduledFor":1000}}`).ScheduleCall(now)

@@ -1417,11 +1417,11 @@ func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t || e.keepsAgent(o) {
+		if o == t {
 			continue
 		}
 		for _, s := range o.Sessions {
-			if !idle(s) || s.Polling() {
+			if !e.suspendable(o, s) {
 				continue
 			}
 			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
@@ -1568,7 +1568,6 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	s.Cwd = worktree
-	// The new process starts without the runs the old one had scheduled.
 	s.ClearSchedules()
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,

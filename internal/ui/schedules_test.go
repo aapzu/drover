@@ -247,7 +247,6 @@ func TestScheduleTimelineKeys(t *testing.T) {
 	if m.mode != modeBoard || m.current() == nil || m.current().ID != m.snap.Tasks[1].ID {
 		t.Errorf("enter left mode %v on %v, want the board on the second card", m.mode, m.current())
 	}
-	// A polling agent that stops while you look moves the selection to the last row.
 	m, _ = update(m, key(scheduleKey))
 	m.scheduleSel = 1
 	m.snap.Tasks[1].Sessions[store.MainSession].Schedules = nil

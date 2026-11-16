@@ -14,7 +14,6 @@ import (
 	"github.com/aapzu/drover/internal/store"
 )
 
-// scheduleWindows are the spans the schedule timeline can show.
 var scheduleWindows = []time.Duration{time.Hour, 6 * time.Hour, 24 * time.Hour}
 
 const scheduleKey = "T"
@@ -139,7 +138,7 @@ func (m *Model) openSchedules() {
 
 func (m Model) updateSchedules(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	rows := m.scheduleRows()
-	m.scheduleSel = max(0, min(m.scheduleSel, len(rows)-1))
+	m.scheduleSel = clamp(m.scheduleSel, 0, len(rows)-1)
 	switch msg.String() {
 	case "esc", "q", scheduleKey:
 		m.mode = modeBoard
@@ -160,6 +159,44 @@ func (m Model) updateSchedules(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// scheduleAxis draws the time axis of a timeline window: its labels and a ruler
+// with a tick at each quarter.
+func scheduleAxis(axisW int, window time.Duration) (labels, ruler string) {
+	axis := []rune(strings.Repeat("─", axisW))
+	text := []rune(strings.Repeat(" ", axisW))
+	for q := 0; q <= 4; q++ {
+		x := min(axisW-1, q*axisW/4)
+		axis[x] = '┼'
+		label := []rune("now")
+		if q > 0 {
+			label = []rune(span(window * time.Duration(q) / 4))
+		}
+		copy(text[min(x, max(0, axisW-len(label))):], label)
+	}
+	return string(text), string(axis)
+}
+
+// scheduleCells draws a timeline row: a dot for each column of the axis, and a
+// mark in the columns where one of runs falls.
+func scheduleCells(runs []store.Schedule, now time.Time, window time.Duration, axisW int) string {
+	cells := make([]string, axisW)
+	for i := range cells {
+		cells[i] = dim.Render("·")
+	}
+	for _, sc := range runs {
+		mark := idle.Render("●")
+		if sc.Wakeup {
+			mark = thinking.Render("◇")
+		}
+		for _, at := range sc.Fires(now, now.Add(window), window/time.Duration(axisW)) {
+			cells[min(axisW-1, int(float64(at.Sub(now))/float64(window)*float64(axisW)))] = mark
+		}
+	}
+	return strings.Join(cells, "")
+}
+
+const timelineFixed = 8
+
 // renderSchedules draws a timeline with a row for each polling card and a mark
 // where each of its runs falls in the window, followed by the selected card's
 // schedules. It shows at most height lines, scrolling the rows to keep the
@@ -171,66 +208,37 @@ func (m Model) renderSchedules(width, height int) string {
 	if len(rows) == 0 {
 		return title + "\n\n" + dim.Render("No agent has runs scheduled. Agents that use /loop, ScheduleWakeup or CronCreate show up here.")
 	}
-	sel := max(0, min(m.scheduleSel, len(rows)-1))
+	sel := clamp(m.scheduleSel, 0, len(rows)-1)
 	labelW := min(28, width/3)
 	axisW := max(10, width-labelW-2)
-	now := m.now()
-
-	axis := []rune(strings.Repeat("─", axisW))
-	labels := []rune(strings.Repeat(" ", axisW))
-	for q := 0; q <= 4; q++ {
-		x := min(axisW-1, q*axisW/4)
-		axis[x] = '┼'
-		text := []rune("now")
-		if q > 0 {
-			text = []rune(span(window * time.Duration(q) / 4))
-		}
-		copy(labels[min(x, max(0, axisW-len(text))):], text)
-	}
 	indent := strings.Repeat(" ", labelW+1)
-	lines := []string{title, "", indent + dim.Render(string(labels)), indent + dim.Render(string(axis))}
+	labels, ruler := scheduleAxis(axisW, window)
+	lines := []string{title, "", indent + dim.Render(labels), indent + dim.Render(ruler)}
 
 	runs := rows[sel].runs
-	// What is left of the height after the header, the legend and the selected
-	// card's runs, which are cut before the rows are.
-	room := height - len(lines) - 4
+	room := height - timelineFixed
 	shown := min(len(runs), max(1, room/3))
-	more := 0
-	if shown < len(runs) {
-		more = 1
+	moreRuns := shown < len(runs)
+	rowRoom := max(1, room-shown)
+	if moreRuns {
+		rowRoom = max(1, rowRoom-1)
 	}
-	room = max(1, room-shown-more)
-	first := clamp(sel-room+1, 0, max(0, len(rows)-room))
-	for i := first; i < min(len(rows), first+room); i++ {
-		r := rows[i]
-		cells := make([]string, axisW)
-		for j := range cells {
-			cells[j] = dim.Render("·")
-		}
-		for _, sc := range r.runs {
-			mark := idle.Render("●")
-			if sc.Wakeup {
-				mark = thinking.Render("◇")
-			}
-			for _, at := range sc.Fires(now, now.Add(window), window/time.Duration(axisW)) {
-				x := min(axisW-1, int(float64(at.Sub(now))/float64(window)*float64(axisW)))
-				cells[x] = mark
-			}
-		}
-		label := ansi.Truncate(fmt.Sprintf("#%d %s", r.task.Number, taskTitle(r.task)), labelW-2, "…")
+	first := clamp(sel-rowRoom+1, 0, max(0, len(rows)-rowRoom))
+	for i := first; i < min(len(rows), first+rowRoom); i++ {
+		label := ansi.Truncate(fmt.Sprintf("#%d %s", rows[i].task.Number, taskTitle(rows[i].task)), labelW-2, "…")
 		prefix := "  "
 		if i == sel {
 			prefix, label = "▸ ", bold.Render(label)
 		}
 		pad := strings.Repeat(" ", max(0, labelW-2-lipgloss.Width(label)))
-		lines = append(lines, prefix+label+pad+" "+strings.Join(cells, ""))
+		lines = append(lines, prefix+label+pad+" "+scheduleCells(rows[i].runs, m.now(), window, axisW))
 	}
 
 	lines = append(lines, "", dim.Render("● cron   ◇ wakeup"), "", muted.Render(fmt.Sprintf("#%d", rows[sel].task.Number)))
 	for _, sc := range runs[:shown] {
 		lines = append(lines, "  "+m.scheduleLine(sc, width-2))
 	}
-	if more > 0 {
+	if moreRuns {
 		lines = append(lines, dim.Render(fmt.Sprintf("  +%d more", len(runs)-shown)))
 	}
 	return strings.Join(lines, "\n")

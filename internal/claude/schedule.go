@@ -7,16 +7,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// UnknownRun is how far ahead a run is put when Claude Code didn't say when it
-// is and the cron can't be read here either.
-const UnknownRun = time.Hour
+const unknownRun = time.Hour
 
 // ScheduleCall is a schedule an agent set up or removed with ScheduleWakeup,
 // CronCreate or CronDelete.
 type ScheduleCall struct {
-	Wakeup bool
-	Delete bool
-	// ID is the cron job's id, or for a wakeup the id of the tool use.
+	Wakeup    bool
+	Delete    bool
 	ID        string
 	Cron      string
 	Prompt    string
@@ -32,18 +29,16 @@ func (e Event) ScheduleCall(now time.Time) (ScheduleCall, bool) {
 	if e.Name != "PostToolUse" {
 		return ScheduleCall{}, false
 	}
-	var in struct {
-		ID           string  `json:"id"`
-		Cron         string  `json:"cron"`
-		DelaySeconds float64 `json:"delaySeconds"`
-		Prompt       string  `json:"prompt"`
-		Reason       string  `json:"reason"`
-	}
-	if json.Unmarshal(e.ToolInput, &in) != nil {
-		return ScheduleCall{}, false
-	}
 	switch e.ToolName {
 	case "ScheduleWakeup":
+		var in struct {
+			DelaySeconds float64 `json:"delaySeconds"`
+			Prompt       string  `json:"prompt"`
+			Reason       string  `json:"reason"`
+		}
+		if json.Unmarshal(e.ToolInput, &in) != nil || e.ToolUseID == "" {
+			return ScheduleCall{}, false
+		}
 		var res struct {
 			ScheduledFor float64 `json:"scheduledFor"`
 		}
@@ -52,26 +47,30 @@ func (e Event) ScheduleCall(now time.Time) (ScheduleCall, bool) {
 		if next.IsZero() {
 			next = now.Add(time.Duration(in.DelaySeconds * float64(time.Second)))
 		}
-		return ScheduleCall{Wakeup: true, ID: e.ToolUseID, Prompt: in.Prompt, Reason: in.Reason, NextAt: next}, e.ToolUseID != ""
+		return ScheduleCall{Wakeup: true, ID: e.ToolUseID, Prompt: in.Prompt, Reason: in.Reason, NextAt: next}, true
 	case "CronCreate":
+		var in struct {
+			Cron   string `json:"cron"`
+			Prompt string `json:"prompt"`
+		}
 		var res struct {
 			ID         string  `json:"id"`
 			Recurring  bool    `json:"recurring"`
 			NextFireAt float64 `json:"nextFireAt"`
 		}
-		if json.Unmarshal(e.ToolResponse, &res) != nil || res.ID == "" {
+		if json.Unmarshal(e.ToolInput, &in) != nil || json.Unmarshal(e.ToolResponse, &res) != nil || res.ID == "" {
 			return ScheduleCall{}, false
 		}
 		next := msTime(res.NextFireAt, now)
 		if next.IsZero() {
-			var ok bool
-			if next, ok = NextCron(in.Cron, now); !ok {
-				next = now.Add(UnknownRun)
-			}
+			next = NextRun(in.Cron, now)
 		}
 		return ScheduleCall{ID: res.ID, Cron: in.Cron, Prompt: in.Prompt, Recurring: res.Recurring, NextAt: next}, true
 	case "CronDelete":
-		return ScheduleCall{Delete: true, ID: in.ID}, in.ID != ""
+		var in struct {
+			ID string `json:"id"`
+		}
+		return ScheduleCall{Delete: true, ID: in.ID}, json.Unmarshal(e.ToolInput, &in) == nil && in.ID != ""
 	}
 	return ScheduleCall{}, false
 }
@@ -96,4 +95,13 @@ func NextCron(expr string, t time.Time) (time.Time, bool) {
 	}
 	next := sched.Next(t)
 	return next, !next.IsZero()
+}
+
+// NextRun is NextCron for a cron that Claude Code runs whether or not it can be
+// read here: one it can't read is guessed to run in an hour.
+func NextRun(expr string, t time.Time) time.Time {
+	if next, ok := NextCron(expr, t); ok {
+		return next
+	}
+	return t.Add(unknownRun)
 }

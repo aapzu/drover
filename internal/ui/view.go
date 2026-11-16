@@ -98,10 +98,12 @@ func (m Model) renderHeader() string {
 			switch {
 			case s.Activity == store.ActivityPermission || stuckStarting(s):
 				attention++
-			case s.Activity == store.ActivityIdle && !s.HasBackground() && s.Polling():
-				polling++
 			case s.Activity == store.ActivityIdle && !s.HasBackground():
-				waiting++
+				if s.Polling() {
+					polling++
+				} else {
+					waiting++
+				}
 			default:
 				working++
 			}

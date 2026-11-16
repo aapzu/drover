@@ -322,7 +322,6 @@ func TestAScheduledPromptRunsItsSchedule(t *testing.T) {
 		t.Fatalf("an unrelated prompt ran a schedule: %+v", s.Schedules)
 	}
 
-	// A /loop agent runs its wakeup and schedules the next one.
 	feed(`{"hook_event_name":"UserPromptSubmit","prompt":"check the build"}`, call("tu2"))
 	if len(s.Schedules) != 2 {
 		t.Fatalf("schedules = %+v, want the cron and one wakeup", s.Schedules)

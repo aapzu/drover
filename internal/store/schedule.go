@@ -11,7 +11,6 @@ import (
 // Schedule is a run an agent set up for itself with ScheduleWakeup or
 // CronCreate, which Claude Code triggers by submitting Prompt.
 type Schedule struct {
-	// ID is the cron job's id, or the tool use id of a wakeup.
 	ID        string    `json:"id"`
 	Wakeup    bool      `json:"wakeup,omitempty"`
 	Cron      string    `json:"cron,omitempty"`
@@ -19,23 +18,19 @@ type Schedule struct {
 	Prompt    string    `json:"prompt,omitempty"`
 	Reason    string    `json:"reason,omitempty"`
 	NextAt    time.Time `json:"nextAt"`
-	// Runs counts the prompts taken for a run of this schedule.
-	Runs int `json:"runs,omitempty"`
+	Runs      int       `json:"runs,omitempty"`
 }
 
 const (
-	// fireSlack is how much earlier than NextAt a run still counts as that run.
-	fireSlack = 90 * time.Second
-	// overdueGrace is how long after its time, or after the agent last did
-	// anything, a schedule may stay listed without having run. A recurring one
-	// gets a tenth of its period instead if that is longer, up to maxGrace,
-	// because Claude Code runs those late.
+	// A run arrives near NextAt, not exactly on it: fireSlack is how early a
+	// prompt may be and still count, overdueGrace to maxGrace how late a run may
+	// be before it is dropped or moved on.
+	fireSlack    = 90 * time.Second
 	overdueGrace = 2 * time.Minute
 	maxGrace     = 15 * time.Minute
 )
 
-// ApplySchedule records a schedule tool call. A wakeup with the same prompt
-// replaces the pending one, which is how a /loop agent paces itself.
+// ApplySchedule records a schedule tool call.
 func (s *Session) ApplySchedule(c claude.ScheduleCall) {
 	if c.Delete {
 		s.dropSchedules(func(sc *Schedule) bool { return sc.ID == c.ID })
@@ -70,23 +65,18 @@ func (s *Session) RunSchedules(prompt string, now time.Time) {
 }
 
 // advance moves a recurring schedule on to its next run after now. It reports
-// false when sc has no run left. A cron this program can't read is kept, with
-// a guess for its next run, because Claude Code still runs it.
+// false when sc has no run left.
 func (sc *Schedule) advance(now time.Time) bool {
-	if sc.Wakeup || !sc.Recurring {
+	if !sc.Recurring {
 		return false
 	}
-	next, ok := claude.NextCron(sc.Cron, now)
-	if !ok {
-		next = now.Add(claude.UnknownRun)
-	}
-	sc.NextAt = next
+	sc.NextAt = claude.NextRun(sc.Cron, now)
 	return true
 }
 
 // grace is how long past NextAt the schedule may wait for its run.
 func (sc Schedule) grace() time.Duration {
-	if !sc.Recurring || sc.Wakeup {
+	if !sc.Recurring {
 		return overdueGrace
 	}
 	next, ok := claude.NextCron(sc.Cron, sc.NextAt)
@@ -106,7 +96,7 @@ func (s *Session) ExpireSchedules(now time.Time) {
 		if s.UpdatedAt.After(late) {
 			late = s.UpdatedAt
 		}
-		if now.Before(late.Add(sc.grace())) {
+		if now.Before(late.Add(overdueGrace)) || now.Before(late.Add(sc.grace())) {
 			return false
 		}
 		return !sc.advance(now)
@@ -150,7 +140,7 @@ func (sc Schedule) Fires(from, until time.Time, step time.Duration) []time.Time 
 	var out []time.Time
 	for !at.After(until) {
 		out = append(out, at)
-		if sc.Wakeup || !sc.Recurring {
+		if !sc.Recurring {
 			break
 		}
 		next, ok := claude.NextCron(sc.Cron, at.Add(max(step, time.Minute)-time.Nanosecond))
