@@ -292,6 +292,9 @@ These settings work in `drover.json` and, for you alone, in
 - **`autoName`** titles a new session's card with a short summary of your
   first message, written with `claude -p --model haiku`. A title you edit is
   never replaced.
+- `E` renames the selected card: the input starts with its current title and
+  swaps in a suggestion made the same way as `autoName`'s, unless you've started
+  typing. It works whether or not `autoName` is on.
 - **`disableMouse`** (default `false`) starts agents and the assistant with
   `CLAUDE_CODE_DISABLE_MOUSE=1` and turns tmux's mouse mode off in their
   sessions, so your terminal handles selection and scrolling when you attach.

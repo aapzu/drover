@@ -27,6 +27,7 @@ var paletteCommands = []paletteCommand{
 	{"Open a shell in the card's worktree", "c"},
 	{"Update the worktree from its base branch", "u"},
 	{"Edit title and prompt", "e"},
+	{"Rename card, suggesting a title", "E"},
 	{"Delete task", "x"},
 	{"Move card to the previous column", "H"},
 	{"Move card to the next column", "L"},
