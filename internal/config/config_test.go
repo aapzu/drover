@@ -538,6 +538,24 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local disableMouse:true does not override the shared file")
 				}
 			}},
+		{"shared assistant MCP settings survive a local file without them", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"autoName":false}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"a"}) || !slices.Equal(b.AssistantTools, []string{"mcp__a__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local empty assistant lists clear the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":[],"assistantTools":[]}`,
+			func(t *testing.T, b *Board) {
+				if len(b.AssistantPlugins) != 0 || len(b.AssistantTools) != 0 {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local assistant MCP settings replace the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":["b"],"assistantTools":["mcp__b__*"]}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"b"}) || !slices.Equal(b.AssistantTools, []string{"mcp__b__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
@@ -669,6 +687,9 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
+		{"bare mcp__ assistant tool", `{"assistantTools":["mcp__"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "mcp__"`},
+		{"empty assistant plugin id", `{"assistantPlugins":[" "],"columns":[{"id":"a","name":"A"}]}`, "assistantPlugins"},
 		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
 		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},

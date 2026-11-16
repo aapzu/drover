@@ -50,6 +50,7 @@ type assistantPane struct {
 	at              time.Time
 	history, scroll int
 	mouse           bool
+	sel             selection
 	cursor          tmux.Cursor
 	tickGen         int
 }
@@ -66,7 +67,7 @@ func (p assistantPane) starting() bool { return p.session == sessionStarting }
 func (p assistantPane) running() bool  { return p.session == sessionRunning }
 
 func (p *assistantPane) clearFrame() {
-	p.txt, p.history, p.scroll, p.mouse, p.cursor = "", 0, 0, false, tmux.Cursor{}
+	p.txt, p.history, p.scroll, p.mouse, p.cursor, p.sel = "", 0, 0, false, tmux.Cursor{}, selection{}
 }
 
 func (p *assistantPane) fail(err error) {
@@ -226,9 +227,11 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 		}
 		return
 	}
+	d := msg.history - m.assist.history
 	if m.assist.scroll > 0 {
-		m.assist.scroll += msg.history - m.assist.history
+		m.assist.scroll += d
 	}
+	m.assist.sel.shift(d)
 	m.assist.scroll = clamp(m.assist.scroll, 0, msg.history)
 	m.assist.txt, m.assist.history, m.assist.mouse, m.assist.cursor = msg.txt, msg.history, msg.mouse, msg.cursor
 }
@@ -273,6 +276,10 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 	if up {
 		lines = 3
 	}
+	return m.scrollAssistant(lines)
+}
+
+func (m Model) scrollAssistant(lines int) (tea.Model, tea.Cmd) {
 	scroll := clamp(m.assist.scroll+lines, 0, m.assist.history)
 	if scroll == m.assist.scroll {
 		return m, nil
@@ -305,7 +312,7 @@ func (m Model) renderAssistant(width, height int) string {
 		if focused {
 			txt = paintCursor(txt, m.assist.cursor)
 		}
-		body = previewWindow(txt, height-2, m.assist.scroll)
+		body = selPane{txt: txt, scroll: m.assist.scroll, sel: m.assist.sel}.body(height - 2)
 	}
 
 	title, hint := " assistant ", "· "+askKey+" to type here "

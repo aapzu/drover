@@ -42,6 +42,8 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	AssistantPlugins      []string      `json:"assistantPlugins,omitempty"`
+	AssistantTools        []string      `json:"assistantTools,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -294,6 +296,8 @@ func (b *Board) applyLocal(root string) error {
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
 		DisableMouse       *bool           `json:"disableMouse"`
+		AssistantPlugins   []string        `json:"assistantPlugins"`
+		AssistantTools     []string        `json:"assistantTools"`
 		Notifications      json.RawMessage `json:"notifications"`
 		Columns            []localColumn   `json:"columns"`
 	}
@@ -320,6 +324,12 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.DisableMouse != nil {
 		b.DisableMouse = *local.DisableMouse
+	}
+	if local.AssistantPlugins != nil {
+		b.AssistantPlugins = local.AssistantPlugins
+	}
+	if local.AssistantTools != nil {
+		b.AssistantTools = local.AssistantTools
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -403,6 +413,16 @@ func (b *Board) validate() error {
 	if b.ArchiveDoneAfter != "" {
 		if _, err := parseAge(b.ArchiveDoneAfter); err != nil {
 			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
+		}
+	}
+	for _, id := range b.AssistantPlugins {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("%s or %s: assistantPlugins must not hold an empty id", FileName, LocalFileName)
+		}
+	}
+	for _, t := range b.AssistantTools {
+		if !strings.HasPrefix(t, "mcp__") || len(t) == len("mcp__") {
+			return fmt.Errorf("%s or %s: assistantTools entry %q must be an MCP tool pattern starting with mcp__", FileName, LocalFileName, t)
 		}
 	}
 	if b.Columns[0].InReviewLane() {

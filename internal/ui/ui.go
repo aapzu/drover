@@ -119,6 +119,7 @@ type Model struct {
 	previewComplete            bool
 	previewBusy, previewWanted bool
 	sel                        selection
+	selClick                   selClick
 
 	prefs   prefs
 	drag    dragState
@@ -584,8 +585,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.previewScroll > 0 {
 				m.previewScroll += d
 			}
-			m.sel.anchor.line += d
-			m.sel.head.line += d
+			m.sel.shift(d)
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
@@ -714,7 +714,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)

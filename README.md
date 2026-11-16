@@ -56,10 +56,13 @@ Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge, the preview's top border or the review lane's
 divider to resize, click the preview to type into the agent, and click the assistant
-panel to type into it. Dragging over the live preview selects text and
-copies it. To select text anywhere else with the terminal's own selection
-(double and triple click included), hold Option on macOS or Shift elsewhere
-while dragging. Layout is saved in `ui.json` in the project's state
+panel to type into it. Dragging over the preview or the assistant panel
+selects text and copies it, without the panes' borders; double click selects a
+word, triple click a line, and dragging after either extends the selection by
+words or lines. While you type into an agent that reads mouse reports
+(`disableMouse` off), clicks go to it instead. To select text anywhere else with the
+terminal's own selection, hold Option on macOS or Shift elsewhere while
+dragging. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
@@ -293,6 +296,17 @@ These settings work in `drover.json` and, for you alone, in
   `CLAUDE_CODE_DISABLE_MOUSE=1` and turns tmux's mouse mode off in their
   sessions, so your terminal handles selection and scrolling when you attach.
   It applies to sessions started or resumed after you change it.
+- **`assistantPlugins`** and **`assistantTools`** (both empty by default) give
+  the assistant MCP tools, such as Slack's, so you can ask it to read a source and
+  turn what it finds into cards. `assistantPlugins` lists Claude Code plugin ids
+  to enable, like `"slack@claude-plugins-official"`; `assistantTools` lists the
+  tool patterns it may use without asking, each starting with `mcp__`, like
+  `"mcp__plugin_slack_slack__slack_read_*"`. Allow only read tools unless you
+  want it to write. A value in `drover.local.json` replaces the shared one.
+  What those tools return can come from anyone, so the assistant is told to
+  treat it as data and to ask before adding cards from it. An enabled plugin
+  runs as a whole, hooks included, and those aren't limited by the
+  assistant's tool rules, so list only plugins you trust.
 
 ## Automations
 
@@ -338,7 +352,9 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 This repo's own board cleans up, simplifies, reviews and builds on entering
 In review. At the end of each agent turn it asks for fixes if the review
 reported issues, or has the agent open the PR once none remain (only on a card
-with no PR yet). The In review column notifies you when the PR is in review.
+with no PR yet). It also asks the agent to merge the base branch and resolve
+the conflicts when the PR has any. The In review column notifies you when the
+PR is in review.
 The column's automations, trimmed to the review and PR steps:
 
 ```json
@@ -351,6 +367,9 @@ The column's automations, trimmed to the review and PR steps:
     { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],
   "onTurnEnd": [
+    { "name": "Fix conflicts", "type": "send_message",
+      "message": "PR #{{prNumber}} has merge conflicts with its base branch. Fetch the base branch, merge it into this branch, resolve the conflicts, run go build ./... and go test ./..., then push (no force push).",
+      "conditionScript": "test -n \"$DROVER_PRNUMBER\" && test \"$(gh pr view \"$DROVER_PRNUMBER\" --json mergeable --jq .mergeable)\" = CONFLICTING" },
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
       "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" },
@@ -649,7 +668,8 @@ What the assistant may do is the same in the panel and in `drover ask`:
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow
-  rules or `env` apply, but CLAUDE.md files still load. Managed settings still
+  rules or `env` apply, but CLAUDE.md files still load. Only the plugins and
+  tools in `assistantPlugins` and `assistantTools` are added. Managed settings still
   apply. If they auto-allow sandboxed Bash commands, the permission rules no
   longer limit what it runs; the sandbox does, and drover denies it writes to
   the repo there.
