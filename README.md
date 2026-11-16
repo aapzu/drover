@@ -337,7 +337,9 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 This repo's own board cleans up, simplifies, reviews and builds on entering
 In review. At the end of each agent turn it asks for fixes if the review
 reported issues, or has the agent open the PR once none remain (only on a card
-with no PR yet). The In review column notifies you when the PR is in review.
+with no PR yet). It also asks the agent to merge the base branch and resolve
+the conflicts when the PR has any. The In review column notifies you when the
+PR is in review.
 The column's automations, trimmed to the review and PR steps:
 
 ```json
@@ -350,6 +352,9 @@ The column's automations, trimmed to the review and PR steps:
     { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],
   "onTurnEnd": [
+    { "name": "Fix conflicts", "type": "send_message",
+      "message": "PR #{{prNumber}} has merge conflicts with its base branch. Fetch the base branch, merge it into this branch, resolve the conflicts, run go build ./... and go test ./..., then push (no force push).",
+      "conditionScript": "test -n \"$DROVER_PRNUMBER\" && test \"$(gh pr view \"$DROVER_PRNUMBER\" --json mergeable --jq .mergeable)\" = CONFLICTING" },
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
       "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" },
