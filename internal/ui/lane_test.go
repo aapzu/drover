@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -420,6 +421,65 @@ func TestNewReviewKeyStartsAReview(t *testing.T) {
 	m := laneModel(t)
 	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
 	if m.flash != "Starting a new review…" || cmd == nil {
+		t.Errorf("flash = %q, cmd nil = %v", m.flash, cmd == nil)
+	}
+}
+
+func TestNewReviewKeyShowsTheLaneAtOnce(t *testing.T) {
+	m := laneModel(t)
+	m.snap.Tasks = m.snap.Tasks[:1]
+	if m.reviewLaneShown() {
+		t.Fatal("an empty lane should start hidden")
+	}
+	m.prefs.ReviewLane = ptr(false)
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if !m.reviewLaneShown() || cmd == nil {
+		t.Errorf("lane shown = %v, cmd nil = %v; want the lane shown while the review starts", m.reviewLaneShown(), cmd == nil)
+	}
+	if *m.prefs.ReviewLane {
+		t.Error("ctrl+n saved the lane as shown before the review started")
+	}
+	m, _ = update(m, sessionStartedMsg{review: true, err: errors.New("boom"), snap: m.snap})
+	if m.reviewLaneShown() {
+		t.Error("the lane stays shown after the review failed to start")
+	}
+}
+
+func TestNewReviewKeyIgnoredWhileOneIsStarting(t *testing.T) {
+	m := laneModel(t)
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.flash != "Already starting a review" || cmd != nil {
+		t.Errorf("flash = %q, cmd nil = %v", m.flash, cmd == nil)
+	}
+	m, _ = update(m, sessionStartedMsg{review: true, err: errors.New("boom"), snap: m.snap})
+	m, cmd = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if cmd == nil {
+		t.Error("ctrl+n did nothing after the review finished")
+	}
+}
+
+func TestReviewStartedPersistsTheLaneAndReleasesTheKey(t *testing.T) {
+	m := laneModel(t)
+	m.prefs.ReviewLane = ptr(false)
+	card := &store.Task{ID: "new", Number: 3, ColumnID: "c3"}
+	m.snap.Tasks = append(m.snap.Tasks, card)
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	m, _ = update(m, sessionStartedMsg{review: true, task: card, snap: m.snap})
+	if m.startingReview || m.prefs.ReviewLane == nil || !*m.prefs.ReviewLane || m.col != 3 {
+		t.Errorf("starting = %v, pref = %v, col = %d; want the pref saved as shown with the card selected", m.startingReview, m.prefs.ReviewLane, m.col)
+	}
+	if _, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN}); cmd == nil {
+		t.Error("ctrl+n did nothing after the review started")
+	}
+}
+
+func TestPlainSessionStartDoesNotReleaseTheReviewKey(t *testing.T) {
+	m := laneModel(t)
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	m, _ = update(m, sessionStartedMsg{err: errors.New("boom"), snap: m.snap})
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.flash != "Already starting a review" || cmd != nil {
 		t.Errorf("flash = %q, cmd nil = %v", m.flash, cmd == nil)
 	}
 }
