@@ -1403,6 +1403,15 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
 			return err
 		}
+		if fresh {
+			// A review card's first agent, such as an imported one's, moves the
+			// card on once its turn ends, as when an agent names the PR itself.
+			e.with(func() {
+				if card == t && card.PR.IsReview() {
+					card.PRMovePending = e.flowColumn(e.startRef(true)).ID != ""
+				}
+			})
+		}
 	}
 	if message != "" {
 		e.sendMessage(t, key, message)
@@ -1425,7 +1434,8 @@ func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc grou
 	if strings.TrimSpace(t.Prompt) == "" {
 		return t.Title, enter
 	}
-	if strings.HasPrefix(t.Prompt, t.Title) {
+	// A slash command only runs at the start of the message.
+	if strings.HasPrefix(t.Prompt, t.Title) || strings.HasPrefix(t.Prompt, "/") {
 		return t.Prompt, enter
 	}
 	return t.Title + "\n\n" + t.Prompt, enter

@@ -74,6 +74,8 @@ func (m Model) View() string {
 			body = m.place(bodyHeight, m.renderColumns())
 		case modeConfirm:
 			body = m.place(bodyHeight, modalStyle.Width(min(70, m.width-4)).Render(m.confirmText))
+		case modeReviewLevel:
+			body = m.place(bodyHeight, m.renderReviewLevel())
 		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -166,17 +168,18 @@ func (m Model) renderFooter() string {
 		return m.boardFooter()
 	}
 	hints := map[mode]string{
-		modePalette:   "↑↓ select  enter run  esc cancel",
-		modeLive:      "LIVE: ctrl+q back to board",
-		modeAssistant: "ASSISTANT: ctrl+q hide panel",
-		modeForm:      "tab switch field  ctrl+s save  esc cancel",
-		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
-		modeConfirm:   "y confirm  any other key cancels",
-		modeDetail:    "↑↓ scroll  esc close",
-		modeUsage:     "↑↓ scroll  esc close",
-		modeSchedules: "↑↓ select  ←→ window  enter go to card  esc close",
-		modeHelp:      "any key closes",
-		modeConfig:    "↑↓ select  enter change/open  / search  x reset  c columns  esc close",
+		modePalette:     "↑↓ select  enter run  esc cancel",
+		modeLive:        "LIVE: ctrl+q back to board",
+		modeAssistant:   "ASSISTANT: ctrl+q hide panel",
+		modeForm:        "tab switch field  ctrl+s save  esc cancel",
+		modeMove:        "↑↓ select  enter move  1-9 jump  any other key cancels",
+		modeConfirm:     "y confirm  any other key cancels",
+		modeReviewLevel: "↑↓ select  enter start  1-5 pick  esc cancel",
+		modeDetail:      "↑↓ scroll  esc close",
+		modeUsage:       "↑↓ scroll  esc close",
+		modeSchedules:   "↑↓ select  ←→ window  enter go to card  esc close",
+		modeHelp:        "any key closes",
+		modeConfig:      "↑↓ select  enter change/open  / search  x reset  c columns  esc close",
 	}
 	if m.configEditing {
 		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
@@ -800,7 +803,7 @@ var helpKeys = [][2]string{
 	{"i", "task details and automation log"},
 	{"$", "usage and cost"},
 	{"T", "timeline of the runs agents have scheduled (/loop, ScheduleWakeup, CronCreate)"},
-	{"I", "import running Claude Code agents, past sessions or Linear issues"},
+	{"I", "import running Claude Code agents, past sessions, Linear issues or PRs to review"},
 	{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 	{"B", "show or hide hidden cards"},
 	{"A", "archive or restore a card in Done"},

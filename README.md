@@ -47,7 +47,9 @@ Then bring in the Claude Code work you already have:
 1. Press `I` to import your Claude Code agents and sessions. Running agents
    become cards in the first agent column, and past sessions land in the first
    column, ready to resume. See
-   [Importing Claude Code agents](#importing-claude-code-agents).
+   [Importing Claude Code agents](#importing-claude-code-agents). `tab`
+   switches to [Linear](#linear) issues and
+   [PRs to review](#importing-prs-to-review).
 2. Or press `n` to start a new card with an agent, or `ctrl+n` to start one
    in the [review lane](#the-review-lane).
 
@@ -167,12 +169,13 @@ open, and to Done once it merges:
 | Waiting for me | Agent |
 | In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
-| Reviewing | Agent, in the review lane, at `high` effort; on entry it asks for a re-review of the new commits |
+| Review requested | Plain, in the review lane; [imported](#importing-prs-to-review) PRs awaiting your review land here |
+| Reviewing | Agent, in the review lane, at `high` effort; on entry after a review of yours it asks for a re-review of the new commits |
 | Triage findings | Agent, in the review lane |
 | Waiting on author | Plain, in the review lane; the agent is suspended |
 | Done | Done, in the review lane |
 
-The last four are the [review lane](#the-review-lane) and come with a
+The last five are the [review lane](#the-review-lane) and come with a
 `reviewFlow` that moves the cards of PRs you review through them.
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, or hands the work back for you to review, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. A custom board gets this row by default when its `executing` column has no `onTurnEnd` and the board has a column with id or name `waiting-for-me`, `Waiting for me` or `waiting`; set `"onTurnEnd": []` to turn it off.
@@ -184,7 +187,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   no file it uses a built-in default (Planning, Executing,
   Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
-  `worktreesDir`, `splitByPR` and those under [Agents and notifications](#agents-and-notifications).
+  `worktreesDir`, `splitByPR`, `teamReviewRequests`, `reviewRepos` (see
+  [Importing PRs to review](#importing-prs-to-review)) and those under
+  [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
@@ -364,7 +369,9 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 - **Placeholders** in `message`, `script`, `conditionScript`, `title` and
   `body`: `{{title}}`, `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
   `{{baseBranch}}`, `{{worktreePath}}`, `{{projectPath}}`, `{{projectName}}`,
-  `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`, `{{issueKey}}`,
+  `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`,
+  `{{prReviewedSha}}` (the commit your latest review of the PR was on, empty
+  before you review it), `{{issueKey}}`,
   `{{issueUrl}}`, `{{fromColumn}}`, `{{toColumn}}`, `{{trigger}}` and
   `{{agentReply}}`. In a `script` or `conditionScript` they are shell-quoted,
   and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
@@ -502,6 +509,7 @@ same column targets as `prFlow`:
 
 ```json
 "reviewFlow": {
+  "requested": "review-requested",
   "started": "reviewing",
   "reviewed": "waiting-on-author",
   "approved": "review-done",
@@ -510,14 +518,19 @@ same column targets as `prFlow`:
 }
 ```
 
+- **requested:** where an [imported](#importing-prs-to-review) PR awaiting
+  your review lands. Without it, imports land in the lane's first column
+  without an agent, else in the first column. A card in `reviewed` or
+  `approved` also comes back here when your review is requested again.
 - **started:** where the card goes once the agent's turn ends and gh has
   confirmed the PR isn't yours, from an agent column.
 - **reviewed:** where it goes, from any column, when a review of yours shows up
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
 - **approved:** where it goes instead of `reviewed` when your review approves
-  the PR. A card in a Done column is no longer refreshed, so later pushes by
-  the author aren't followed.
+  the PR. A review card in a Done column is still refreshed while its PR is
+  open and you have reviewed it, so a push or a new request brings it back,
+  until it is archived.
 - **updated:** you get a notice when the author pushes after your review. A
   card in `reviewed` or `approved` also moves here.
 - **done:** where it goes once the PR merges or closes. A PR that was already
@@ -525,6 +538,36 @@ same column targets as `prFlow`:
 
 Your own review is never sent to the agent as feedback to address, and review
 cards don't follow a PR to release.
+
+### Importing PRs to review
+
+`I`, then `tab` to Reviews, lists open PRs by others in this repo in two
+groups:
+
+- **Requested from me:** PRs whose review is requested from you personally
+  (`user-review-requested:@me`). They land in `reviewFlow.requested`.
+- **Reviewed by me, still open:** PRs you have reviewed (`--reviewed-by=@me`).
+  They land in `reviewFlow.reviewed`.
+
+A PR in both is listed once, as requested. PRs already on the board are left
+out. `/` fetches any open PR by URL, from any repo.
+
+- Importing starts no agent. The prompt is `/code-review <url>`, so `enter`,
+  `r`, or moving the card into an agent column, reviews the PR. Once that
+  first turn ends, the card moves to `reviewFlow.started`, also from the
+  requested column.
+- Starting it on the board first asks for the `/code-review` level (`low` to
+  `max`, `high` preselected), which goes into the prompt as
+  `/code-review <level> <url>`. `esc` cancels the start. A card started any
+  other way, such as by `reviewFlow` or `drover move`, runs without a level.
+- The card then follows `reviewFlow` like any review card. A review of yours
+  already on the PR is only recorded, so the card stays where it landed.
+- **`teamReviewRequests`** (default `false`): `true` in `drover.json` or
+  `drover.local.json` also lists PRs requested from your teams
+  (`--review-requested=@me`). With CODEOWNERS that can be many.
+- **`reviewRepos`**: more repos to search, as `owner/name`, for example
+  `["acme/infra"]`. A value in `drover.local.json` replaces the shared one.
+  The agent still runs in this repo; `/code-review` reads the PR from GitHub.
 
 ### The review lane
 
@@ -540,8 +583,9 @@ only the review lane shows, and remembers it per repo too; the header counts the
 hidden cards. `X` brings the main columns back; `R` does too, and hides the
 review lane.
 
-The default lane is Reviewing, Triage findings, Waiting on author and its own
-Done (id `review-done`), with a `reviewFlow` that sends `started` to Triage
+The default lane is Review requested, Reviewing, Triage findings, Waiting on
+author and its own Done (id `review-done`), with a `reviewFlow` that lands
+imported PRs (`requested`) in Review requested, sends `started` to Triage
 findings, `reviewed` to Waiting on author (`approved` goes to the lane's Done
 instead when you approve), `updated` back to Reviewing when the author pushes,
 and `done` to the lane's Done. A board with a

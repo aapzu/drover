@@ -265,9 +265,10 @@ func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 		worktree = e.Root
 	}
 	branch := owner.Branch
-	var prURL, prNumber, prTitle, prBranch string
+	var prURL, prNumber, prTitle, prBranch, prReviewedSHA string
 	if t.PR != nil {
 		prURL, prNumber, prTitle, prBranch = t.PR.URL, fmt.Sprint(t.PR.Number), t.PR.Title, t.PR.Branch
+		prReviewedSHA = t.PR.ReviewedSHA
 		if prBranch != "" {
 			branch = prBranch
 		}
@@ -284,26 +285,27 @@ func (e *Engine) vars(t *store.Task, gc groupContext) map[string]string {
 		issueKey, issueURL = t.Issue.Key, t.Issue.URL
 	}
 	return map[string]string{
-		"issueKey":     issueKey,
-		"issueUrl":     issueURL,
-		"title":        t.Title,
-		"description":  t.Prompt,
-		"taskId":       t.ID,
-		"taskNumber":   fmt.Sprint(t.Number),
-		"projectPath":  e.Root,
-		"projectName":  e.ProjectName,
-		"worktreePath": worktree,
-		"branchName":   branch,
-		"prUrl":        prURL,
-		"prNumber":     prNumber,
-		"prTitle":      prTitle,
-		"prBranch":     prBranch,
-		"baseBranch":   base,
-		"column":       gc.to.Name,
-		"fromColumn":   gc.from.Name,
-		"toColumn":     gc.to.Name,
-		"trigger":      gc.trigger,
-		"agentReply":   gc.reply,
+		"issueKey":      issueKey,
+		"issueUrl":      issueURL,
+		"title":         t.Title,
+		"description":   t.Prompt,
+		"taskId":        t.ID,
+		"taskNumber":    fmt.Sprint(t.Number),
+		"projectPath":   e.Root,
+		"projectName":   e.ProjectName,
+		"worktreePath":  worktree,
+		"branchName":    branch,
+		"prUrl":         prURL,
+		"prNumber":      prNumber,
+		"prTitle":       prTitle,
+		"prBranch":      prBranch,
+		"prReviewedSha": prReviewedSHA,
+		"baseBranch":    base,
+		"column":        gc.to.Name,
+		"fromColumn":    gc.from.Name,
+		"toColumn":      gc.to.Name,
+		"trigger":       gc.trigger,
+		"agentReply":    gc.reply,
 	}
 }
 

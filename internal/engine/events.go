@@ -528,7 +528,8 @@ func (e *Engine) shipTask(t *store.Task) bool {
 // shipOpenedPR moves the card that took its session's first PR to the
 // prFlow's opened column once the agent is idle, unless you moved it first.
 // A PR you review goes to the reviewFlow's started column instead, once gh has
-// confirmed it isn't yours. A card whose agent runs outside drover never moves.
+// confirmed it isn't yours, also from the column imported reviews land in. A
+// card whose agent runs outside drover never moves.
 // It reports whether it moved the card. The caller holds the task lock.
 func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	e.mu.Lock()
@@ -561,7 +562,7 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 		switch {
 		case target.ID == "" || target.ID == col.ID:
 			target = config.Column{}
-		case !isAgentColumn(col):
+		case !isAgentColumn(col) && !(review && col.ID == e.board.ReviewImport(false).ID):
 			t.AddLog(fmt.Sprintf("%s, not moving to %s: the card is in %s", reason, target.Name, col.Name))
 			target = config.Column{}
 		}
