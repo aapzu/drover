@@ -598,15 +598,9 @@ func (m Model) renderPreview(height int) string {
 	body := ""
 	if t != nil {
 		title = fmt.Sprintf(" #%d %s ", t.Number, taskTitle(t))
-		if s := m.sessionFor(t); s != nil && s.Status == store.StatusExternal {
-			body = dim.Render(fmt.Sprintf("Running in another terminal (pid %d); press enter to open it or take it over. Its latest reply:", s.PID)) + "\n\n" + s.LastReply
-		} else if _, ok := m.liveSession(t.ID); !ok {
-			body = dim.Render("No running agent. Move the card into an agent column, or press r to resume.")
-			if s := m.sessionFor(t); s != nil && s.LastReply != "" {
-				body += "\n\n" + muted.Render("Last reply:") + "\n" + s.LastReply
-			}
-		} else if m.showsCapture(t) {
-			body = m.previewBody(height - 2)
+		txt, scroll := m.previewText(height - 2)
+		body = selPane{txt: txt, scroll: scroll, sel: m.sel}.body(height - 2)
+		if m.showsCapture(t) {
 			if m.previewScroll > 0 {
 				title += thinking.Render(fmt.Sprintf("· ↑ %d lines up, scroll down to return ", m.previewScroll))
 			} else if m.mode != modeLive {
@@ -672,11 +666,39 @@ func previewBounds(lines, n, scroll int) (int, int) {
 	return max(0, end-n), end
 }
 
-// previewBody is the preview window with the selection highlighted.
-func (m Model) previewBody(n int) string {
-	lines := captureLines(m.previewTxt)
-	start, end := previewBounds(len(lines), n, m.previewScroll)
-	return strings.Join(m.highlight(lines[start:end], len(lines)-end), "\n")
+// previewText is the text the preview lists for the selected card and how far
+// it is scrolled up: the agent's capture, or the note shown when there is
+// none, cut to its last n lines like the preview window.
+func (m Model) previewText(n int) (string, int) {
+	t := m.current()
+	if t == nil {
+		return "", 0
+	}
+	if m.showsCapture(t) {
+		return m.previewTxt, m.previewScroll
+	}
+	lines := strings.Split(m.previewNote(t), "\n")
+	return strings.Join(lines[max(0, len(lines)-n):], "\n"), 0
+}
+
+// expandTabs spells tabs as the four spaces lipgloss draws, so the cells of
+// the note match what is on screen.
+func expandTabs(s string) string { return strings.ReplaceAll(s, "\t", "    ") }
+
+// previewNote is what the preview says about a card without a capture to show.
+func (m Model) previewNote(t *store.Task) string {
+	s := m.sessionFor(t)
+	if s != nil && s.Status == store.StatusExternal {
+		return dim.Render(fmt.Sprintf("Running in another terminal (pid %d); press enter to open it or take it over. Its latest reply:", s.PID)) + "\n\n" + expandTabs(s.LastReply)
+	}
+	if _, ok := m.liveSession(t.ID); ok {
+		return ""
+	}
+	note := dim.Render("No running agent. Move the card into an agent column, or press r to resume.")
+	if s != nil && s.LastReply != "" {
+		note += "\n\n" + muted.Render("Last reply:") + "\n" + expandTabs(s.LastReply)
+	}
+	return note
 }
 
 func (m Model) renderForm() string {
@@ -739,7 +761,7 @@ func (m Model) renderHelp() string {
 		{"< / >", "narrower / wider column"},
 		{"z", "card size: normal, compact, tall with last reply"},
 		{"0", "reset layout"},
-		{"drag", "select text in the live preview and copy it"},
+		{"drag", "select text in the preview or assistant and copy it (double click a word, triple click a line)"},
 		{"opt/shift+drag", "select text anywhere (opt on macOS, shift elsewhere)"},
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
