@@ -17,6 +17,7 @@ const (
 	dragCard
 	dragColumn
 	dragPreview
+	dragLane
 	dragAssistant
 	dragSelect
 	dragForward
@@ -34,6 +35,7 @@ type dragState struct {
 	clickAt  time.Time
 	clickFor string
 	target   mouseTarget
+	sel      selTarget
 }
 
 const doubleClick = 400 * time.Millisecond
@@ -50,13 +52,18 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
 		h := l.hitTest(m, msg.X, msg.Y)
-		if h.kind == hitAssistant || h.kind == hitAssistantEdge {
+		if h.kind == hitAssistant || h.kind == hitAssistantEdge || h.kind == hitAssistantTitle {
 			return m.wheelAssistant(msg, l)
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
 			if name, ok := m.wheelTarget(); ok {
 				x, y := l.previewCell(msg)
 				m.keys.send(wheelJob(name, msg.Button == tea.MouseButtonWheelUp, x, y))
+				cmd := m.requestPreview(true)
+				return m, cmd
+			}
+			if name, ok := m.pagerTarget(); ok {
+				m.keys.send(pageJob(name, msg.Button == tea.MouseButtonWheelUp))
 				cmd := m.requestPreview(true)
 				return m, cmd
 			}
@@ -78,7 +85,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		h := l.hitTest(m, msg.X, msg.Y)
 		m.drag = dragState{clickAt: m.drag.clickAt, clickFor: m.drag.clickFor}
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch h.kind {
 		case hitCard:
 			m.mode = modeBoard
@@ -97,19 +104,22 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag = dragState{kind: dragColumn, col: h.col, colX: h.box.x}
 		case hitPreviewEdge:
 			m.drag = dragState{kind: dragPreview}
+		case hitLaneEdge:
+			m.drag = dragState{kind: dragLane}
 		case hitAssistantEdge:
 			m.drag = dragState{kind: dragAssistant}
 		case hitPreview:
-			if t := m.current(); t != nil && m.showsCapture(t) {
-				if p, ok := m.selPointAt(l, msg.X, msg.Y); ok {
-					m.drag = dragState{kind: dragSelect}
-					m.sel.anchor, m.sel.head = p, p
-				}
-			}
+			m = m.beginSelect(l, selPreview, msg.X, msg.Y)
 			if m.mode != modeLive {
 				return m.startLive()
 			}
+		case hitAssistantTitle:
+			cmd := m.zoomAssistant()
+			return m, cmd
 		case hitAssistant:
+			if m.assist.running() {
+				m = m.beginSelect(l, selAssistant, msg.X, msg.Y)
+			}
 			if m.mode != modeAssistant {
 				cmd := m.focusAssistant()
 				return m, cmd
@@ -130,6 +140,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.boardWidth())
 		case dragPreview:
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
+		case dragLane:
+			if lo, hi := laneBounds(l.boardH); lo <= hi {
+				m.prefs.ReviewLaneHeight = clamp(l.bodyY+l.boardH-msg.Y, lo, hi)
+			}
 		case dragAssistant:
 			m.prefs.AssistantWidth = m.clampAssistantWidth(m.width - msg.X)
 		case dragSelect:
@@ -151,10 +165,10 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.col = h.col
 			m.selected[target.ID] = t.ID
 			return m, m.moveCmd(t, target)
-		case dragColumn, dragPreview, dragAssistant:
+		case dragColumn, dragPreview, dragLane, dragAssistant:
 			m.savePrefs()
 		case dragSelect:
-			if text := m.selectedText(); strings.TrimSpace(text) != "" {
+			if text := m.pane(d.sel, l).selectedText(); strings.TrimSpace(text) != "" {
 				return m, copyText(text)
 			}
 		}
@@ -204,7 +218,7 @@ func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Mode
 	switch msg.Action {
 	case tea.MouseActionPress:
 		m.drag = dragState{kind: dragForward, target: t}
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 	case tea.MouseActionMotion:
 		if focused {
 			m.keys.send(mouseJob(t.session, msg, x, y))
@@ -218,25 +232,38 @@ func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Mode
 }
 
 // extendSelection moves the selection's end to the cell under the pointer,
-// scrolling the preview when the pointer is on or past its border.
+// scrolling its pane when the pointer is on or past the pane's border.
 func (m Model) extendSelection(l layout, x, y int) (tea.Model, tea.Cmd) {
+	t := m.drag.sel
 	var cmd tea.Cmd
-	if d := edgeScroll(l, y); d != 0 {
+	if d := edgeScroll(m.pane(t, l), y); d != 0 {
 		var next tea.Model
-		next, cmd = m.scrollPreview(d)
+		next, cmd = m.scrollPane(t, d)
 		m = next.(Model)
 	}
-	if p, ok := m.selPointAt(l, x, y); ok {
-		m.sel.head = p
+	p := m.pane(t, l)
+	if pt, ok := p.pointAt(x, y); ok {
+		m.setSel(t, p.extend(p.sel, pt))
 	}
 	return m, cmd
 }
 
-func edgeScroll(l layout, y int) int {
+// scrollPane scrolls pane t up by lines, if it has history to scroll.
+func (m Model) scrollPane(t selTarget, lines int) (tea.Model, tea.Cmd) {
+	if t == selAssistant {
+		return m.scrollAssistant(lines)
+	}
+	if cur := m.current(); cur == nil || !m.showsCapture(cur) {
+		return m, nil
+	}
+	return m.scrollPreview(lines)
+}
+
+func edgeScroll(p selPane, y int) int {
 	switch {
-	case y <= l.previewY:
+	case y < p.y0:
 		return 1
-	case y >= l.previewY+l.previewH-1:
+	case y >= p.y0+p.h:
 		return -1
 	}
 	return 0

@@ -409,7 +409,7 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 			lane = append(lane, c.ID)
 		}
 	}
-	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
+	if want := []string{"reviewing", "triage", "waiting-on-author", "review-done"}; !slices.Equal(lane, want) {
 		t.Errorf("review lane = %v, want %v", lane, want)
 	}
 	f := board.ReviewFlow
@@ -538,6 +538,24 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local disableMouse:true does not override the shared file")
 				}
 			}},
+		{"shared assistant MCP settings survive a local file without them", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"autoName":false}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"a"}) || !slices.Equal(b.AssistantTools, []string{"mcp__a__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local empty assistant lists clear the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":[],"assistantTools":[]}`,
+			func(t *testing.T, b *Board) {
+				if len(b.AssistantPlugins) != 0 || len(b.AssistantTools) != 0 {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local assistant MCP settings replace the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":["b"],"assistantTools":["mcp__b__*"]}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"b"}) || !slices.Equal(b.AssistantTools, []string{"mcp__b__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
@@ -649,7 +667,7 @@ func TestSave(t *testing.T) {
 		ids = append(ids, c.ID)
 	}
 	lane, _ := board.Find("reviewing")
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
+	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author", "review-done"}) ||
 		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
 		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
 	}
@@ -669,6 +687,9 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
+		{"bare mcp__ assistant tool", `{"assistantTools":["mcp__"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "mcp__"`},
+		{"empty assistant plugin id", `{"assistantPlugins":[" "],"columns":[{"id":"a","name":"A"}]}`, "assistantPlugins"},
 		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
 		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
@@ -699,5 +720,36 @@ func TestDoneColumn(t *testing.T) {
 	}
 	if got := (&Board{Columns: []Column{{ID: "a"}}}).DoneColumn().ID; got != "" {
 		t.Errorf("DoneColumn without a done column = %q, want none", got)
+	}
+}
+
+func TestReviewEntry(t *testing.T) {
+	load := func(board string) *Board {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(board), 0o644)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	const columns = `"columns":[{"id":"first","name":"First"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review"},
+	  {"id":"triage","name":"Triage","lane":"review"}]`
+	cases := []struct {
+		name, board, want string
+	}{
+		{"started in the lane", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "triage"},
+		{"started outside the lane", `{` + columns + `,"reviewFlow":{"started":"first"}}`, "reviewing"},
+		{"no reviewFlow", `{` + columns + `}`, "reviewing"},
+	}
+	for _, c := range cases {
+		got, ok := load(c.board).ReviewEntry()
+		if !ok || got.ID != c.want {
+			t.Errorf("%s: ReviewEntry = %q, %v; want %q", c.name, got.ID, ok, c.want)
+		}
+	}
+	if _, ok := load(`{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done"}]}`).ReviewEntry(); ok {
+		t.Error("a board without a review lane has an entry column")
 	}
 }
