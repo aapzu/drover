@@ -124,6 +124,9 @@ var ghDenied = []string{
 	"gh alias *", "gh extension *", "gh config *",
 }
 
+// ghHosts are the hosts gh needs to reach through the sandbox.
+var ghHosts = []string{"api.github.com", "github.com", "*.githubusercontent.com"}
+
 // runClaude is replaced in tests.
 var runClaude = func(ctx context.Context, dir string, argv []string, stdin string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -245,7 +248,7 @@ func launch(root, exe string, board *config.Board) error {
 			return fmt.Errorf("could not save the conversation: %w", err)
 		}
 	}
-	args := append(argv(exe, root, id, resume, systemPrompt(exe, root, board)), "--permission-mode", "dontAsk")
+	args := argv(exe, root, id, resume, systemPrompt(exe, root, board))
 	name := SessionName(root)
 	if err := newSession(name, root, append([]string{"claude"}, args...), board.ClaudeEnv()); err != nil {
 		return err
@@ -350,6 +353,7 @@ func settings(root string) string {
 				"denyWrite":  {root},
 				"allowWrite": {store.Dir(root)},
 			},
+			"network": map[string][]string{"allowedDomains": ghHosts},
 		},
 	})
 	return string(data)
