@@ -171,6 +171,9 @@ func (m Model) renderFooter() string {
 		}
 	}
 	hints[modeColumns] = m.columnsHint()
+	if m.assist.full {
+		hints[modeAssistant] = "ASSISTANT: ctrl+q exit fullscreen"
+	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
 
@@ -204,6 +207,9 @@ func (m Model) boardFooter() string {
 }
 
 func (m Model) renderMain(l layout) string {
+	if l.assistantFull {
+		return m.renderAssistant(l.assistantW, l.bodyH)
+	}
 	main := m.renderBoard(l)
 	if l.previewH > 0 {
 		main = lipgloss.JoinVertical(lipgloss.Left, main, m.renderPreview(l.previewH))
@@ -766,6 +772,7 @@ var helpKeys = [][2]string{
 	{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
 	{":", "open and type into the assistant panel (Ctrl-q returns to the board and hides it)"},
 	{"N", "start a new assistant conversation"},
+	{"Z", "show the assistant panel fullscreen (Ctrl-q or a click on its top border leaves it)"},
 	{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 	{"u", "update the worktree from its base branch"},
 	{"p", "toggle live preview"},

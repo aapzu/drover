@@ -41,6 +41,7 @@ var paletteCommands = []paletteCommand{
 	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
 	{"Open the assistant panel and type into it", askKey},
+	{"Show the assistant panel fullscreen", zoomKey},
 	{"Hide the assistant panel", liveExitKey},
 	{"Start a new assistant conversation", newAskKey},
 	{"Change settings in drover.local.json and drover.json", "o"},
