@@ -146,7 +146,7 @@ func (p selPane) highlight(window []string, end int) []string {
 		if from >= to {
 			continue
 		}
-		window[i] = ansi.Cut(line, 0, from) + selStyle.Render(ansi.Strip(ansi.Cut(line, from, to))) + ansi.Cut(line, to, w)
+		window[i] = reverseSpan(line, from, to, w)
 	}
 	return window
 }
@@ -299,6 +299,11 @@ func (m Model) beginSelect(l layout, t selTarget, x, y int) Model {
 	m.drag.kind, m.drag.sel = dragSelect, t
 	m.setSel(t, s)
 	return m
+}
+
+// reverseSpan reverses columns from to to of line, which is w columns wide.
+func reverseSpan(line string, from, to, w int) string {
+	return ansi.Cut(line, 0, from) + selStyle.Render(ansi.Strip(ansi.Cut(line, from, to))) + ansi.Cut(line, to, w)
 }
 
 type copiedMsg struct {
