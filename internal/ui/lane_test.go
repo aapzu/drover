@@ -259,3 +259,96 @@ func TestReviewLaneIgnoresArchivedAndHiddenCards(t *testing.T) {
 		t.Error("B didn't bring the lane back")
 	}
 }
+
+func TestMainLaneToggleLeavesOnlyTheReviewLane(t *testing.T) {
+	m := laneModel(t)
+	m.col = 0
+	m, _ = update(m, key("X"))
+	if !m.prefs.HideMainLane || m.col != 2 {
+		t.Fatalf("after X: hidden=%v col=%d, want hidden and column 2", m.prefs.HideMainLane, m.col)
+	}
+	if lanes := m.lanes(); len(lanes) != 1 || len(lanes[0]) != 2 || lanes[0][0] != 2 {
+		t.Errorf("lanes = %v, want only the review columns", lanes)
+	}
+	if len(m.layout().cols) != 2 {
+		t.Errorf("%d columns laid out, want the review lane's 2", len(m.layout().cols))
+	}
+	if header := ansi.Strip(m.renderHeader()); !strings.Contains(header, "1 in main lane (X)") {
+		t.Errorf("header doesn't count the hidden main cards: %q", header)
+	}
+	if got := loadPrefs(m.eng.Root); !got.HideMainLane {
+		t.Errorf("X didn't save the choice: %+v", got)
+	}
+	m, _ = update(m, key("X"))
+	if m.prefs.HideMainLane || len(m.layout().cols) != 4 {
+		t.Errorf("after X again: hidden=%v, %d columns", m.prefs.HideMainLane, len(m.layout().cols))
+	}
+}
+
+func TestMainLaneHiddenKeepsAnEmptyReviewLaneShown(t *testing.T) {
+	m := laneModel(t)
+	m.snap.Tasks = m.snap.Tasks[:1]
+	m.prefs.HideMainLane = true
+	if !m.reviewLaneShown() || len(m.lanes()) != 1 {
+		t.Errorf("empty review lane: shown=%v lanes=%v", m.reviewLaneShown(), m.lanes())
+	}
+}
+
+func TestNavigationStaysInTheReviewLaneWhileMainIsHidden(t *testing.T) {
+	m := laneModel(t)
+	m.prefs.HideMainLane = true
+	m.col = 2
+	m, _ = update(m, key("h"))
+	if m.col != 2 {
+		t.Errorf("h from the lane's first column went to %d", m.col)
+	}
+	m, _ = update(m, key("l"))
+	if m.col != 3 {
+		t.Errorf("l went to %d, want 3", m.col)
+	}
+}
+
+func TestReviewLaneKeyBringsTheMainLaneBack(t *testing.T) {
+	m := laneModel(t)
+	m.prefs.HideMainLane = true
+	m.col = 2
+	m, _ = update(m, key("R"))
+	if m.prefs.HideMainLane || m.reviewLaneShown() || len(m.lanes()) != 1 || m.col != 1 {
+		t.Errorf("after R: hidden=%v review=%v lanes=%v col=%d", m.prefs.HideMainLane, m.reviewLaneShown(), m.lanes(), m.col)
+	}
+}
+
+func TestMainLaneToggleNeedsAReviewLane(t *testing.T) {
+	m := testModel(120, 40, 3, 0)
+	m.eng = &engine.Engine{Root: t.TempDir()}
+	m, _ = update(m, key("X"))
+	if m.prefs.HideMainLane || len(m.lanes()) != 1 || m.flash == "" {
+		t.Errorf("X without a review lane: hidden=%v lanes=%v flash=%q", m.prefs.HideMainLane, m.lanes(), m.flash)
+	}
+}
+
+func TestStaleHideMainLanePrefIsIgnoredWithoutAReviewLane(t *testing.T) {
+	m := testModel(120, 40, 3, 0)
+	m.eng = &engine.Engine{Root: t.TempDir()}
+	m.prefs.HideMainLane = true
+	if len(m.lanes()) != 1 || len(m.layout().cols) != 3 || !m.visibleColumn(0) {
+		t.Errorf("stale pref hid the board: lanes=%v columns=%d", m.lanes(), len(m.layout().cols))
+	}
+}
+
+func TestReviewLaneAloneFillsTheBoardAndHitTests(t *testing.T) {
+	m := laneModel(t)
+	m.prefs.HideMainLane = true
+	m.col = 2
+	l := m.layout()
+	if lines := strings.Count(ansi.Strip(m.renderBoard(l)), "\n") + 1; lines != l.boardH {
+		t.Errorf("board is %d lines, want %d", lines, l.boardH)
+	}
+	if h := l.hitTest(m, 1, l.bodyY); h.col != 2 {
+		t.Errorf("hit column %d at the top-left, want 2", h.col)
+	}
+	edge := l.cols[1].x + l.cols[1].width - 1
+	if h := l.hitTest(m, edge, l.bodyY); h.kind != hitColumnEdge || h.col != 3 {
+		t.Errorf("last column edge hit %+v", h)
+	}
+}

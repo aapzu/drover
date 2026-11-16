@@ -37,6 +37,7 @@ var paletteCommands = []paletteCommand{
 	{"Show or hide archived cards", "v"},
 	{"Fold or unfold this column to one card per session", "f"},
 	{"Show or hide the review lane", "R"},
+	{"Show only the review lane, or bring the main columns back", "X"},
 	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
 	{"Open the assistant panel and type into it", askKey},

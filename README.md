@@ -481,7 +481,10 @@ a lane of its own: a second row of columns below the main ones. Give a column
 shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
-card within its lane only; use `m` to move it between them.
+card within its lane only; use `m` to move it between them. `X` hides the main
+columns so only the review lane shows, and remembers it per repo too; the header
+counts the hidden cards. `X` brings the main columns back; `R` does too, and
+hides the review lane.
 
 The default lane is Reviewing, Triage findings and Waiting on author, with a
 `reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
