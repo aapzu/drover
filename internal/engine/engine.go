@@ -483,6 +483,15 @@ func (e *Engine) EditTask(id, title, prompt string) {
 	})
 }
 
+// RenameTask changes a card's title and leaves its prompt alone.
+func (e *Engine) RenameTask(id, title string) {
+	e.with(func() {
+		if t := e.find(id); t != nil {
+			t.Title = title
+		}
+	})
+}
+
 // DeleteTask stops the agent and removes the worktree. The branch is kept so
 // no committed work is lost. A card that shares its session with other cards
 // is removed alone, and the agent keeps working for the rest.

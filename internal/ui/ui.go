@@ -30,6 +30,7 @@ const (
 	modeBoard mode = iota
 	modeForm
 	modeSend
+	modeRename
 	modeMove
 	modeConfirm
 	modeDetail
@@ -52,6 +53,10 @@ type previewMsg struct {
 	at              time.Time
 }
 type noticeMsg string
+
+// titleSuggestedMsg carries a title for the rename prompt of card id, which
+// opened showing original.
+type titleSuggestedMsg struct{ id, original, title string }
 type snapMsg engine.Snapshot
 type actionDoneMsg struct {
 	id          string
@@ -134,6 +139,7 @@ type Model struct {
 	formFocus   int
 
 	sendInput   textinput.Model
+	renameInput textinput.Model
 	filter      string
 	filterInput textinput.Model
 
@@ -179,6 +185,9 @@ func New(eng *engine.Engine) Model {
 	ta.SetHeight(8)
 	si := textinput.New()
 	si.Placeholder = "Message for the agent"
+	ri := textinput.New()
+	ri.Placeholder = "Short title"
+	ri.CharLimit = 200
 	fi := textinput.New()
 	fi.Placeholder = "Words to match"
 	m := Model{
@@ -192,6 +201,7 @@ func New(eng *engine.Engine) Model {
 		titleInput:  ti,
 		promptInput: ta,
 		sendInput:   si,
+		renameInput: ri,
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
 		imp:         newImportState(),
@@ -507,6 +517,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.promptInput.SetWidth(min(100, m.width-8))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
+		m.renameInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
@@ -614,6 +625,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, next
 		}
 		return m, tea.Batch(next, m.captureAssistantCmd())
+	case titleSuggestedMsg:
+		if m.mode == modeRename && m.modalTask == msg.id && m.renameInput.Value() == msg.original && msg.title != "" {
+			m.renameInput.SetValue(msg.title)
+			m.renameInput.CursorEnd()
+		}
+		return m, nil
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -704,6 +721,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateForm(msg)
 		case modeSend:
 			return m.updateSend(msg)
+		case modeRename:
+			return m.updateRename(msg)
 		case modeMove:
 			return m.updateMove(msg)
 		case modeConfirm:
@@ -755,7 +774,7 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
 		m.selectTask(t)
 	}
-	if (m.mode == modeMove || m.mode == modeSend) && m.task(m.modalTask) == nil {
+	if (m.mode == modeMove || m.mode == modeSend || m.mode == modeRename) && m.task(m.modalTask) == nil {
 		m.mode = modeBoard
 	}
 }
@@ -1101,6 +1120,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openForm(t)
 			return m, textinput.Blink
 		}
+	case "E":
+		if t != nil {
+			return m, m.openRename(t)
+		}
 	case "x", "D", "delete":
 		if t == nil {
 			break
@@ -1390,6 +1413,46 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.filter = strings.TrimSpace(m.filterInput.Value())
+	return m, cmd
+}
+
+// openRename opens the rename prompt with the card's title and asks for a
+// suggested one to replace it, unless you've started typing by then.
+func (m *Model) openRename(t *store.Task) tea.Cmd {
+	m.mode = modeRename
+	m.modalTask = t.ID
+	m.renameInput.SetValue(t.Title)
+	m.renameInput.CursorEnd()
+	cmds := []tea.Cmd{m.renameInput.Focus(), textinput.Blink}
+	if t.Prompt != "" {
+		eng, id, original, prompt := m.eng, t.ID, t.Title, t.Prompt
+		cmds = append(cmds, func() tea.Msg {
+			return titleSuggestedMsg{id: id, original: original, title: eng.SuggestTitle(prompt)}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeBoard
+		return m, nil
+	case "enter":
+		title := strings.TrimSpace(m.renameInput.Value())
+		if title == "" {
+			m.setFlash("A task needs a title")
+			return m, nil
+		}
+		m.mode = modeBoard
+		if t := m.task(m.modalTask); t != nil {
+			m.eng.RenameTask(t.ID, title)
+			m.snap = m.eng.Snapshot()
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
 	return m, cmd
 }
 

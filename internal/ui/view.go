@@ -141,6 +141,9 @@ func (m Model) renderFooter() string {
 	if m.mode == modeSend {
 		return " " + bold.Render("Send ›") + " " + m.sendInput.View()
 	}
+	if m.mode == modeRename {
+		return " " + bold.Render("Rename ›") + " " + m.renameInput.View()
+	}
 	if m.mode == modeFilter {
 		return " " + bold.Render("Filter ›") + " " + m.filterInput.View()
 	}
@@ -723,6 +726,7 @@ func (m Model) renderHelp() string {
 		{"m", "move card to a column (↑↓ and enter, or 1-9)"},
 		{"n", "new card with an agent in the first column"},
 		{"e", "edit title and prompt"},
+		{"E", "rename card; suggests a title unless you type"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
 		{"tab", "type into the agent from the preview (Ctrl-q returns)"},
