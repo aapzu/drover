@@ -35,6 +35,7 @@ type dragState struct {
 	clickAt  time.Time
 	clickFor string
 	target   mouseTarget
+	sel      selTarget
 }
 
 const doubleClick = 400 * time.Millisecond
@@ -84,7 +85,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
 		h := l.hitTest(m, msg.X, msg.Y)
 		m.drag = dragState{clickAt: m.drag.clickAt, clickFor: m.drag.clickFor}
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch h.kind {
 		case hitCard:
 			m.mode = modeBoard
@@ -108,12 +109,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitAssistantEdge:
 			m.drag = dragState{kind: dragAssistant}
 		case hitPreview:
-			if t := m.current(); t != nil && m.showsCapture(t) {
-				if p, ok := m.selPointAt(l, msg.X, msg.Y); ok {
-					m.drag = dragState{kind: dragSelect}
-					m.sel.anchor, m.sel.head = p, p
-				}
-			}
+			m = m.beginSelect(l, selPreview, msg.X, msg.Y)
 			if m.mode != modeLive {
 				return m.startLive()
 			}
@@ -121,6 +117,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			cmd := m.zoomAssistant()
 			return m, cmd
 		case hitAssistant:
+			if m.assist.running() {
+				m = m.beginSelect(l, selAssistant, msg.X, msg.Y)
+			}
 			if m.mode != modeAssistant {
 				cmd := m.focusAssistant()
 				return m, cmd
@@ -169,7 +168,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case dragColumn, dragPreview, dragLane, dragAssistant:
 			m.savePrefs()
 		case dragSelect:
-			if text := m.selectedText(); strings.TrimSpace(text) != "" {
+			if text := m.pane(d.sel, l).selectedText(); strings.TrimSpace(text) != "" {
 				return m, copyText(text)
 			}
 		}
@@ -219,7 +218,7 @@ func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Mode
 	switch msg.Action {
 	case tea.MouseActionPress:
 		m.drag = dragState{kind: dragForward, target: t}
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 	case tea.MouseActionMotion:
 		if focused {
 			m.keys.send(mouseJob(t.session, msg, x, y))
@@ -233,25 +232,38 @@ func (m Model) forwardMouse(t mouseTarget, msg tea.MouseMsg, l layout) (tea.Mode
 }
 
 // extendSelection moves the selection's end to the cell under the pointer,
-// scrolling the preview when the pointer is on or past its border.
+// scrolling its pane when the pointer is on or past the pane's border.
 func (m Model) extendSelection(l layout, x, y int) (tea.Model, tea.Cmd) {
+	t := m.drag.sel
 	var cmd tea.Cmd
-	if d := edgeScroll(l, y); d != 0 {
+	if d := edgeScroll(m.pane(t, l), y); d != 0 {
 		var next tea.Model
-		next, cmd = m.scrollPreview(d)
+		next, cmd = m.scrollPane(t, d)
 		m = next.(Model)
 	}
-	if p, ok := m.selPointAt(l, x, y); ok {
-		m.sel.head = p
+	p := m.pane(t, l)
+	if pt, ok := p.pointAt(x, y); ok {
+		m.setSel(t, p.extend(p.sel, pt))
 	}
 	return m, cmd
 }
 
-func edgeScroll(l layout, y int) int {
+// scrollPane scrolls pane t up by lines, if it has history to scroll.
+func (m Model) scrollPane(t selTarget, lines int) (tea.Model, tea.Cmd) {
+	if t == selAssistant {
+		return m.scrollAssistant(lines)
+	}
+	if cur := m.current(); cur == nil || !m.showsCapture(cur) {
+		return m, nil
+	}
+	return m.scrollPreview(lines)
+}
+
+func edgeScroll(p selPane, y int) int {
 	switch {
-	case y <= l.previewY:
+	case y < p.y0:
 		return 1
-	case y >= l.previewY+l.previewH-1:
+	case y >= p.y0+p.h:
 		return -1
 	}
 	return 0

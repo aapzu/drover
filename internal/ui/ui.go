@@ -80,6 +80,7 @@ type externalAttachMsg struct {
 	number, pid int
 }
 type suspendAllMsg struct{}
+
 type sessionStartedMsg struct {
 	task *store.Task
 	err  error
@@ -118,6 +119,7 @@ type Model struct {
 	previewComplete            bool
 	previewBusy, previewWanted bool
 	sel                        selection
+	selClick                   selClick
 
 	prefs   prefs
 	drag    dragState
@@ -586,8 +588,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.previewScroll > 0 {
 				m.previewScroll += d
 			}
-			m.sel.anchor.line += d
-			m.sel.head.line += d
+			m.sel.shift(d)
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
@@ -683,6 +684,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil
 		}
+		if col, _, ok := m.snap.Board.Column(m.columnOf(msg.task)); ok && col.InReviewLane() && !m.reviewLaneShown() {
+			shown := true
+			m.prefs.ReviewLane = &shown
+			m.savePrefs()
+		}
 		m.selectTask(msg.task)
 		if cmd, ok := m.attach(msg.task.ID); ok {
 			m.setFlash("")
@@ -711,7 +717,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)
@@ -1123,6 +1129,17 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			t, err := eng.NewSession()
 			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
 		}
+	case newReviewKey:
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.setFlash("Starting a new review…")
+		eng := m.eng
+		return m, func() tea.Msg {
+			t, err := eng.NewReviewSession()
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
+		}
 	case "e":
 		if t != nil {
 			m.openForm(t)
@@ -1325,7 +1342,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "R":
 		if !m.hasReviewLane() {
-			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			m.setFlash(noReviewLane)
 			break
 		}
 		shown := !m.reviewLaneShown()
