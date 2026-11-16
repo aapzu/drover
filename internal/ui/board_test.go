@@ -250,6 +250,7 @@ func TestBoardKeysOpenTheirModes(t *testing.T) {
 	}{
 		{"?", modeHelp},
 		{"i", modeDetail},
+		{"$", modeUsage},
 		{"e", modeForm},
 		{"m", modeMove},
 		{"x", modeConfirm},

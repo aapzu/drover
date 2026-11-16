@@ -274,6 +274,7 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
 		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, ""},
 		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#1 first"},
+		{"usage", modeUsage, func(m Model) Model { m.detail.SetContent(m.renderUsage()); return m }, "Usage and cost"},
 		{"live", modeLive, func(m Model) Model { return withLive(m, m.current().ID) }, "LIVE"},
 	}
 	for _, size := range [][2]int{{120, 40}, {80, 24}} {
@@ -336,10 +337,13 @@ func TestHeaderCountsAgentsByState(t *testing.T) {
 	m.filter = "zz"
 
 	got := ansi.Strip(m.renderHeader())
-	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz", "$2.00"} {
+	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("header misses %q: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "$") {
+		t.Errorf("header shows a cost: %q", got)
 	}
 	m.branch = "main"
 	if got := ansi.Strip(m.renderHeader()); !strings.Contains(got, "on main") {

@@ -45,6 +45,7 @@ var paletteCommands = []paletteCommand{
 	{"Change settings in drover.local.json and drover.json", "o"},
 	{"Change column settings in drover.local.json and drover.json", "O"},
 	{"Task details and activity log", "i"},
+	{"Usage and cost", "$"},
 	{"Import agents, sessions or Linear issues", "I"},
 	{"Toggle live preview", "p"},
 	{"Taller preview", "+"},

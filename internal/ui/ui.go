@@ -33,6 +33,7 @@ const (
 	modeMove
 	modeConfirm
 	modeDetail
+	modeUsage
 	modeHelp
 	modeImport
 	modeLive
@@ -708,7 +709,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMove(msg)
 		case modeConfirm:
 			return m.updateConfirm(msg)
-		case modeDetail:
+		case modeDetail, modeUsage:
 			return m.updateDetail(msg)
 		case modeConfig:
 			return m.updateConfig(msg)
@@ -1238,6 +1239,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.SetContent(m.renderDetail(t))
 			m.detail.GotoTop()
 		}
+	case "$":
+		m.mode = modeUsage
+		m.detail.SetContent(m.renderUsage())
+		m.detail.GotoTop()
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd
@@ -1466,7 +1471,7 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "i":
+	case "esc", "q", "i", "$":
 		m.mode = modeBoard
 		return m, nil
 	}

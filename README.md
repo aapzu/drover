@@ -237,9 +237,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
   once its plan is approved.
 - **Context and cost.** After each turn the board reads the conversation's
-  transcript. Cards show how full the agent's context is and an estimate of
-  what the conversation has cost at list prices, like `42% · $1.20`, and the
-  header shows the board's total.
+  transcript. Cards show how full the agent's context is, like `42%`. Press
+  `$` for each card's estimated cost at list prices and the board's total;
+  prices are shown nowhere else.
 - **Agents know the board.** Each agent gets `--append-system-prompt` telling
   it that it runs on a drover board, that its card number is in its
   `$DROVER_TASK_NUMBER` environment variable, and how to use `drover move` and

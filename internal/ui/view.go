@@ -49,7 +49,7 @@ func (m Model) View() string {
 		body = m.place(bodyHeight, m.renderHelp())
 	case modeImport:
 		body = m.place(bodyHeight, m.renderImport(bodyHeight))
-	case modeDetail:
+	case modeDetail, modeUsage:
 		body = panelStyle.Width(m.width - 2).Height(bodyHeight - 2).Render(m.detail.View())
 	default:
 		l := m.layout()
@@ -83,10 +83,8 @@ func (m Model) place(height int, content string) string {
 
 func (m Model) renderHeader() string {
 	var working, waiting, attention, queued int
-	cost := 0.0
 	for _, t := range m.snap.Tasks {
 		for _, s := range t.Sessions {
-			cost += s.Usage.Cost
 			if s.Status == store.StatusQueued {
 				queued++
 			}
@@ -128,9 +126,6 @@ func (m Model) renderHeader() string {
 	if m.filter != "" {
 		stats = append(stats, bold.Render("filter: "+m.filter)+dim.Render(" (esc clears)"))
 	}
-	if cost >= 0.005 {
-		stats = append(stats, dim.Render(fmt.Sprintf("$%.2f", cost)))
-	}
 	right := strings.Join(stats, "  ") + " "
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
 	// layout assumes a one-row header.
@@ -158,6 +153,7 @@ func (m Model) renderFooter() string {
 		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:   "y confirm  any other key cancels",
 		modeDetail:    "↑↓ scroll  esc close",
+		modeUsage:     "↑↓ scroll  esc close",
 		modeHelp:      "any key closes",
 		modeConfig:    "↑↓ select  enter change  x reset  c columns  esc close",
 	}
@@ -430,7 +426,7 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool, folded
 		}
 	}
 	metaLine := ansi.Truncate(strings.Join(meta, " "), content, "…")
-	if u := usageLabel(m.sessionFor(t)); u != "" && lipgloss.Width(metaLine)+lipgloss.Width(u)+1 <= content {
+	if u := contextLabel(m.sessionFor(t)); u != "" && lipgloss.Width(metaLine)+lipgloss.Width(u)+1 <= content {
 		metaLine += strings.Repeat(" ", content-lipgloss.Width(metaLine)-lipgloss.Width(u)) + dim.Render(u)
 	}
 	s := m.sessionFor(t)
@@ -442,20 +438,16 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool, folded
 	return style.Width(width - 2).Render(strings.Join(lines, "\n"))
 }
 
-// usageLabel is how full the session's context is and what it has cost, like
-// "42% · $1.20".
-func usageLabel(s *store.Session) string {
+// contextLabel is how full the session's context is, like "42%".
+func contextLabel(s *store.Session) string {
 	if s == nil {
 		return ""
 	}
-	var parts []string
-	if window := claude.ContextWindow(s.Usage.Model); window > 0 && s.Usage.Context > 0 {
-		parts = append(parts, fmt.Sprintf("%d%%", s.Usage.Context*100/window))
+	window := claude.ContextWindow(s.Usage.Model)
+	if window <= 0 || s.Usage.Context <= 0 {
+		return ""
 	}
-	if s.Usage.Cost >= 0.005 {
-		parts = append(parts, fmt.Sprintf("$%.2f", s.Usage.Cost))
-	}
-	return strings.Join(parts, " · ")
+	return fmt.Sprintf("%d%%", s.Usage.Context*100/window)
 }
 
 var groupColors = []lipgloss.Color{"#22d3ee", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#facc15"}
@@ -743,6 +735,7 @@ func (m Model) renderHelp() string {
 		{"opt/shift+drag", "select text anywhere (opt on macOS, shift elsewhere)"},
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
+		{"$", "usage and cost"},
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 		{"B", "show or hide hidden cards"},
