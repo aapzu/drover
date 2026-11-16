@@ -97,17 +97,27 @@ func TestReviewFlow(t *testing.T) {
 		board, _, err := Load(dir)
 		return board, err
 	}
-	for _, field := range []string{"started", "reviewed", "updated", "done"} {
+	for _, field := range []string{"started", "reviewed", "approved", "updated", "done"} {
 		if _, err := load(`{"` + field + `":"nowhere"}`); err == nil {
 			t.Errorf("unknown reviewFlow.%s column accepted", field)
 		}
 	}
-	board, err := load(`{"started":"Waiting","reviewed":"waiting"}`)
-	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" {
+	board, err := load(`{"started":"Waiting","reviewed":"waiting","approved":"first"}`)
+	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" || board.ReviewFlow.Approved != "first" {
 		t.Fatalf("reviewFlow not loaded: %+v %v", board.ReviewFlow, err)
 	}
 	if _, err := load(`{}`); err != nil {
 		t.Errorf("empty reviewFlow rejected: %v", err)
+	}
+	f := &ReviewFlow{Reviewed: "waiting"}
+	if got := f.ReviewedTarget("APPROVED"); got != "waiting" {
+		t.Errorf("approval with no approved target went to %q, want reviewed", got)
+	}
+	f.Approved = "first"
+	for state, want := range map[string]string{"APPROVED": "first", "CHANGES_REQUESTED": "waiting", "COMMENTED": "waiting"} {
+		if got := f.ReviewedTarget(state); got != want {
+			t.Errorf("ReviewedTarget(%s) = %q, want %q", state, got, want)
+		}
 	}
 }
 
@@ -416,10 +426,13 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 	if f == nil {
 		t.Fatal("default board has no reviewFlow")
 	}
-	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
+	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "approved": f.Approved, "updated": f.Updated, "done": f.Done} {
 		if _, ok := board.Find(ref); !ok {
 			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
 		}
+	}
+	if c, _ := board.Find(f.Approved); !c.IsDone() {
+		t.Errorf("reviewFlow.approved = %q is not a Done column", f.Approved)
 	}
 	if c, _ := board.Find(f.Done); !c.IsDone() {
 		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)

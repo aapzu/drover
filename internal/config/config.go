@@ -64,14 +64,25 @@ func DefaultNotifications() Notifications {
 
 // ReviewFlow moves the cards of pull requests you review. Started is where a
 // card goes once the agent's first review turn ends, Reviewed once you have
-// submitted a review, Updated when the author pushes after it, and Done when
-// the PR merges or closes. Targets are column ids or names; an empty one
-// leaves cards where they are.
+// submitted a review, Approved instead of Reviewed when that review approves
+// (unset falls back to Reviewed), Updated when the author pushes after it, and
+// Done when the PR merges or closes. Targets are column ids or names; an empty
+// one leaves cards where they are.
 type ReviewFlow struct {
 	Started  string `json:"started,omitempty"`
 	Reviewed string `json:"reviewed,omitempty"`
+	Approved string `json:"approved,omitempty"`
 	Updated  string `json:"updated,omitempty"`
 	Done     string `json:"done,omitempty"`
+}
+
+// ReviewedTarget is where a card goes once your latest review, in the given
+// state, shows up: Approved for an approval when it is set, else Reviewed.
+func (f *ReviewFlow) ReviewedTarget(state string) string {
+	if state == "APPROVED" && f.Approved != "" {
+		return f.Approved
+	}
+	return f.Reviewed
 }
 
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
@@ -433,7 +444,7 @@ func (b *Board) validate() error {
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
-		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Updated, f.Done)
+		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Approved, f.Updated, f.Done)
 	}
 	return nil
 }
@@ -539,6 +550,7 @@ func Default() *Board {
 		ReviewFlow: &ReviewFlow{
 			Started:  "triage",
 			Reviewed: "waiting-on-author",
+			Approved: "done",
 			Updated:  "reviewing",
 			Done:     "done",
 		},

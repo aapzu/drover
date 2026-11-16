@@ -449,10 +449,12 @@ func (e *Engine) login() (string, error) {
 
 // reviewStep records what changed on a PR you review and returns the move it
 // calls for, if any. A review you submit moves the card to reviewFlow.reviewed
-// from any column. New commits after it are logged and notified, and move a
-// card in reviewFlow.reviewed to reviewFlow.updated. A review already on the PR
-// when drover first looks is only recorded, so it moves nothing; a merge or
-// close still moves the card to reviewFlow.done. Called with mu held.
+// from any column, or to reviewFlow.approved when it approves and that is set.
+// New commits after it are logged and notified, and move a card in
+// reviewFlow.reviewed or reviewFlow.approved to reviewFlow.updated. A review
+// already on the PR when drover first looks is only recorded, so it moves
+// nothing; a merge or close still moves the card to reviewFlow.done. Called
+// with mu held.
 func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string, info gh.PR, me string) prMove {
 	pr := card.PR
 	flow := e.board.ReviewFlow
@@ -484,11 +486,11 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 	case info.State != "OPEN":
 	case reviewed:
 		card.AddLog(fmt.Sprintf("You reviewed PR #%d: %s", pr.Number, strings.ToLower(mine.State)))
-		return prMove{to: e.flowColumn(flow.Reviewed)}
+		return prMove{to: e.flowColumn(flow.ReviewedTarget(mine.State))}
 	case info.HeadSHA != prevHead && pr.ReviewedSHA != "":
 		card.AddLog(fmt.Sprintf("New commits on PR #%d since your review", pr.Number))
 		e.notify("#%d: new commits on PR #%d since your review", card.Number, pr.Number)
-		if e.inColumn(card, flow.Reviewed) {
+		if e.inColumn(card, flow.Reviewed) || e.inColumn(card, flow.Approved) {
 			return prMove{to: e.flowColumn(flow.Updated)}
 		}
 	}
