@@ -83,9 +83,10 @@ type externalAttachMsg struct {
 type suspendAllMsg struct{}
 
 type sessionStartedMsg struct {
-	task *store.Task
-	err  error
-	snap engine.Snapshot
+	task   *store.Task
+	err    error
+	snap   engine.Snapshot
+	review bool
 }
 
 type Model struct {
@@ -95,6 +96,8 @@ type Model struct {
 	attached string
 	branch   string
 	snapBusy bool
+
+	startingReview bool
 
 	// busy holds the actions the board started and is waiting on, one per
 	// card, unlike snap.Busy, which holds the engine's own steps. The map is
@@ -273,8 +276,12 @@ func (m Model) mainLaneHidden() bool {
 
 // reviewLaneShown reports whether the review lane is drawn: always while the
 // main lane is hidden, else per the ReviewLane pref, and with none set, while
-// the lane holds cards.
+// the lane holds cards. It is also drawn while ctrl+n starts a review, so the
+// new card shows even when the lane was hidden.
 func (m Model) reviewLaneShown() bool {
+	if m.startingReview {
+		return true
+	}
 	if m.mainLaneHidden() {
 		return true
 	}
@@ -704,6 +711,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suspendAll = true
 		return m, tea.Quit
 	case sessionStartedMsg:
+		if msg.review {
+			m.startingReview = false
+		}
 		m.applySnap(msg.snap)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
@@ -1161,11 +1171,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash(noReviewLane)
 			break
 		}
+		if m.startingReview {
+			m.setFlash("Already starting a review")
+			break
+		}
+		m.startingReview = true
 		m.setFlash("Starting a new review…")
 		eng := m.eng
 		return m, func() tea.Msg {
 			t, err := eng.NewReviewSession()
-			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot(), review: true}
 		}
 	case "e":
 		if t != nil {
