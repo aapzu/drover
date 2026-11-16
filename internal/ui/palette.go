@@ -51,7 +51,7 @@ var paletteCommands = []paletteCommand{
 	{"Task details and activity log", "i"},
 	{"Usage and cost", "$"},
 	{"Timeline of the runs agents have scheduled", scheduleKey},
-	{"Import agents, sessions or Linear issues", "I"},
+	{"Import agents, sessions, Linear issues or PRs to review", "I"},
 	{"Toggle live preview", "p"},
 	{"Taller preview", "+"},
 	{"Shorter preview", "-"},

@@ -44,6 +44,7 @@ const (
 	modeConfig
 	modeColumns
 	modeSchedules
+	modeReviewLevel
 )
 
 type tickMsg time.Time
@@ -176,6 +177,8 @@ type Model struct {
 
 	confirmText   string
 	confirmAction func() tea.Cmd
+
+	level reviewLevelState
 
 	suspendAll bool
 
@@ -655,7 +658,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copiedMsg:
 		m.setFlash(msg.flash())
 		return m, nil
-	case sessionsLoadedMsg, issuesLoadedMsg:
+	case sessionsLoadedMsg, issuesLoadedMsg, reviewsLoadedMsg:
 		return m.updateImportLoaded(msg), nil
 	case assistantStartedMsg:
 		cmd := m.finishAssistantStart(msg)
@@ -782,6 +785,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateMove(msg)
 		case modeConfirm:
 			return m.updateConfirm(msg)
+		case modeReviewLevel:
+			return m.updateReviewLevel(msg)
 		case modeDetail, modeUsage:
 			return m.updateDetail(msg)
 		case modeConfig:
@@ -1038,8 +1043,15 @@ func attachExternal(cmd *exec.Cmd) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 }
 
-func (m Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
-	return moveTo(m.eng, m.busy, t.ID, t.Number, target)
+// moveCmd moves t to target, first asking for the review level when the move
+// starts an imported review.
+func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
+	eng, busy, id, number := m.eng, m.busy, t.ID, t.Number
+	move := func() tea.Cmd { return moveTo(eng, busy, id, number, target) }
+	if target.IsAgent() && m.askReviewLevel(t, move) {
+		return nil
+	}
+	return move()
 }
 
 // moveTo shows the card in the target column straight away while the engine
@@ -1235,10 +1247,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if !ok {
-			id := t.ID
-			return m, runOp(m.eng, m.busy, id, op{label: "starting agent"}, func() actionDoneMsg {
-				return actionDoneMsg{err: m.eng.Start(id), attach: true}
-			})
+			id, eng, busy := t.ID, m.eng, m.busy
+			start := func() tea.Cmd {
+				return runOp(eng, busy, id, op{label: "starting agent"}, func() actionDoneMsg {
+					return actionDoneMsg{err: eng.Start(id), attach: true}
+				})
+			}
+			if m.startsAgent(t) && m.askReviewLevel(t, start) {
+				return m, nil
+			}
+			return m, start()
 		}
 		return m, cmd
 	case "s":
@@ -1257,7 +1275,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if t != nil {
 			id := t.ID
-			return m, m.action(id, "starting agent", func() error { return m.eng.Start(id) })
+			start := func() tea.Cmd { return m.action(id, "starting agent", func() error { return m.eng.Start(id) }) }
+			if m.startsAgent(t) && m.askReviewLevel(t, start) {
+				return m, nil
+			}
+			return m, start()
 		}
 	case "/":
 		m.mode = modeFilter

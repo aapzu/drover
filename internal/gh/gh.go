@@ -99,6 +99,52 @@ func View(dir, url string) (PR, error) {
 	return pr, err
 }
 
+// Found is a pull request a search returned.
+type Found struct {
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	URL     string `json:"url"`
+	Author  Author `json:"author"`
+	IsDraft bool   `json:"isDraft"`
+}
+
+// searchLimit is the most pull requests one search returns.
+const searchLimit = 100
+
+// Search lists the open pull requests in repos (owner/name) that match
+// filter, gh search prs flags or search qualifiers such as
+// user-review-requested:@me.
+func Search(dir string, repos []string, filter ...string) ([]Found, error) {
+	if len(repos) == 0 {
+		return nil, errors.New("gh search prs: no repository to search")
+	}
+	args := append([]string{"search", "prs"}, filter...)
+	for _, r := range repos {
+		args = append(args, "--repo", r)
+	}
+	args = append(args, "--state", "open", "--limit", strconv.Itoa(searchLimit), "--json", "number,title,url,author,isDraft")
+	out, err := run(dir, "gh search prs", args...)
+	if err != nil {
+		return nil, err
+	}
+	var found []Found
+	err = json.Unmarshal(out, &found)
+	return found, err
+}
+
+// Repo is the owner/name of the GitHub repository dir belongs to.
+func Repo(dir string) (string, error) {
+	out, err := run(dir, "gh repo view", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", errors.New("gh repo view: no repository")
+	}
+	return name, nil
+}
+
 // Me is the login the GitHub CLI is signed in as.
 func Me(dir string) (string, error) {
 	out, err := run(dir, "gh api user", "api", "user", "--jq", ".login")
@@ -138,6 +184,9 @@ func InMergeQueue(dir, url string) (bool, error) {
 		return false, fmt.Errorf("gh api graphql: unexpected isInMergeQueue %q", got)
 	}
 }
+
+// IsURL reports whether url is a pull request URL.
+func IsURL(url string) bool { return prURL.MatchString(url) }
 
 // Number returns the PR number at the end of a pull request URL.
 func Number(url string) int {

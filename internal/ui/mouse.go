@@ -164,7 +164,8 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			target := m.columns()[h.col]
 			m.col = h.col
 			m.selected[target.ID] = t.ID
-			return m, m.moveCmd(t, target)
+			cmd := m.moveCmd(t, target)
+			return m, cmd
 		case dragColumn, dragPreview, dragLane, dragAssistant:
 			m.savePrefs()
 		case dragSelect:

@@ -42,6 +42,8 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
+	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
 	AssistantPlugins      []string      `json:"assistantPlugins,omitempty"`
 	AssistantTools        []string      `json:"assistantTools,omitempty"`
 	Columns               []Column      `json:"columns"`
@@ -64,17 +66,19 @@ func DefaultNotifications() Notifications {
 	return Notifications{TurnDone: true, NeedsYou: true, PlanReady: true, Exited: true, CooldownSeconds: 10}
 }
 
-// ReviewFlow moves the cards of pull requests you review. Started is where a
-// card goes once the agent's first review turn ends, Reviewed once you have
-// submitted a review (Approved instead when it approves the PR), Updated when
-// the author pushes after it, and Done when the PR merges or closes. Targets
-// are column ids or names; an empty one leaves cards where they are.
+// ReviewFlow moves the cards of pull requests you review. Requested is where
+// an imported PR awaiting your review lands, Started is where a card goes once
+// the agent's first review turn ends, Reviewed once you have submitted a
+// review (Approved instead when it approves the PR), Updated when the author
+// pushes after it, and Done when the PR merges or closes. Targets are column
+// ids or names; an empty one leaves cards where they are.
 type ReviewFlow struct {
-	Started  string `json:"started,omitempty"`
-	Reviewed string `json:"reviewed,omitempty"`
-	Approved string `json:"approved,omitempty"`
-	Updated  string `json:"updated,omitempty"`
-	Done     string `json:"done,omitempty"`
+	Requested string `json:"requested,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Reviewed  string `json:"reviewed,omitempty"`
+	Approved  string `json:"approved,omitempty"`
+	Updated   string `json:"updated,omitempty"`
+	Done      string `json:"done,omitempty"`
 }
 
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
@@ -297,6 +301,8 @@ func (b *Board) applyLocal(root string) error {
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
 		DisableMouse       *bool           `json:"disableMouse"`
+		TeamReviewRequests *bool           `json:"teamReviewRequests"`
+		ReviewRepos        []string        `json:"reviewRepos"`
 		AssistantPlugins   []string        `json:"assistantPlugins"`
 		AssistantTools     []string        `json:"assistantTools"`
 		Notifications      json.RawMessage `json:"notifications"`
@@ -325,6 +331,12 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.DisableMouse != nil {
 		b.DisableMouse = *local.DisableMouse
+	}
+	if local.TeamReviewRequests != nil {
+		b.TeamReviewRequests = *local.TeamReviewRequests
+	}
+	if local.ReviewRepos != nil {
+		b.ReviewRepos = local.ReviewRepos
 	}
 	if local.AssistantPlugins != nil {
 		b.AssistantPlugins = local.AssistantPlugins
@@ -421,6 +433,11 @@ func (b *Board) validate() error {
 			return fmt.Errorf("%s or %s: assistantPlugins must not hold an empty id", FileName, LocalFileName)
 		}
 	}
+	for _, r := range b.ReviewRepos {
+		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("%s or %s: reviewRepos entry %q must be owner/name", FileName, LocalFileName, r)
+		}
+	}
 	for _, t := range b.AssistantTools {
 		if !strings.HasPrefix(t, "mcp__") || len(t) == len("mcp__") {
 			return fmt.Errorf("%s or %s: assistantTools entry %q must be an MCP tool pattern starting with mcp__", FileName, LocalFileName, t)
@@ -457,7 +474,7 @@ func (b *Board) validate() error {
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
-		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Approved, f.Updated, f.Done)
+		return b.checkColumns("reviewFlow", f.Requested, f.Started, f.Reviewed, f.Approved, f.Updated, f.Done)
 	}
 	return nil
 }
@@ -553,6 +570,28 @@ func (b *Board) ReviewEntry() (Column, bool) {
 	return Column{}, false
 }
 
+// ReviewImport is where an imported PR to review lands: the reviewFlow's
+// reviewed column once you have reviewed it, else its requested column.
+// Without that column it is the review lane's first column without an agent,
+// else the first column.
+func (b *Board) ReviewImport(reviewed bool) Column {
+	if f := b.ReviewFlow; f != nil {
+		ref := f.Requested
+		if reviewed {
+			ref = f.Reviewed
+		}
+		if c, ok := b.Find(ref); ok && ref != "" {
+			return c
+		}
+	}
+	for _, c := range b.Columns {
+		if c.InReviewLane() && !c.IsAgent() && !c.IsDone() {
+			return c
+		}
+	}
+	return b.FirstColumn()
+}
+
 // DoneColumn is the first column with the done role, or the zero Column.
 func (b *Board) DoneColumn() Column {
 	for _, c := range b.Columns {
@@ -576,18 +615,20 @@ func Default() *Board {
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+			{ID: "review-requested", Name: "Review requested", Lane: LaneReview, Color: "#a855f7"},
 			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
-				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRREVIEWEDSHA"`}}}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
 			{ID: "review-done", Name: "Done", Role: "done", Lane: LaneReview, Color: "#10b981"},
 		},
 		ReviewFlow: &ReviewFlow{
-			Started:  "triage",
-			Reviewed: "waiting-on-author",
-			Approved: "review-done",
-			Updated:  "reviewing",
-			Done:     "review-done",
+			Requested: "review-requested",
+			Started:   "triage",
+			Reviewed:  "waiting-on-author",
+			Approved:  "review-done",
+			Updated:   "reviewing",
+			Done:      "review-done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",
