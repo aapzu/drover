@@ -1244,7 +1244,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.GotoTop()
 		}
 	case scheduleKey:
-		m.mode = modeSchedules
+		m.openSchedules()
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd

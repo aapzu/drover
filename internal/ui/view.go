@@ -851,7 +851,7 @@ func (m Model) renderDetail(t *store.Task) string {
 			fmt.Fprintf(&b, "  %s  %s/%s  %s  tmux:%s\n", key, s.Status, s.Activity, dim.Render(s.AgentSessionID), s.Tmux)
 		}
 	}
-	if runs := m.scheduleRowFor(t); len(runs) > 0 {
+	if runs := m.runsOf(t); len(runs) > 0 {
 		fmt.Fprintf(&b, "\n%s\n", muted.Render("Schedules"))
 		for _, sc := range runs {
 			fmt.Fprintf(&b, "  %s\n", m.scheduleLine(sc, m.width-10))

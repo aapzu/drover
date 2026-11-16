@@ -1568,6 +1568,8 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	s.Cwd = worktree
+	// The new process starts without the runs the old one had scheduled.
+	s.ClearSchedules()
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),

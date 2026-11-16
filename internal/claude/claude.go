@@ -215,28 +215,32 @@ func waitPlanGate(path string, every, timeout time.Duration) {
 }
 
 type Event struct {
-	Name                 string `json:"hook_event_name"`
-	SessionID            string `json:"session_id"`
-	Source               string `json:"source"`
-	ToolName             string `json:"tool_name"`
-	ToolUseID            string `json:"tool_use_id"`
-	NotificationType     string `json:"notification_type"`
-	Message              string `json:"message"`
-	Prompt               string `json:"prompt"`
-	TranscriptPath       string `json:"transcript_path"`
-	LastAssistantMessage string `json:"last_assistant_message"`
-	PermissionMode       string `json:"permission_mode"`
-	Error                string `json:"error"`
-	ToolInput            struct {
-		Command      string `json:"command"`
-		ID           string `json:"id"`
-		Cron         string `json:"cron"`
-		DelaySeconds int    `json:"delaySeconds"`
-		Prompt       string `json:"prompt"`
-		Reason       string `json:"reason"`
-	} `json:"tool_input"`
-	ToolResponse    json.RawMessage  `json:"tool_response"`
-	BackgroundTasks []BackgroundTask `json:"background_tasks"`
+	Name                 string           `json:"hook_event_name"`
+	SessionID            string           `json:"session_id"`
+	Source               string           `json:"source"`
+	ToolName             string           `json:"tool_name"`
+	ToolUseID            string           `json:"tool_use_id"`
+	NotificationType     string           `json:"notification_type"`
+	Message              string           `json:"message"`
+	Prompt               string           `json:"prompt"`
+	TranscriptPath       string           `json:"transcript_path"`
+	LastAssistantMessage string           `json:"last_assistant_message"`
+	PermissionMode       string           `json:"permission_mode"`
+	Error                string           `json:"error"`
+	ToolInput            json.RawMessage  `json:"tool_input"`
+	ToolResponse         json.RawMessage  `json:"tool_response"`
+	BackgroundTasks      []BackgroundTask `json:"background_tasks"`
+}
+
+// Command returns the shell command of a Bash call. Tool inputs stay raw so
+// that a field of an unrelated tool, which has any type, can't make ReadEvents
+// drop the event.
+func (e Event) Command() string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	json.Unmarshal(e.ToolInput, &in)
+	return in.Command
 }
 
 // BackgroundTask is an agent or shell Claude Code lists in a Stop payload.
@@ -358,7 +362,7 @@ func (e Event) BackgroundAgent() (string, bool) {
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
 // looked at never count as its own.
 func (e Event) CreatedPRs() []string {
-	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.ToolInput.Command) {
+	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.Command()) {
 		return nil
 	}
 	var urls []string

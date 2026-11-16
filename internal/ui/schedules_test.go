@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -78,9 +79,29 @@ func TestPollingCardShowsItsNextRun(t *testing.T) {
 
 func TestHeaderCountsPollingAgentsApart(t *testing.T) {
 	m := pollingModel()
+	m.snap.Tasks[2].Sessions = map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true}}
 	got := ansi.Strip(m.renderHeader())
-	if !strings.Contains(got, "⏲ 2 polling") || strings.Contains(got, "idle") {
+	if !strings.Contains(got, "⏲ 2 polling") || !strings.Contains(got, "● 1 idle") {
 		t.Errorf("header = %q", got)
+	}
+}
+
+func TestPollingCardStatusPrecedence(t *testing.T) {
+	m := pollingModel()
+	s := m.snap.Tasks[0].Sessions[store.MainSession]
+	s.Background = []string{"b1"}
+	if got := ansi.Strip(m.status(m.snap.Tasks[0])); !strings.Contains(got, "background tasks") {
+		t.Errorf("polling with background tasks shows %q", got)
+	}
+	s.Background = nil
+	s.Pending = []store.Pending{{Text: "x"}}
+	if got := ansi.Strip(m.status(m.snap.Tasks[0])); got != "⏲ in 4m12s +1 +1 queued" {
+		t.Errorf("polling with a queued message shows %q", got)
+	}
+	s.Pending = nil
+	s.Schedules = []store.Schedule{{ID: "w", Wakeup: true, NextAt: scheduleNow.Add(-time.Minute)}}
+	if got := ansi.Strip(m.status(m.snap.Tasks[0])); got != "⏲ due" {
+		t.Errorf("an overdue run shows %q", got)
 	}
 }
 
@@ -122,6 +143,73 @@ func TestScheduleTimeline(t *testing.T) {
 	}
 }
 
+// axisColumn finds where mark sits on the timeline row of the card numbered
+// number, counted from the start of the axis, or -1.
+func axisColumn(t *testing.T, m Model, number int, mark string) int {
+	t.Helper()
+	axisStart := min(28, (m.width-6)/3) + 1
+	for _, line := range strings.Split(ansi.Strip(m.renderSchedules(m.width-6, 30)), "\n") {
+		if !strings.Contains(line, fmt.Sprintf("#%d task", number)) {
+			continue
+		}
+		for i, r := range []rune(line) {
+			if i >= axisStart && string(r) == mark {
+				return i - axisStart
+			}
+		}
+	}
+	return -1
+}
+
+func TestScheduleTimelinePlacesMarks(t *testing.T) {
+	m := pollingModel()
+	m.snap.Tasks[0].Sessions[store.MainSession].Schedules = []store.Schedule{
+		{ID: "w", Wakeup: true, NextAt: scheduleNow.Add(30 * time.Minute)},
+	}
+	half := axisColumn(t, m, 1, "◇")
+	m.snap.Tasks[0].Sessions[store.MainSession].Schedules[0].NextAt = scheduleNow.Add(15 * time.Minute)
+	quarter := axisColumn(t, m, 1, "◇")
+	m.snap.Tasks[0].Sessions[store.MainSession].Schedules[0].NextAt = scheduleNow.Add(-time.Minute)
+	overdue := axisColumn(t, m, 1, "◇")
+	if !(overdue < quarter && quarter < half) {
+		t.Errorf("marks at now, +15m, +30m are at columns %d, %d, %d; want them in that order", overdue, quarter, half)
+	}
+	if overdue > 2 {
+		t.Errorf("an overdue run is at column %d, want the start of the axis", overdue)
+	}
+
+	m.snap.Tasks[0].Sessions[store.MainSession].Schedules[0].NextAt = scheduleNow.Add(2 * time.Hour)
+	if got := axisColumn(t, m, 1, "◇"); got != -1 {
+		t.Errorf("a run in 2h is at column %d of the 1h window", got)
+	}
+	m.scheduleWindow = 1
+	if got := axisColumn(t, m, 1, "◇"); got == -1 {
+		t.Error("a run in 2h is missing from the 6h window")
+	}
+}
+
+func TestScheduleTimelineStaysWithinItsHeight(t *testing.T) {
+	m := testModel(120, 30, 1, 14)
+	m.snap.At = scheduleNow
+	for i, task := range m.snap.Tasks {
+		s := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true}
+		for j := range 4 {
+			s.Schedules = append(s.Schedules, store.Schedule{ID: fmt.Sprintf("%d-%d", i, j), Wakeup: true, NextAt: scheduleNow.Add(time.Duration(i+j+1) * time.Minute)})
+		}
+		task.Sessions = map[string]*store.Session{store.MainSession: s}
+	}
+	for _, sel := range []int{0, 7, 13} {
+		m.scheduleSel = sel
+		out := ansi.Strip(m.renderSchedules(m.width-6, 20))
+		if n := strings.Count(out, "\n") + 1; n > 20 {
+			t.Errorf("selected %d: timeline is %d lines, room is 20", sel, n)
+		}
+		if !strings.Contains(out, fmt.Sprintf("▸ #%d task", sel+1)) {
+			t.Errorf("selected %d: the selected row is not shown:\n%s", sel, out)
+		}
+	}
+}
+
 func TestScheduleTimelineWithoutSchedules(t *testing.T) {
 	m := testModel(120, 30, 1, 1)
 	got := ansi.Strip(m.renderSchedules(100, 20))
@@ -139,6 +227,11 @@ func TestScheduleTimelineKeys(t *testing.T) {
 	if got := ansi.Strip(m.View()); !strings.Contains(got, "Schedules") || !strings.Contains(got, "enter go to card") {
 		t.Errorf("view doesn't show the timeline and its keys:\n%s", got)
 	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyUp})
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyLeft})
+	if m.scheduleSel != 0 || m.scheduleWindow != 0 {
+		t.Errorf("selection %d window %d went below the start", m.scheduleSel, m.scheduleWindow)
+	}
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyDown})
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyRight})
 	if m.scheduleSel != 1 || m.scheduleWindow != 1 {
@@ -153,6 +246,14 @@ func TestScheduleTimelineKeys(t *testing.T) {
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.mode != modeBoard || m.current() == nil || m.current().ID != m.snap.Tasks[1].ID {
 		t.Errorf("enter left mode %v on %v, want the board on the second card", m.mode, m.current())
+	}
+	// A polling agent that stops while you look moves the selection to the last row.
+	m, _ = update(m, key(scheduleKey))
+	m.scheduleSel = 1
+	m.snap.Tasks[1].Sessions[store.MainSession].Schedules = nil
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != modeBoard || m.current().ID != m.snap.Tasks[0].ID {
+		t.Errorf("enter after the rows shrank left mode %v on %v, want the board on the first card", m.mode, m.current())
 	}
 	m, _ = update(m, key(scheduleKey))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})

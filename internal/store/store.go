@@ -103,10 +103,8 @@ type Session struct {
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
 	Pending            []Pending `json:"pending,omitempty"`
-	// Schedules are the runs the agent set up for itself, soonest first.
-	Schedules []Schedule `json:"schedules,omitempty"`
-	LastReply string     `json:"lastReply,omitempty"`
-	Summary   string     `json:"summary,omitempty"`
+	LastReply          string    `json:"lastReply,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
 	// Imported sessions came from outside the board; PID and TranscriptPath
 	// track them while they run in another terminal.
 	Imported  bool `json:"imported,omitempty"`
@@ -122,6 +120,10 @@ type Session struct {
 	UsageScanPath  string       `json:"usageScanPath,omitempty"`
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
+
+	// Schedules are the runs the agent set up for itself, in no order. They end
+	// with the agent's process.
+	Schedules []Schedule `json:"schedules,omitempty"`
 }
 
 // HasBackground reports whether the session's background tasks are still running.
