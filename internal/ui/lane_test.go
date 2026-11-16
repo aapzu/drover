@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/engine"
@@ -257,5 +258,33 @@ func TestReviewLaneIgnoresArchivedAndHiddenCards(t *testing.T) {
 	m.prefs.ShowHidden = true
 	if !m.reviewLaneShown() {
 		t.Error("B didn't bring the lane back")
+	}
+}
+
+func TestNewReviewKeyNeedsAReviewLane(t *testing.T) {
+	m := testModel(120, 40, 2, 1)
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if !strings.Contains(m.flash, "No review lane") || cmd != nil {
+		t.Errorf("flash = %q, cmd nil = %v", m.flash, cmd == nil)
+	}
+}
+
+func TestNewReviewKeyStartsAReview(t *testing.T) {
+	m := laneModel(t)
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.flash != "Starting a new review…" || cmd == nil {
+		t.Errorf("flash = %q, cmd nil = %v", m.flash, cmd == nil)
+	}
+}
+
+func TestStartingAReviewShowsAHiddenLane(t *testing.T) {
+	m := laneModel(t)
+	m.prefs.ReviewLane = ptr(false)
+	card := &store.Task{ID: "new", Number: 3, ColumnID: "c3"}
+	m.snap.Tasks = append(m.snap.Tasks, card)
+	snap := m.snap
+	m, _ = update(m, sessionStartedMsg{task: card, snap: snap})
+	if !m.reviewLaneShown() || m.col != 3 {
+		t.Errorf("lane shown = %v, col = %d; want the lane shown with its card selected", m.reviewLaneShown(), m.col)
 	}
 }

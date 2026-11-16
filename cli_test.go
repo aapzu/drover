@@ -358,7 +358,7 @@ func openBoard(t *testing.T, root string, reply func(inbox.Request) inbox.Result
 }
 
 func TestCommandsSendTheRequestAndConfirm(t *testing.T) {
-	title, prompt := "Fix it", "now"
+	title, prompt, reviewTitle := "Fix it", "now", "Review it"
 	for name, tc := range map[string]struct {
 		cmd   func(root string, args []string) error
 		args  []string
@@ -370,6 +370,7 @@ func TestCommandsSendTheRequestAndConfirm(t *testing.T) {
 		"add":              {cmdAdd, []string{"Fix it", "-p", "now", "-c", "executing"}, "", inbox.Result{Number: 3, Title: "Fix it", Column: "Executing"}, inbox.Request{Op: inbox.OpAdd, Title: &title, Prompt: &prompt, Column: "executing"}, "Added #3 Fix it (Executing)\n"},
 		"add from stdin":   {cmdAdd, []string{"Fix it", "--prompt", "-"}, "now", inbox.Result{Number: 3, Title: "Fix it", Column: "Planning"}, inbox.Request{Op: inbox.OpAdd, Title: &title, Prompt: &prompt}, "Added #3 Fix it (Planning)\n"},
 		"add linear":       {cmdAdd, []string{"--linear", "DX-9", "-c", "planning"}, "", inbox.Result{Number: 3, Title: "From Linear", Column: "Planning"}, inbox.Request{Op: inbox.OpAdd, Linear: "DX-9", Column: "planning"}, "Added #3 From Linear (Planning)\n"},
+		"add to review":    {cmdAdd, []string{"Review it", "--review"}, "", inbox.Result{Number: 3, Title: "Review it", Column: "Triage findings"}, inbox.Request{Op: inbox.OpAdd, Title: &reviewTitle, Column: "triage"}, "Added #3 Review it (Triage findings)\n"},
 		"move":             {cmdMove, []string{"#1", "In review"}, "", inbox.Result{Number: 1, Column: "In review"}, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, "Moved #1 to In review\n"},
 		"edit title":       {cmdEdit, []string{"1", "--title", "Fix it"}, "", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Title: &title}, "Updated #1\n"},
 		"edit from stdin":  {cmdEdit, []string{"1", "--prompt", "-"}, "now", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Prompt: &prompt}, "Updated #1\n"},
@@ -399,25 +400,26 @@ func TestCommandsRejectBadInputBeforeSending(t *testing.T) {
 		stdin string
 		want  string
 	}{
-		"add without a title":      {cmdAdd, nil, "", "usage: drover add"},
-		"add with a blank title":   {cmdAdd, []string{"  "}, "", "usage: drover add"},
-		"add with two titles":      {cmdAdd, []string{"a", "b"}, "", "usage: drover add"},
-		"add linear with a title":  {cmdAdd, []string{"--linear", "DX-1", "Fix"}, "", "takes the title and prompt from the issue"},
-		"add linear with a prompt": {cmdAdd, []string{"--linear", "DX-1", "-p", "x"}, "", "takes the title and prompt from the issue"},
-		"add with an empty stdin":  {cmdAdd, []string{"Fix", "-p", "-"}, "", "stdin is empty"},
-		"add with an unknown flag": {cmdAdd, []string{"Fix", "--nope"}, "", "flag provided but not defined"},
-		"add to an unknown column": {cmdAdd, []string{"Fix", "-c", "nowhere"}, "", `unknown column "nowhere"`},
-		"move with one argument":   {cmdMove, []string{"1"}, "", "usage: drover move"},
-		"move a bad number":        {cmdMove, []string{"x", "done"}, "", `"x" is not a card number`},
-		"move an unknown card":     {cmdMove, []string{"9", "done"}, "", "no card #9"},
-		"edit without a number":    {cmdEdit, []string{"--title", "x"}, "", "usage: drover edit"},
-		"edit a bad number":        {cmdEdit, []string{"0", "--title", "x"}, "", `"0" is not a card number`},
-		"edit nothing":             {cmdEdit, []string{"1"}, "", "nothing to change"},
-		"edit to a blank title":    {cmdEdit, []string{"1", "--title", " "}, "", "a card needs a title"},
-		"edit with an empty stdin": {cmdEdit, []string{"1", "--prompt", "-"}, "", "stdin is empty"},
-		"remove without a number":  {cmdRemove, nil, "", "usage: drover rm"},
-		"remove a bad number":      {cmdRemove, []string{"x"}, "", `"x" is not a card number`},
-		"remove an unknown card":   {cmdRemove, []string{"9"}, "", "no card #9"},
+		"add without a title":        {cmdAdd, nil, "", "usage: drover add"},
+		"add with a blank title":     {cmdAdd, []string{"  "}, "", "usage: drover add"},
+		"add with two titles":        {cmdAdd, []string{"a", "b"}, "", "usage: drover add"},
+		"add linear with a title":    {cmdAdd, []string{"--linear", "DX-1", "Fix"}, "", "takes the title and prompt from the issue"},
+		"add linear with a prompt":   {cmdAdd, []string{"--linear", "DX-1", "-p", "x"}, "", "takes the title and prompt from the issue"},
+		"add with an empty stdin":    {cmdAdd, []string{"Fix", "-p", "-"}, "", "stdin is empty"},
+		"add with an unknown flag":   {cmdAdd, []string{"Fix", "--nope"}, "", "flag provided but not defined"},
+		"add to an unknown column":   {cmdAdd, []string{"Fix", "-c", "nowhere"}, "", `unknown column "nowhere"`},
+		"add to review and a column": {cmdAdd, []string{"Fix", "--review", "-c", "done"}, "", "both pick the column"},
+		"move with one argument":     {cmdMove, []string{"1"}, "", "usage: drover move"},
+		"move a bad number":          {cmdMove, []string{"x", "done"}, "", `"x" is not a card number`},
+		"move an unknown card":       {cmdMove, []string{"9", "done"}, "", "no card #9"},
+		"edit without a number":      {cmdEdit, []string{"--title", "x"}, "", "usage: drover edit"},
+		"edit a bad number":          {cmdEdit, []string{"0", "--title", "x"}, "", `"0" is not a card number`},
+		"edit nothing":               {cmdEdit, []string{"1"}, "", "nothing to change"},
+		"edit to a blank title":      {cmdEdit, []string{"1", "--title", " "}, "", "a card needs a title"},
+		"edit with an empty stdin":   {cmdEdit, []string{"1", "--prompt", "-"}, "", "stdin is empty"},
+		"remove without a number":    {cmdRemove, nil, "", "usage: drover rm"},
+		"remove a bad number":        {cmdRemove, []string{"x"}, "", `"x" is not a card number`},
+		"remove an unknown card":     {cmdRemove, []string{"9"}, "", "no card #9"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := project(t)
@@ -566,5 +568,20 @@ func TestErrorLine(t *testing.T) {
 		if got := errorLine(tc.in); got != tc.want {
 			t.Errorf("%s: errorLine = %q, want %q", name, got, tc.want)
 		}
+	}
+}
+
+func TestAddReviewNeedsAReviewLane(t *testing.T) {
+	root := project(t)
+	board := `{"columns":[{"id":"inbox","name":"Inbox"},{"id":"done","name":"Done","role":"done"}]}`
+	if err := os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := cmdAdd(root, []string{"Fix", "--review"})
+	if err == nil || !strings.Contains(err.Error(), "no review lane") {
+		t.Errorf("err = %v, want no review lane", err)
+	}
+	if _, ok, _ := inbox.Next(root); ok {
+		t.Error("a rejected command should not queue a request")
 	}
 }

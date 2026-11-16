@@ -701,3 +701,34 @@ func TestDoneColumn(t *testing.T) {
 		t.Errorf("DoneColumn without a done column = %q, want none", got)
 	}
 }
+
+func TestReviewEntry(t *testing.T) {
+	load := func(board string) *Board {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(board), 0o644)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	const columns = `"columns":[{"id":"first","name":"First"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review"},
+	  {"id":"triage","name":"Triage","lane":"review"}]`
+	cases := []struct {
+		name, board, want string
+	}{
+		{"started in the lane", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "triage"},
+		{"started outside the lane", `{` + columns + `,"reviewFlow":{"started":"first"}}`, "reviewing"},
+		{"no reviewFlow", `{` + columns + `}`, "reviewing"},
+	}
+	for _, c := range cases {
+		got, ok := load(c.board).ReviewEntry()
+		if !ok || got.ID != c.want {
+			t.Errorf("%s: ReviewEntry = %q, %v; want %q", c.name, got.ID, ok, c.want)
+		}
+	}
+	if _, ok := load(`{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done"}]}`).ReviewEntry(); ok {
+		t.Error("a board without a review lane has an entry column")
+	}
+}

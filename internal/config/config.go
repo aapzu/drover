@@ -508,6 +508,27 @@ func (b *Board) PermissionMode(c Column) string {
 // FirstColumn is where new and imported cards land.
 func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
+// ErrNoReviewLane is what starting a review on a board without a review lane
+// reports.
+var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in drover.json`)
+
+// ReviewEntry is where a card you review starts: the reviewFlow's started
+// column when it is in the review lane, else the lane's first column. It
+// reports false when the board has no review lane.
+func (b *Board) ReviewEntry() (Column, bool) {
+	if b.ReviewFlow != nil {
+		if c, ok := b.Find(b.ReviewFlow.Started); ok && c.InReviewLane() {
+			return c, true
+		}
+	}
+	for _, c := range b.Columns {
+		if c.InReviewLane() {
+			return c, true
+		}
+	}
+	return Column{}, false
+}
+
 // DoneColumn is the first column with the done role, or the zero Column.
 func (b *Board) DoneColumn() Column {
 	for _, c := range b.Columns {
