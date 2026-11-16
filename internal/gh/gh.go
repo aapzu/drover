@@ -22,8 +22,9 @@ type PR struct {
 	MergeCommit    *struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
-	Author        Author   `json:"author"`
-	LatestReviews []Review `json:"latestReviews"`
+	Author         Author   `json:"author"`
+	LatestReviews  []Review `json:"latestReviews"`
+	ReviewRequests []Author `json:"reviewRequests"`
 }
 
 type Author struct {
@@ -48,6 +49,17 @@ func (p PR) ReviewedBy(login string) Review {
 		}
 	}
 	return newest
+}
+
+// RequestedFrom reports whether login's review is requested on the PR. Team
+// requests carry no login and never match.
+func (p PR) RequestedFrom(login string) bool {
+	for _, r := range p.ReviewRequests {
+		if r.Login != "" && strings.EqualFold(r.Login, login) {
+			return true
+		}
+	}
+	return false
 }
 
 // ChangesRequestedAt is when the newest review requesting changes came in.
@@ -90,7 +102,7 @@ func run(dir, what string, args ...string) ([]byte, error) {
 
 // View fetches a pull request's title, branches, state and reviews.
 func View(dir, url string) (PR, error) {
-	out, err := run(dir, "gh pr view", "pr", "view", url, "--json", "title,headRefName,state,reviewDecision,headRefOid,mergeCommit,latestReviews,author")
+	out, err := run(dir, "gh pr view", "pr", "view", url, "--json", "title,headRefName,state,reviewDecision,headRefOid,mergeCommit,latestReviews,reviewRequests,author")
 	if err != nil {
 		return PR{}, err
 	}

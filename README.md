@@ -520,15 +520,17 @@ same column targets as `prFlow`:
 
 - **requested:** where an [imported](#importing-prs-to-review) PR awaiting
   your review lands. Without it, imports land in the lane's first column
-  without an agent, else in the first column.
+  without an agent, else in the first column. A card in `reviewed` or
+  `approved` also comes back here when your review is requested again.
 - **started:** where the card goes once the agent's turn ends and gh has
   confirmed the PR isn't yours, from an agent column.
 - **reviewed:** where it goes, from any column, when a review of yours shows up
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
 - **approved:** where it goes instead of `reviewed` when your review approves
-  the PR. A card in a Done column is no longer refreshed, so later pushes by
-  the author aren't followed.
+  the PR. A review card in a Done column is still refreshed while its PR is
+  open and you have reviewed it, so a push or a new request brings it back,
+  until it is archived.
 - **updated:** you get a notice when the author pushes after your review. A
   card in `reviewed` or `approved` also moves here.
 - **done:** where it goes once the PR merges or closes. A PR that was already

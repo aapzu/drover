@@ -199,3 +199,14 @@ func TestIsURL(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestedFrom(t *testing.T) {
+	fakeGh(t, `echo '{"state":"OPEN","reviewRequests":[{"__typename":"Team","name":"Infra","slug":"infra"},{"__typename":"User","login":"Me"}]}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pr.RequestedFrom("me") || pr.RequestedFrom("them") || pr.RequestedFrom("") {
+		t.Errorf("RequestedFrom with requests %+v", pr.ReviewRequests)
+	}
+}

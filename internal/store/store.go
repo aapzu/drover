@@ -170,7 +170,9 @@ type PR struct {
 	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
 	// ReviewedSHA is the commit your latest review was on.
 	ReviewedSHA string `json:"reviewedSha,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// ReviewRequested is whether your review was requested at the last check.
+	ReviewRequested bool   `json:"reviewRequested,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // IsReview reports whether p is a PR you review, and is safe on nil.

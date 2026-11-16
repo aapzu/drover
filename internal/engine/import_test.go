@@ -695,3 +695,68 @@ func TestSetReviewLevel(t *testing.T) {
 		}
 	}
 }
+
+func TestApprovedReviewInDoneComesBack(t *testing.T) {
+	e := bareEngine(t)
+	at, _ := time.Parse(time.RFC3339, "2026-10-19T10:00:00Z")
+	approved := gh.PR{State: "OPEN", HeadSHA: "aaa", LatestReviews: []gh.Review{{Author: gh.Author{Login: "me"}, State: "APPROVED", SubmittedAt: at}}}
+	e.ImportReviews([]ReviewPR{{Found: gh.Found{Number: 7, URL: "https://github.com/o/r/pull/7"}}})
+	card := e.state.Tasks[0]
+	step := func(info gh.PR) string {
+		prev, prevHead := card.PR.State, card.PR.HeadSHA
+		card.PR.State, card.PR.HeadSHA = info.State, info.HeadSHA
+		to := e.reviewStep(card, card, prev, prevHead, info, "me").to.ID
+		if to != "" {
+			card.ColumnID = to
+		}
+		return to
+	}
+
+	asked := gh.PR{State: "OPEN", HeadSHA: "aaa", ReviewRequests: []gh.Author{{Login: "me"}}}
+	if to := step(asked); to != "" || !card.PR.ReviewRequested {
+		t.Fatalf("first check: moved to %q, requested %v", to, card.PR.ReviewRequested)
+	}
+	if to := step(approved); to != "review-done" || !reviewedOpen(card) {
+		t.Fatalf("approving moved the card to %q, tracked %v", to, reviewedOpen(card))
+	}
+
+	reasked := approved
+	reasked.ReviewRequests = asked.ReviewRequests
+	if to := step(reasked); to != "review-requested" || !hasLog(card, "Your review was requested again on PR #7") {
+		t.Errorf("a new review request moved the card to %q", to)
+	}
+	if to := step(reasked); to != "" {
+		t.Errorf("the same request moved the card again, to %q", to)
+	}
+
+	card.ColumnID = "review-done"
+	pushed := approved
+	pushed.HeadSHA = "bbb"
+	if to := step(pushed); to != "reviewing" {
+		t.Errorf("new commits moved the approved card to %q, want reviewing", to)
+	}
+
+	for name, c := range map[string]*store.Task{
+		"never reviewed": {PR: &store.PR{Review: true, State: "OPEN"}},
+		"archived":       {PR: &store.PR{Review: true, State: "OPEN", ReviewedSHA: "aaa"}, Archived: true},
+		"merged":         {PR: &store.PR{Review: true, State: "MERGED", ReviewedSHA: "aaa"}},
+		"your own PR":    {PR: &store.PR{State: "OPEN", ReviewedSHA: "aaa"}},
+	} {
+		if reviewedOpen(c) {
+			t.Errorf("%s: tracked in Done", name)
+		}
+	}
+}
+
+func TestApprovedReviewIsPolledFromDone(t *testing.T) {
+	r := newReviewRig(t, "them", strings.Replace(importReviewBoard, `"reviewed": "waiting"`, `"reviewed": "waiting", "approved": "done"`, 1))
+	e := r.e
+	e.ImportReviews([]ReviewPR{{Found: gh.Found{Number: 7, URL: "https://github.com/o/r/pull/7"}}})
+	waitForAll(t, e, "the first refresh", func(tasks []*store.Task) bool { return reviewCard(tasks).PR.State == "OPEN" })
+
+	approval := `{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`
+	r.gh("OPEN", "aaa", approval)
+	waitForAll(t, e, "your approval to move the card to Done", func(tasks []*store.Task) bool { return reviewCard(tasks).ColumnID == "done" })
+	r.gh("OPEN", "bbb", approval)
+	waitForAll(t, e, "new commits to bring the card back to Reviewing", func(tasks []*store.Task) bool { return reviewCard(tasks).ColumnID == "reviewing" })
+}
