@@ -41,6 +41,7 @@ const (
 	modeAssistant
 	modeConfig
 	modeColumns
+	modeSchedules
 )
 
 type tickMsg time.Time
@@ -80,6 +81,7 @@ type externalAttachMsg struct {
 	number, pid int
 }
 type suspendAllMsg struct{}
+
 type sessionStartedMsg struct {
 	task *store.Task
 	err  error
@@ -118,6 +120,7 @@ type Model struct {
 	previewComplete            bool
 	previewBusy, previewWanted bool
 	sel                        selection
+	selClick                   selClick
 
 	prefs   prefs
 	drag    dragState
@@ -146,11 +149,15 @@ type Model struct {
 	configInput   textinput.Model
 	configSrc     []string
 
+	configFilterInput textinput.Model
+
 	columnSel     int
 	columnOpen    bool
 	columnID      string
 	columnOptSel  int
 	columnEditing bool
+	columnsFrom   mode
+	columnPrompt  textarea.Model
 	columnSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
@@ -163,6 +170,8 @@ type Model struct {
 	suspendAll bool
 
 	detail viewport.Model
+
+	scheduleSel, scheduleWindow int
 
 	assist assistantPane
 
@@ -198,7 +207,11 @@ func New(eng *engine.Engine) Model {
 
 		paletteInput: newPaletteInput(),
 		configInput:  textinput.New(),
+
+		configFilterInput: textinput.New(),
+		columnPrompt:      newColumnPrompt(),
 	}
+	m.configFilterInput.Placeholder = "Words to match"
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
 	}
@@ -240,47 +253,65 @@ func (m Model) hasReviewLane() bool {
 	return slices.ContainsFunc(m.columns(), config.Column.InReviewLane)
 }
 
-// reviewLaneCards counts the cards in the review lane's columns, not counting
-// archived or hidden ones.
-func (m Model) reviewLaneCards() int {
+// laneCards counts the cards in the columns of the review lane, or of the main
+// lane when review is false, not counting archived or hidden ones.
+func (m Model) laneCards(review bool) int {
 	n := 0
 	for _, t := range m.snap.Tasks {
-		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() && !m.offBoard(t, m.hidesArchived(col.ID)) {
+		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() == review && !m.offBoard(t, m.hidesArchived(col.ID)) {
 			n++
 		}
 	}
 	return n
 }
 
-// reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
-// pref, and with none set, while the lane holds cards.
+// mainLaneHidden reports whether only the review lane is drawn. A board with
+// no review lane always draws its main columns.
+func (m Model) mainLaneHidden() bool {
+	return m.prefs.HideMainLane && m.hasReviewLane()
+}
+
+// reviewLaneShown reports whether the review lane is drawn: always while the
+// main lane is hidden, else per the ReviewLane pref, and with none set, while
+// the lane holds cards.
 func (m Model) reviewLaneShown() bool {
+	if m.mainLaneHidden() {
+		return true
+	}
 	if shown := m.prefs.ReviewLane; shown != nil {
 		return *shown && m.hasReviewLane()
 	}
-	return m.reviewLaneCards() > 0
+	return m.laneCards(true) > 0
 }
 
 // lanes is the indexes of the columns on each row of the board: the main
-// columns, then the review lane's while it is shown.
+// columns, then the review lane's, each while it is shown.
 func (m Model) lanes() [][]int {
 	var main, review []int
 	for i, c := range m.columns() {
-		if c.InReviewLane() {
+		switch {
+		case !m.visibleColumn(i):
+		case c.InReviewLane():
 			review = append(review, i)
-		} else {
+		default:
 			main = append(main, i)
 		}
 	}
-	if len(review) == 0 || !m.reviewLaneShown() {
-		return [][]int{main}
+	var rows [][]int
+	for _, row := range [][]int{main, review} {
+		if len(row) > 0 {
+			rows = append(rows, row)
+		}
 	}
-	return [][]int{main, review}
+	return rows
 }
 
 // visibleColumn reports whether the board draws column i.
 func (m Model) visibleColumn(i int) bool {
-	return !m.columns()[i].InReviewLane() || m.reviewLaneShown()
+	if m.columns()[i].InReviewLane() {
+		return m.reviewLaneShown()
+	}
+	return !m.mainLaneHidden()
 }
 
 // stepColumn is the nearest column from i in direction dir (-1 or 1) that the
@@ -294,13 +325,17 @@ func (m Model) stepColumn(i, dir int) int {
 	return i
 }
 
-// shownColumn is col if the board draws it, else the nearest one before it.
+// shownColumn is col if the board draws it, else the nearest one before it, or
+// after it when none before it is drawn.
 func (m Model) shownColumn(col int) int {
 	col = clamp(col, 0, len(m.columns())-1)
-	for col > 0 && !m.visibleColumn(col) {
-		col--
+	if m.visibleColumn(col) {
+		return col
 	}
-	return col
+	if prev := m.stepColumn(col, -1); prev != col {
+		return prev
+	}
+	return m.stepColumn(col, 1)
 }
 
 func (m Model) tasksIn(colID string) []*store.Task {
@@ -505,11 +540,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.promptInput.SetWidth(min(100, m.width-8))
+		m.columnPrompt.SetWidth(min(72, m.width-10))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
+		m.configFilterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
+		if m.assist.full && m.assistantFits() == 0 {
+			m.assist.full = false
+		}
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
 			m.setFlash(tooSmallForAssistant)
@@ -573,8 +613,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.previewScroll > 0 {
 				m.previewScroll += d
 			}
-			m.sel.anchor.line += d
-			m.sel.head.line += d
+			m.sel.shift(d)
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
@@ -670,6 +709,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil
 		}
+		if col, _, ok := m.snap.Board.Column(m.columnOf(msg.task)); ok && col.InReviewLane() && !m.reviewLaneShown() {
+			shown := true
+			m.prefs.ReviewLane = &shown
+			m.savePrefs()
+		}
 		m.selectTask(msg.task)
 		if cmd, ok := m.attach(msg.task.ID); ok {
 			m.setFlash("")
@@ -698,7 +742,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)
@@ -714,6 +758,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfig(msg)
 		case modeColumns:
 			return m.updateColumns(msg)
+		case modeSchedules:
+			return m.updateSchedules(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -784,11 +830,11 @@ func (m Model) capturePreview() tea.Cmd {
 		if ok {
 			capture := tmux.Capture
 			if l.previewH > 0 {
-				capture = func(name string, scrollback int) (string, int, bool, error) {
+				capture = func(name string, scrollback int) (string, int, bool, tmux.Cursor, error) {
 					return tmux.CaptureSized(name, w, h, scrollback)
 				}
 			}
-			if out, history, mouse, err := capture(name, scrollback); err == nil {
+			if out, history, mouse, _, err := capture(name, scrollback); err == nil {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 				msg.complete = scrollback >= history
 			}
@@ -845,6 +891,17 @@ func (m Model) wheelTarget() (string, bool) {
 		return "", false
 	}
 	return m.mouseSession()
+}
+
+// pagerTarget is the live session that should get PgUp/PgDn for the wheel:
+// tmux has no history and the agent doesn't read mouse reports, as when
+// claude runs full-screen with its mouse support disabled.
+func (m Model) pagerTarget() (string, bool) {
+	t := m.current()
+	if m.mode != modeLive || t == nil || m.previewFor != t.ID || m.previewHistory != 0 || m.previewMouse {
+		return "", false
+	}
+	return m.liveSession(t.ID)
 }
 
 // clickTarget is the session that should get clicks.
@@ -1033,8 +1090,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case newAskKey:
 		cmd := m.openAssistant(true)
 		return m, cmd
+	case zoomKey:
+		cmd := m.zoomAssistant()
+		return m, cmd
 	case liveExitKey:
-		m.assist.open = false
+		m.assist.open, m.assist.full = false, false
 	case "left", "h":
 		m.col = m.stepColumn(m.col, -1)
 	case "right", "l":
@@ -1094,6 +1154,17 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		eng := m.eng
 		return m, func() tea.Msg {
 			t, err := eng.NewSession()
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
+		}
+	case newReviewKey:
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.setFlash("Starting a new review…")
+		eng := m.eng
+		return m, func() tea.Msg {
+			t, err := eng.NewReviewSession()
 			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
 		}
 	case "e":
@@ -1219,6 +1290,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "0":
 		m.prefs.PreviewHeight, m.prefs.AssistantWidth, m.prefs.ColumnWidths, m.prefs.Density = 0, 0, map[string]int{}, densityNormal
+		m.prefs.ReviewLaneHeight = 0
 		m.savePrefs()
 	case "z":
 		m.prefs.Density = (m.prefs.Density + 1) % 3
@@ -1238,6 +1310,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.SetContent(m.renderDetail(t))
 			m.detail.GotoTop()
 		}
+	case scheduleKey:
+		m.openSchedules()
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd
@@ -1297,17 +1371,26 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "R":
 		if !m.hasReviewLane() {
-			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			m.setFlash(noReviewLane)
 			break
 		}
 		shown := !m.reviewLaneShown()
 		m.prefs.ReviewLane = &shown
+		if !shown {
+			m.prefs.HideMainLane = false
+		}
+		m.col = m.shownColumn(m.col)
+		m.savePrefs()
+	case "X":
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.prefs.HideMainLane = !m.prefs.HideMainLane
 		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
-		m.mode = modeConfig
-		m.configSel = 0
-		m.configSrc = configSources(m.eng.Root)
+		m = m.openConfig()
 	case "O":
 		return m.openColumns(), nil
 	case "W":
