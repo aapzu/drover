@@ -24,17 +24,17 @@ import (
 
 const cliUsage = `Change the board from outside it:
   drover list [--json]                      list the cards
-  drover add <title> [-p prompt] [-c column]
-  drover add --linear <key or url> [-c column]
+  drover add <title> [-p prompt] [-c column | --review]
+  drover add --linear <key or url> [-c column | --review]
   drover move <number> <column>
   drover edit <number> [--title t] [--prompt p]
   drover rm <number> [--force]
   drover ask [--new] <question>             ask the board's assistant, which can move cards
 
 Cards are addressed by the number list shows. Columns are ids or names. A
-prompt of - is read from stdin, as is a question of -. --force lets rm discard
-a dirty worktree. Changes go through the open board, or are applied the next
-time it opens.
+prompt of - is read from stdin, as is a question of -. --review adds to the
+review lane. --force lets rm discard a dirty worktree. Changes go through the
+open board, or are applied the next time it opens.
 `
 
 // ask is replaced in tests.
@@ -293,6 +293,7 @@ func agentState(owner *store.Task, col config.Column) string {
 func cmdAdd(root string, args []string) error {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	var prompt, column, issue string
+	review := fs.Bool("review", false, "")
 	fs.StringVar(&prompt, "p", "", "")
 	fs.StringVar(&prompt, "prompt", "", "")
 	fs.StringVar(&column, "c", "", "")
@@ -302,12 +303,26 @@ func cmdAdd(root string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if *review {
+		if column != "" {
+			return errors.New("--review and -c both pick the column")
+		}
+		board, _, err := config.Load(root)
+		if err != nil {
+			return err
+		}
+		entry, ok := board.ReviewEntry()
+		if !ok {
+			return config.ErrNoReviewLane
+		}
+		column = entry.ID
+	}
 	req := inbox.Request{Op: inbox.OpAdd, Column: column, Linear: issue}
 	switch {
 	case issue != "" && (len(rest) > 0 || prompt != ""):
 		return errors.New("--linear takes the title and prompt from the issue")
 	case issue == "" && (len(rest) != 1 || strings.TrimSpace(rest[0]) == ""):
-		return errors.New("usage: drover add <title> [-p prompt] [-c column]")
+		return errors.New("usage: drover add <title> [-p prompt] [-c column | --review]")
 	}
 	if len(rest) == 1 {
 		req.Title = &rest[0]

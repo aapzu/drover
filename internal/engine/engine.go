@@ -387,15 +387,24 @@ func (e *Engine) reconcile() {
 }
 
 func (e *Engine) CreateTask(title, prompt string) *store.Task {
+	return e.createTask(title, prompt, "")
+}
+
+// createTask adds a card in the column with the given id, or the first column
+// when it is empty.
+func (e *Engine) createTask(title, prompt, columnID string) *store.Task {
 	var task *store.Task
 	e.with(func() {
 		now := time.Now()
+		if columnID == "" {
+			columnID = e.board.FirstColumn().ID
+		}
 		task = &store.Task{
 			ID:        uuid.NewString(),
 			Number:    e.state.NextNumber,
 			Title:     title,
 			Prompt:    prompt,
-			ColumnID:  e.board.FirstColumn().ID,
+			ColumnID:  columnID,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -412,7 +421,27 @@ func (e *Engine) NewSession() (*store.Task, error) {
 	if !col.IsAgent() {
 		return nil, fmt.Errorf("%s, the first column, runs no agent; make it an agent column in drover.json to start sessions with n", col.Name)
 	}
-	task := e.CreateTask("", "")
+	return e.startSession(col)
+}
+
+// NewReviewSession adds a card in the review lane's entry column and starts
+// its agent right away.
+func (e *Engine) NewReviewSession() (*store.Task, error) {
+	e.mu.Lock()
+	col, ok := e.board.ReviewEntry()
+	e.mu.Unlock()
+	switch {
+	case !ok:
+		return nil, config.ErrNoReviewLane
+	case !col.IsAgent():
+		return nil, fmt.Errorf("%s, where reviews start, runs no agent; make it an agent column in drover.json to start reviews with ctrl+n", col.Name)
+	}
+	return e.startSession(col)
+}
+
+// startSession adds a card in col and starts its agent.
+func (e *Engine) startSession(col config.Column) (*store.Task, error) {
+	task := e.createTask("", "", col.ID)
 	_, owner, unlock := e.lockGroup(task.ID)
 	defer unlock()
 	if err := e.activate(task, col, col, "", true, true); err != nil {
@@ -456,8 +485,9 @@ func (e *Engine) discardCard(t, owner *store.Task) error {
 
 // DiscardSilent deletes a new card whose agent never got a message, and stops
 // the agent, its worktree and its unused branch. A card that is titled, has a
-// prompt or an issue, has left the first column, has a started conversation or
-// has uncommitted changes in its worktree is kept.
+// prompt or an issue, has left the first column or the review lane's entry
+// column, has a started conversation or has uncommitted changes in its
+// worktree is kept.
 func (e *Engine) DiscardSilent(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -466,7 +496,9 @@ func (e *Engine) DiscardSilent(id string) error {
 	}
 	e.mu.Lock()
 	s := t.Sessions[store.MainSession]
-	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && t.ColumnID == e.board.FirstColumn().ID && !e.talkedTo(t, store.MainSession)
+	entry, _ := e.board.ReviewEntry()
+	atStart := t.ColumnID == e.board.FirstColumn().ID || t.ColumnID == entry.ID
+	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && atStart && !e.talkedTo(t, store.MainSession)
 	path := t.WorktreePath
 	e.mu.Unlock()
 	if !silent || gitx.Dirty(path, e.Root) {
@@ -1383,7 +1415,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
 func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (string, []config.Automation) {
-	if len(enter) > 0 && enter[0].Type == "send_message" && !enter[0].Conditional() {
+	if len(enter) > 0 && enter[0].OpensAgent() {
 		row := enter[0]
 		e.logf(t, "Automation %q: started agent with message", rowName(row))
 		return e.render(t, row.Message, gc, false), enter[1:]
@@ -1421,16 +1453,16 @@ func (e *Engine) runningCountExcept(skip *store.Session) int {
 // freeSlot suspends the agent on another task that has been idle longest, to
 // make room for a start you asked for. It returns that agent's tmux session to
 // stop, or "" when no agent is idle. An agent in a keepAgent column is never
-// chosen. Called with mu held.
+// chosen, nor one waiting for a scheduled run. Called with mu held.
 func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t || e.keepsAgent(o) {
+		if o == t {
 			continue
 		}
 		for _, s := range o.Sessions {
-			if !idle(s) {
+			if !e.suspendable(o, s) {
 				continue
 			}
 			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
@@ -1577,12 +1609,14 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	s.Cwd = worktree
+	s.ClearSchedules()
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),
 		"DROVER_TASK_TITLE":  t.Title,
 	}
 	maps.Copy(env, e.board.ClaudeEnv())
+	disableMouse := e.board.DisableMouse
 	e.mu.Unlock()
 	launch.SystemPrompt = claude.BoardPrompt(e.exe)
 	tmux.Kill(name)
@@ -1594,6 +1628,9 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		})
 		e.notify("#%d: starting agent failed: %v", t.Number, err)
 		return err
+	}
+	if disableMouse {
+		tmux.DisableMouse(name)
 	}
 	verb := "Started"
 	if launch.Resume {
