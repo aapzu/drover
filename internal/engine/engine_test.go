@@ -2544,6 +2544,27 @@ func TestReviewCardWaitsForTheAgentBeforeMovingOnYourReview(t *testing.T) {
 	})
 }
 
+func TestApprovingAReviewMovesTheCardToApproved(t *testing.T) {
+	board := strings.Replace(reviewBoard, `"reviewed": "waiting",`, `"reviewed": "waiting", "approved": "done",`, 1)
+	if board == reviewBoard {
+		t.Fatal("reviewBoard has no reviewed target to add approved after")
+	}
+	for _, tc := range []struct{ state, column string }{{"APPROVED", "done"}, {"CHANGES_REQUESTED", "waiting"}} {
+		t.Run(tc.state, func(t *testing.T) {
+			r := newReviewRig(t, "them", board)
+			r.ask(t)
+			waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+				return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+			})
+			r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"`+tc.state+`","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+			waitForAll(t, r.e, "your review to move the card to "+tc.column, func(tasks []*store.Task) bool {
+				c := reviewCard(tasks)
+				return c.ColumnID == tc.column && c.PR.MyReview == tc.state
+			})
+		})
+	}
+}
+
 func TestReviewOfYourOwnPRIsForgotten(t *testing.T) {
 	r := newReviewRig(t, "me", reviewBoard)
 	r.ask(t)

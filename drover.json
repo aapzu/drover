@@ -102,6 +102,7 @@
   "reviewFlow": {
     "started": "triage",
     "reviewed": "waiting-on-author",
+    "approved": "done",
     "updated": "reviewing",
     "done": "done"
   }

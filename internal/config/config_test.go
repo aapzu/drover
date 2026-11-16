@@ -97,7 +97,7 @@ func TestReviewFlow(t *testing.T) {
 		board, _, err := Load(dir)
 		return board, err
 	}
-	for _, field := range []string{"started", "reviewed", "updated", "done"} {
+	for _, field := range []string{"started", "reviewed", "approved", "updated", "done"} {
 		if _, err := load(`{"` + field + `":"nowhere"}`); err == nil {
 			t.Errorf("unknown reviewFlow.%s column accepted", field)
 		}
@@ -416,7 +416,7 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 	if f == nil {
 		t.Fatal("default board has no reviewFlow")
 	}
-	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
+	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "approved": f.Approved, "updated": f.Updated, "done": f.Done} {
 		if _, ok := board.Find(ref); !ok {
 			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
 		}
