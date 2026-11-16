@@ -227,11 +227,20 @@ type Event struct {
 	LastAssistantMessage string `json:"last_assistant_message"`
 	PermissionMode       string `json:"permission_mode"`
 	Error                string `json:"error"`
-	ToolInput            struct {
-		Command string `json:"command"`
-	} `json:"tool_input"`
+	// ToolInput stays raw: other tools put any type in the fields a typed struct
+	// would name, and ReadEvents drops an event that fails to decode.
+	ToolInput       json.RawMessage  `json:"tool_input"`
 	ToolResponse    json.RawMessage  `json:"tool_response"`
 	BackgroundTasks []BackgroundTask `json:"background_tasks"`
+}
+
+// Command returns the shell command of a Bash call.
+func (e Event) Command() string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	json.Unmarshal(e.ToolInput, &in)
+	return in.Command
 }
 
 // BackgroundTask is an agent or shell Claude Code lists in a Stop payload.
@@ -354,7 +363,7 @@ func (e Event) BackgroundAgent() (string, bool) {
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
 // looked at never count as its own.
 func (e Event) CreatedPRs() []string {
-	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.ToolInput.Command) {
+	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.Command()) {
 		return nil
 	}
 	var urls []string

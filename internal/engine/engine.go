@@ -1444,16 +1444,16 @@ func (e *Engine) runningCountExcept(skip *store.Session) int {
 // freeSlot suspends the agent on another task that has been idle longest, to
 // make room for a start you asked for. It returns that agent's tmux session to
 // stop, or "" when no agent is idle. An agent in a keepAgent column is never
-// chosen. Called with mu held.
+// chosen, nor one waiting for a scheduled run. Called with mu held.
 func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t || e.keepsAgent(o) {
+		if o == t {
 			continue
 		}
 		for _, s := range o.Sessions {
-			if !idle(s) {
+			if !e.suspendable(o, s) {
 				continue
 			}
 			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
@@ -1600,6 +1600,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	s.Cwd = worktree
+	s.ClearSchedules()
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),
