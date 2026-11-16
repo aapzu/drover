@@ -39,6 +39,12 @@
         ],
         "onTurnEnd": [
           {
+            "name": "Fix conflicts",
+            "type": "send_message",
+            "message": "PR #{{prNumber}} has merge conflicts with its base branch. Fetch the base branch, merge it into this branch, resolve the conflicts, run go build ./... and go test ./..., then push (no force push).",
+            "conditionScript": "test -n \"$DROVER_PRNUMBER\" && test \"$(gh pr view \"$DROVER_PRNUMBER\" --json mergeable --jq .mergeable)\" = CONFLICTING"
+          },
+          {
             "name": "Apply fixes",
             "type": "send_message",
             "message": "Apply the fixes the review found, then run go test ./...",
@@ -90,6 +96,13 @@
       "name": "Waiting on author",
       "lane": "review",
       "color": "#64748b"
+    },
+    {
+      "id": "review-done",
+      "name": "Done",
+      "role": "done",
+      "lane": "review",
+      "color": "#10b981"
     }
   ],
   "prFlow": {
@@ -103,6 +116,6 @@
     "started": "triage",
     "reviewed": "waiting-on-author",
     "updated": "reviewing",
-    "done": "done"
+    "done": "review-done"
   }
 }
