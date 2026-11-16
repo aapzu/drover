@@ -55,10 +55,13 @@ Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge, the preview's top border or the review lane's
 divider to resize, click the preview to type into the agent, and click the assistant
-panel to type into it. Dragging over the live preview selects text and
-copies it. To select text anywhere else with the terminal's own selection
-(double and triple click included), hold Option on macOS or Shift elsewhere
-while dragging. Layout is saved in `ui.json` in the project's state
+panel to type into it. Dragging over the preview or the assistant panel
+selects text and copies it, without the panes' borders; double click selects a
+word, triple click a line, and dragging after either extends the selection by
+words or lines. While you type into an agent that reads mouse reports
+(`disableMouse` off), clicks go to it instead. To select text anywhere else with the
+terminal's own selection, hold Option on macOS or Shift elsewhere while
+dragging. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
