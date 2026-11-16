@@ -48,7 +48,8 @@ Then bring in the Claude Code work you already have:
    become cards in the first agent column, and past sessions land in the first
    column, ready to resume. See
    [Importing Claude Code agents](#importing-claude-code-agents).
-2. Or press `n` to start a new card with an agent.
+2. Or press `n` to start a new card with an agent, or `ctrl+n` to start one
+   in the [review lane](#the-review-lane).
 
 Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 
@@ -519,6 +520,11 @@ author pushes, and `done` to the lane's Done. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 
+`ctrl+n` starts a card with an agent straight in the lane, in the
+`reviewFlow`'s `started` column (else the lane's first column), and shows the
+lane if you had hidden it. `drover add --review` does the same from the
+[command line](#command-line).
+
 ## Importing Claude Code agents
 
 `I` lists Claude Code conversations started in this repo or any directory
@@ -571,6 +577,7 @@ the repo or any of its worktrees:
 drover list [--json]
 drover add "Fix the login bug" -p "Steps to reproduce…" -c planning
 drover add --linear DX-123
+drover add "Review PR 123" --review
 drover move 4 "In review"
 drover edit 4 --title "Fix signup" --prompt "…"
 drover rm 4
@@ -583,7 +590,8 @@ drover ask "which cards are waiting on review?"
   changes. `--force` discards them. The branch is kept.
 - `add` puts the card in the first column and starts no agent. `add -c` into
   another agent column starts the agent, like a move. If that fails the card
-  stays in the first column and the command says why.
+  stays in the first column and the command says why. `add --review` is `-c`
+  with the review lane's entry column; it can't be combined with `-c`.
 - `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The
   title and prompt come from the issue, and one already on the board is refused.
 - The open board applies requests one at a time and the command prints the

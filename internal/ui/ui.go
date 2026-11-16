@@ -80,6 +80,7 @@ type externalAttachMsg struct {
 	number, pid int
 }
 type suspendAllMsg struct{}
+
 type sessionStartedMsg struct {
 	task *store.Task
 	err  error
@@ -680,6 +681,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil
 		}
+		if col, _, ok := m.snap.Board.Column(m.columnOf(msg.task)); ok && col.InReviewLane() && !m.reviewLaneShown() {
+			shown := true
+			m.prefs.ReviewLane = &shown
+			m.savePrefs()
+		}
 		m.selectTask(msg.task)
 		if cmd, ok := m.attach(msg.task.ID); ok {
 			m.setFlash("")
@@ -1117,6 +1123,17 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			t, err := eng.NewSession()
 			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
 		}
+	case newReviewKey:
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.setFlash("Starting a new review…")
+		eng := m.eng
+		return m, func() tea.Msg {
+			t, err := eng.NewReviewSession()
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
+		}
 	case "e":
 		if t != nil {
 			m.openForm(t)
@@ -1319,7 +1336,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "R":
 		if !m.hasReviewLane() {
-			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			m.setFlash(noReviewLane)
 			break
 		}
 		shown := !m.reviewLaneShown()

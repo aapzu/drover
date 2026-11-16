@@ -755,6 +755,7 @@ var helpKeys = [][2]string{
 	{"H / L, shift+←→", "move card to previous / next column"},
 	{"m", "move card to a column (↑↓ and enter, or 1-9)"},
 	{"n", "new card with an agent in the first column"},
+	{newReviewKey, "new card with an agent in the review lane"},
 	{"e", "edit title and prompt"},
 	{"x / D", "delete task (branch is kept)"},
 	{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
