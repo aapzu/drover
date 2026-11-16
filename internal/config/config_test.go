@@ -102,8 +102,8 @@ func TestReviewFlow(t *testing.T) {
 			t.Errorf("unknown reviewFlow.%s column accepted", field)
 		}
 	}
-	board, err := load(`{"started":"Waiting","reviewed":"waiting"}`)
-	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" {
+	board, err := load(`{"started":"Waiting","reviewed":"waiting","approved":"first"}`)
+	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" || board.ReviewFlow.Approved != "first" {
 		t.Fatalf("reviewFlow not loaded: %+v %v", board.ReviewFlow, err)
 	}
 	if _, err := load(`{}`); err != nil {
@@ -420,6 +420,9 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 		if _, ok := board.Find(ref); !ok {
 			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
 		}
+	}
+	if c, _ := board.Find(f.Approved); !c.IsDone() {
+		t.Errorf("reviewFlow.approved = %q is not a Done column", f.Approved)
 	}
 	if c, _ := board.Find(f.Done); !c.IsDone() {
 		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
