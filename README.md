@@ -592,6 +592,10 @@ It takes no agent slot and isn't a card.
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
   `ctrl+q` returns to the board and hides the panel. You can also click the
   panel to focus it, and use the mouse wheel to scroll it.
+- From the board, `Z` (or a click on the panel's top border) makes the panel
+  fill the whole screen. Click the border again or press `ctrl+q` to put it
+  back beside the board; `ctrl+q` once more hides it. Fullscreen needs only
+  40 columns and the same 8 rows.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
   (`tmux -L drover ls`), started in the repo. It stops when the board that
   opened it quits or its terminal closes, and the conversation resumes the next

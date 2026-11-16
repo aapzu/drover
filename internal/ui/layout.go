@@ -30,6 +30,7 @@ type layout struct {
 	bodyY, bodyH       int
 	boardH             int
 	boardW, assistantW int
+	assistantFull      bool
 	previewY, previewH int
 	cols               []colBox
 	rows               [][]colBox
@@ -41,7 +42,8 @@ func (m Model) bodyHeight() int { return max(0, m.height-headerHeight-footerHeig
 func (m Model) layout() layout {
 	l := layout{bodyY: headerHeight, bodyH: m.bodyHeight()}
 	l.assistantW, l.boardW = m.assistantWidth(), m.boardWidth()
-	if !m.prefs.HidePreview && l.bodyH >= minPreviewHeight+minBoardHeight {
+	l.assistantFull = m.assist.full && l.assistantW > 0
+	if !m.prefs.HidePreview && !l.assistantFull && l.bodyH >= minPreviewHeight+minBoardHeight {
 		h := m.prefs.PreviewHeight
 		if h == 0 {
 			h = l.bodyH * 2 / 5
@@ -156,6 +158,7 @@ const (
 	hitPreviewEdge
 	hitAssistant
 	hitAssistantEdge
+	hitAssistantTitle
 )
 
 type hit struct {
@@ -177,8 +180,11 @@ func (l layout) assistantCell(msg tea.MouseMsg) (x, y int) {
 
 func (l layout) hitTest(m Model, x, y int) hit {
 	if l.assistantW > 0 && x >= l.boardW && y >= l.bodyY && y < l.bodyY+l.bodyH {
-		if x == l.boardW {
+		switch {
+		case x == l.boardW && !l.assistantFull:
 			return hit{kind: hitAssistantEdge}
+		case y == l.bodyY:
+			return hit{kind: hitAssistantTitle}
 		}
 		return hit{kind: hitAssistant}
 	}

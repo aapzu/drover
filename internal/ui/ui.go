@@ -510,6 +510,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.filterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
+		if m.assist.full && m.assistantFits() == 0 {
+			m.assist.full = false
+		}
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
 			m.setFlash(tooSmallForAssistant)
@@ -1033,8 +1036,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case newAskKey:
 		cmd := m.openAssistant(true)
 		return m, cmd
+	case zoomKey:
+		cmd := m.zoomAssistant()
+		return m, cmd
 	case liveExitKey:
-		m.assist.open = false
+		m.assist.open, m.assist.full = false, false
 	case "left", "h":
 		m.col = m.stepColumn(m.col, -1)
 	case "right", "l":

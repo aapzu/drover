@@ -50,7 +50,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown):
 		h := l.hitTest(m, msg.X, msg.Y)
-		if h.kind == hitAssistant || h.kind == hitAssistantEdge {
+		if h.kind == hitAssistant || h.kind == hitAssistantEdge || h.kind == hitAssistantTitle {
 			return m.wheelAssistant(msg, l)
 		}
 		if h.kind == hitPreview || h.kind == hitPreviewEdge {
@@ -109,6 +109,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if m.mode != modeLive {
 				return m.startLive()
 			}
+		case hitAssistantTitle:
+			cmd := m.zoomAssistant()
+			return m, cmd
 		case hitAssistant:
 			if m.mode != modeAssistant {
 				cmd := m.focusAssistant()

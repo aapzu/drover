@@ -15,6 +15,7 @@ import (
 const (
 	askKey            = ":"
 	newAskKey         = "N"
+	zoomKey           = "Z"
 	minBoardWidth     = 60
 	minAssistantWidth = 40
 
@@ -47,6 +48,7 @@ type assistantPane struct {
 	history, scroll int
 	mouse           bool
 	tickGen         int
+	full            bool
 }
 
 type sessionState uint8
@@ -96,11 +98,14 @@ func (m Model) StopAssistant() error {
 }
 
 func (m Model) assistantFits() int {
-	w := max(minAssistantWidth, m.width*2/5)
-	if m.prefs.AssistantWidth > 0 {
-		w = m.clampAssistantWidth(m.prefs.AssistantWidth)
+	w, minBoard := m.width, 0
+	if !m.assist.full {
+		w, minBoard = max(minAssistantWidth, m.width*2/5), minBoardWidth
+		if m.prefs.AssistantWidth > 0 {
+			w = m.clampAssistantWidth(m.prefs.AssistantWidth)
+		}
 	}
-	if m.width-w < minBoardWidth || m.bodyHeight() < minPreviewHeight {
+	if m.width-w < minBoard || m.width < minAssistantWidth || m.bodyHeight() < minPreviewHeight {
 		return 0
 	}
 	return w
@@ -134,6 +139,37 @@ func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	case fresh || !m.assist.running():
 		cmds = append(cmds, m.startAssistantSession(fresh))
 	default:
+		cmds = append(cmds, m.captureAssistantCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// zoomAssistant toggles the panel between its place beside the board and the
+// whole body, opening it first if need be.
+func (m *Model) zoomAssistant() tea.Cmd {
+	if m.assist.full {
+		return m.unzoomAssistant()
+	}
+	m.assist.full = true
+	if m.assistantFits() == 0 {
+		m.assist.full = false
+		m.setFlash(tooSmallForAssistant)
+		return nil
+	}
+	return m.openAssistant(false)
+}
+
+// unzoomAssistant puts the panel back beside the board, or hides it when the
+// terminal is too small for both.
+func (m *Model) unzoomAssistant() tea.Cmd {
+	m.assist.full = false
+	if m.assistantFits() == 0 {
+		m.mode, m.assist.open = modeBoard, false
+		m.setFlash(tooSmallForAssistant)
+		return nil
+	}
+	cmds := []tea.Cmd{m.focusAssistant()}
+	if m.assist.running() {
 		cmds = append(cmds, m.captureAssistantCmd())
 	}
 	return tea.Batch(cmds...)
@@ -227,6 +263,10 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 
 func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == liveExitKey {
+		if m.assist.full {
+			cmd := m.unzoomAssistant()
+			return m, cmd
+		}
 		m.mode = modeBoard
 		m.assist.open = false
 		return m, nil
@@ -296,7 +336,7 @@ func (m Model) renderAssistant(width, height int) string {
 		body = previewWindow(m.assist.txt, height-2, m.assist.scroll)
 	}
 
-	title, hint := " assistant ", "· "+askKey+" to type here "
+	title, hint := " assistant ", "· "+askKey+" to type here · "+zoomKey+" fullscreen "
 	style := panelStyle
 	if m.drag.kind == dragAssistant {
 		style = style.BorderForeground(accent)
@@ -304,6 +344,9 @@ func (m Model) renderAssistant(width, height int) string {
 	if focused {
 		style = style.BorderForeground(accent)
 		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q hide "
+		if m.assist.full {
+			hint = "· ctrl+q exit fullscreen "
+		}
 	}
 	if m.assist.scroll > 0 {
 		title += thinking.Render(fmt.Sprintf("· ↑ %d lines up ", m.assist.scroll))

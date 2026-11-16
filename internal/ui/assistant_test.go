@@ -1121,3 +1121,142 @@ func TestPanelEdgeStillResizesWhenClaudeTracksMouse(t *testing.T) {
 		t.Errorf("sent %+v, drag %v: the edge should start a resize", job, next.drag.kind)
 	}
 }
+
+func TestZoomKeyFillsTheBodyWithThePanel(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m, cmd := update(m, key(zoomKey))
+	if !m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	runCmds(cmd)
+	if f.starts != 1 {
+		t.Errorf("starts = %d", f.starts)
+	}
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+	l := m.layout()
+	if l.assistantW != m.width || l.boardW != 0 || l.previewH != 0 {
+		t.Errorf("assistant %d, board %d, preview %d", l.assistantW, l.boardW, l.previewH)
+	}
+	runCmds(m.captureAssistantCmd())
+	if f.capturedW != m.width-2 || f.capturedH != l.bodyH-2 {
+		t.Errorf("captured %dx%d", f.capturedW, f.capturedH)
+	}
+}
+
+func TestCtrlQLeavesFullscreenBeforeHiding(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	if l := m.layout(); l.boardW == 0 || l.assistantW == m.width {
+		t.Errorf("board %d, assistant %d", l.boardW, l.assistantW)
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.open || m.mode != modeBoard {
+		t.Errorf("open %v, mode %v", m.assist.open, m.mode)
+	}
+}
+
+func TestZoomFromTheBoardAndTheTitleRowToggle(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	if !m.assist.full || m.mode != modeAssistant {
+		t.Fatalf("full %v, mode %v", m.assist.full, m.mode)
+	}
+	l := m.layout()
+	if got := l.hitTest(m, 0, l.bodyY+1).kind; got != hitAssistant {
+		t.Errorf("left column hit %v", got)
+	}
+	m, _ = update(m, tea.MouseMsg{X: 10, Y: l.bodyY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("title click: full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	l = m.layout()
+	m.mode = modeBoard
+	m, _ = update(m, tea.MouseMsg{X: l.boardW + 10, Y: l.bodyY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if !m.assist.full {
+		t.Error("clicking the panel's top border didn't zoom it")
+	}
+}
+
+func TestZoomNeedsOnlyTheMinimumSize(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	m.width = minAssistantWidth
+	m, _ = update(m, key(zoomKey))
+	if !m.assist.full || !m.assist.open {
+		t.Errorf("full %v, open %v", m.assist.full, m.assist.open)
+	}
+
+	m = assistantModel(t)
+	m.width = minAssistantWidth - 1
+	m, _ = update(m, key(zoomKey))
+	if m.assist.full || m.assist.open || m.flash != tooSmallForAssistant {
+		t.Errorf("full %v, open %v, flash %q", m.assist.full, m.assist.open, m.flash)
+	}
+}
+
+func TestLeavingFullscreenOnANarrowTerminalHidesThePanel(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	m.width = 80
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.full || m.assist.open || m.mode != modeBoard {
+		t.Errorf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+}
+
+func TestViewFitsTheTerminalWhenTheFullscreenPanelIsOpen(t *testing.T) {
+	fakePanel(t)
+	for _, size := range [][2]int{{40, 8}, {80, 24}, {200, 30}} {
+		m := assistantModel(t)
+		m.width, m.height = size[0], size[1]
+		m, _ = update(m, key(zoomKey))
+		m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+		if !m.assist.full {
+			t.Fatalf("%dx%d: the panel didn't go fullscreen", size[0], size[1])
+		}
+		view := m.View()
+		fits(t, "fullscreen", view, size[0], size[1])
+		if !strings.Contains(view, "ASSISTANT") || strings.Contains(view, "Planning") {
+			t.Errorf("%dx%d: not just the panel:\n%s", size[0], size[1], view)
+		}
+	}
+}
+
+func TestShrinkingBelowTheMinimumLeavesFullscreen(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.WindowSizeMsg{Width: minAssistantWidth - 1, Height: 30})
+	if m.assist.full || m.mode != modeBoard || m.flash != tooSmallForAssistant {
+		t.Fatalf("full %v, mode %v, flash %q", m.assist.full, m.mode, m.flash)
+	}
+	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if l := m.layout(); l.assistantFull || l.boardW == 0 {
+		t.Errorf("the panel came back fullscreen: board %d", l.boardW)
+	}
+}
+
+func TestFullscreenHintsNameTheWayOut(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	if view := m.View(); !strings.Contains(view, zoomKey+" fullscreen") {
+		t.Errorf("the panel doesn't advertise %s:\n%s", zoomKey, view)
+	}
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	if view := m.View(); strings.Count(view, "ctrl+q exit fullscreen") != 2 {
+		t.Errorf("title and footer should both name ctrl+q:\n%s", view)
+	}
+}
