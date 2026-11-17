@@ -71,3 +71,19 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Runs after goreleaser, which publishes the release notes the changelog reads.
+      - name: Update the changelog
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          scripts/changelog.sh "${{ steps.version.outputs.tag }}"
+          if git diff --quiet CHANGELOG.md; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update changelog for ${{ steps.version.outputs.tag }} [skip ci]" CHANGELOG.md
+          git push origin main
