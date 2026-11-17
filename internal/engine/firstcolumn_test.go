@@ -592,6 +592,26 @@ func TestNewReviewSessionStartsItsAgentInTheReviewLane(t *testing.T) {
 	}
 }
 
+func TestNewReviewSessionSkipsPlainColumnsAheadOfItsAgentColumn(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"inbox","name":"Inbox"},
+	  {"id":"requested","name":"Requested","lane":"review"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}],
+	  "reviewFlow":{"started":"triage"}}`)
+	task, err := e.NewReviewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the review agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if got.ID != task.ID || got.ColumnID != "reviewing" {
+		t.Errorf("new review: card %s in %q, want %s in Reviewing", got.ID, got.ColumnID, task.ID)
+	}
+}
+
 func TestNewReviewSessionNeedsAnAgentInTheReviewLane(t *testing.T) {
 	for name, tc := range map[string]struct{ board, want string }{
 		"no lane":  {`{"columns":[{"id":"inbox","name":"Inbox","autoSpawn":true},{"id":"done","name":"Done","role":"done"}]}`, "no review lane"},
