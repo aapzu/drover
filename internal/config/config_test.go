@@ -754,20 +754,29 @@ func TestReviewEntry(t *testing.T) {
 		return b
 	}
 	const columns = `"columns":[{"id":"first","name":"First"},
-	  {"id":"reviewing","name":"Reviewing","lane":"review"},
-	  {"id":"triage","name":"Triage","lane":"review"}]`
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}]`
 	cases := []struct {
 		name, board, want string
 	}{
-		{"started in the lane", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "triage"},
+		{"reviewFlow.started is ignored", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "reviewing"},
 		{"started outside the lane", `{` + columns + `,"reviewFlow":{"started":"first"}}`, "reviewing"},
 		{"no reviewFlow", `{` + columns + `}`, "reviewing"},
+		{"plain column first", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true}]}`, "reviewing"},
+		{"no agent column", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"waiting","name":"Waiting","lane":"review"}]}`, "requested"},
 	}
 	for _, c := range cases {
 		got, ok := load(c.board).ReviewEntry()
 		if !ok || got.ID != c.want {
 			t.Errorf("%s: ReviewEntry = %q, %v; want %q", c.name, got.ID, ok, c.want)
 		}
+	}
+	if got, ok := Default().ReviewEntry(); !ok || got.ID != "reviewing" {
+		t.Errorf("default board ReviewEntry = %q, %v; want reviewing", got.ID, ok)
 	}
 	if _, ok := load(`{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done"}]}`).ReviewEntry(); ok {
 		t.Error("a board without a review lane has an entry column")

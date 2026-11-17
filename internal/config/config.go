@@ -553,21 +553,24 @@ func (b *Board) FirstColumn() Column { return b.Columns[0] }
 // reports.
 var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in drover.json`)
 
-// ReviewEntry is where a card you review starts: the reviewFlow's started
-// column when it is in the review lane, else the lane's first column. It
-// reports false when the board has no review lane.
+// ReviewEntry is where a card you review starts: the review lane's first agent
+// column, else its first column. It reports false when the board has no review
+// lane.
 func (b *Board) ReviewEntry() (Column, bool) {
-	if b.ReviewFlow != nil {
-		if c, ok := b.Find(b.ReviewFlow.Started); ok && c.InReviewLane() {
+	var first *Column
+	for i, c := range b.Columns {
+		switch {
+		case !c.InReviewLane():
+		case c.IsAgent():
 			return c, true
+		case first == nil:
+			first = &b.Columns[i]
 		}
 	}
-	for _, c := range b.Columns {
-		if c.InReviewLane() {
-			return c, true
-		}
+	if first == nil {
+		return Column{}, false
 	}
-	return Column{}, false
+	return *first, true
 }
 
 // ReviewImport is where an imported PR to review lands: the reviewFlow's

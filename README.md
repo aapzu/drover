@@ -592,10 +592,9 @@ and `done` to the lane's Done. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 
-`ctrl+n` starts a card with an agent straight in the lane, in the
-`reviewFlow`'s `started` column (else the lane's first column), and shows the
-lane if you had hidden it. `drover add --review` does the same from the
-[command line](#command-line).
+`ctrl+n` starts a card with an agent straight in the lane, in its first
+agent column, and shows the lane if you had hidden it. `drover add --review`
+does the same from the [command line](#command-line).
 
 ## Importing Claude Code agents
 
