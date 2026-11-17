@@ -2,33 +2,28 @@
 set -euo pipefail
 
 tag=${1:?usage: changelog.sh <tag>}
-file=${CHANGELOG:-CHANGELOG.md}
 version=${tag#v}
-repo=${GITHUB_REPOSITORY:-aapzu/drover}
 
-if [ -f "$file" ] && grep -qF "## [$version]" "$file"; then
+if grep -qF "## [$version]" CHANGELOG.md; then
+  echo "CHANGELOG.md already has $tag"
   exit 0
 fi
 
-release=$(gh release view "$tag" --repo "$repo" --json body,publishedAt)
-published=$(jq -r '.publishedAt[:10]' <<<"$release")
-body=$(jq -r '.body' <<<"$release")
+release=$(gh release view "$tag" --json body,publishedAt)
+published=$(jq -er '.publishedAt[:10]' <<<"$release")
+body=$(jq -er '.body' <<<"$release" | tr -d '\r')
 compare=$(sed -n 's/^\*\*Full Changelog\*\*: //p' <<<"$body")
 entries=$(sed -nE 's|^\* (.+) by @[^ ]+ in (https://[^ ]+/pull/([0-9]+))$|- \1 ([#\3](\2))|p' <<<"$body")
 
-section="## [$version](${compare:-https://github.com/$repo/releases/tag/$tag}) - $published
+: "${compare:?no Full Changelog line in the release notes of $tag}"
+: "${entries:?no pull requests found in the release notes of $tag}"
+
+section="## [$version]($compare) - $published
 
 $entries
 "
 
-if [ ! -f "$file" ]; then
-  printf '# Changelog\n\nAdded on each release from the titles of the merged pull requests.\n' >"$file"
-fi
-
 tmp=$(mktemp)
-if grep -q '^## \[' "$file"; then
-  SECTION=$section awk '!done && /^## \[/ { print ENVIRON["SECTION"]; done = 1 } { print }' "$file" >"$tmp"
-else
-  { cat "$file"; printf '\n%s' "$section"; } >"$tmp"
-fi
-mv "$tmp" "$file"
+SECTION=$section awk '!done && /^## \[/ { print ENVIRON["SECTION"]; done = 1 } { print } END { if (!done) print ENVIRON["SECTION"] }' CHANGELOG.md >"$tmp"
+cat "$tmp" >CHANGELOG.md
+rm "$tmp"

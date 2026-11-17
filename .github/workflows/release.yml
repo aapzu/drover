@@ -17,6 +17,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,19 +73,32 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Runs after goreleaser, which publishes the release notes the changelog reads.
-      - name: Update the changelog
-        if: steps.version.outputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+  changelog:
+    needs: release
+    if: needs.release.outputs.tag != '' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Add the release to the changelog
         run: |
-          git fetch origin main
-          git checkout -B main origin/main
-          scripts/changelog.sh "${{ steps.version.outputs.tag }}"
-          if git diff --quiet CHANGELOG.md; then
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Update changelog for ${{ steps.version.outputs.tag }} [skip ci]" CHANGELOG.md
-          git push origin main
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout -B main origin/main
+            scripts/changelog.sh "$TAG"
+            if [ -z "$(git status --porcelain CHANGELOG.md)" ]; then
+              exit 0
+            fi
+            git commit -m "Update changelog for $TAG [skip ci]" CHANGELOG.md
+            git push origin main && exit 0
+          done
+          echo "::error::Could not push the changelog for $TAG."
+          exit 1
