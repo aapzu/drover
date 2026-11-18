@@ -206,7 +206,7 @@ func New(eng *engine.Engine) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tick(), m.waitNotice()}
+	cmds := []tea.Cmd{tick(), m.waitNotice(), enableExtendedKeys}
 	if !m.prefs.NoMouse {
 		cmds = append(cmds, tea.EnableMouseCellMotion)
 	}
@@ -689,6 +689,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		cmds = append(cmds, enableExtendedKeys)
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
 			cmds = append(cmds, tea.EnableMouseCellMotion)

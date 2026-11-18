@@ -63,7 +63,8 @@ directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
 `esc` and `ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop
-the agent. `ctrl+q` returns to the board.
+the agent. `ctrl+q` returns to the board. `shift+enter` inserts a newline in
+terminals that report it (iTerm2, xterm); elsewhere use `alt+enter`.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. Typing in live mode jumps back to the bottom.
