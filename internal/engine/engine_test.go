@@ -2402,6 +2402,8 @@ type reviewRig struct {
 	log    string
 	dir    string
 	author string
+	// mergeable is what gh reports for the PR's mergeable field.
+	mergeable string
 }
 
 func newReviewRig(t *testing.T, author, board string) *reviewRig {
@@ -2436,7 +2438,7 @@ esac
 // gh sets what gh reports for the PR; reviews is a list of JSON objects.
 func (r *reviewRig) gh(state, head, reviews string) {
 	os.WriteFile(filepath.Join(r.dir, "pr.json"), []byte(fmt.Sprintf(`{"title":"Their change","headRefName":"theirs","state":%q,
-	  "headRefOid":%q,"author":{"login":%q},"reviewDecision":"","latestReviews":[%s],"mergeCommit":null}`, state, head, r.author, reviews)), 0o644)
+	  "headRefOid":%q,"author":{"login":%q},"reviewDecision":"","mergeable":%q,"latestReviews":[%s],"mergeCommit":null}`, state, head, r.author, r.mergeable, reviews)), 0o644)
 }
 
 // fail makes "login" (gh api user) or "view" (gh pr view) fail, or work again.
@@ -2519,6 +2521,129 @@ func TestReviewCardFollowsYourReviewAndTheAuthorsPushes(t *testing.T) {
 	waitForAll(t, e, "the merged PR to finish the card", func(tasks []*store.Task) bool { return reviewCard(tasks).ColumnID == "done" })
 	if data, _ := os.ReadFile(r.log); strings.Contains(string(data), "typed:FIX") {
 		t.Errorf("your own changes-requested review was sent to the agent to address:\n%s", data)
+	}
+}
+
+// approve has the rig's PR approved by you and waits for the card to move to Waiting.
+func (r *reviewRig) approve(t *testing.T, state string) string {
+	t.Helper()
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+	})
+	review := fmt.Sprintf(`{"author":{"login":"me"},"state":%q,"submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`, state)
+	r.gh("OPEN", "aaa", review)
+	waitForAll(t, r.e, "your review to move the card to Waiting", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "waiting" && c.PR.MyReview == state
+	})
+	return review
+}
+
+func TestDismissedApprovalMovesTheCardBackToReviewing(t *testing.T) {
+	for name, dismissed := range map[string]string{
+		"marked dismissed": `{"author":{"login":"me"},"state":"DISMISSED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`,
+		"gone":             ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newReviewRig(t, "them", reviewBoard)
+			r.approve(t, "APPROVED")
+			r.gh("OPEN", "aaa", dismissed)
+			waitForAll(t, r.e, "the dismissal to move the card back to Reviewing", func(tasks []*store.Task) bool {
+				c := reviewCard(tasks)
+				return c.ColumnID == "reviewing" && c.PR.MyReview == "DISMISSED"
+			})
+		})
+	}
+}
+
+func TestDismissedChangesRequestedLeavesTheCardWaiting(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	review := r.approve(t, "CHANGES_REQUESTED")
+	r.gh("OPEN", "aaa", strings.Replace(review, "CHANGES_REQUESTED", "DISMISSED", 1))
+	time.Sleep(600 * time.Millisecond)
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" {
+		t.Fatalf("a dismissed changes-requested review moved the card to %s", c.ColumnID)
+	}
+}
+
+func TestConflictsAfterYourApprovalMoveTheCardBackToReviewing(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	review := r.approve(t, "APPROVED")
+	r.mergeable = "UNKNOWN"
+	r.gh("OPEN", "aaa", review)
+	time.Sleep(600 * time.Millisecond)
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" || c.PR.Conflicting {
+		t.Fatalf("an unknown mergeable state changed the card: %s %+v", c.ColumnID, c.PR)
+	}
+	r.mergeable = "CONFLICTING"
+	r.gh("OPEN", "aaa", review)
+	waitForAll(t, r.e, "the conflicts to move the card back to Reviewing", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "reviewing" && c.PR.Conflicting
+	})
+}
+
+func TestConflictsAlreadyThereAtYourApprovalLeaveTheCardWaiting(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	r.mergeable = "CONFLICTING"
+	r.gh("OPEN", "aaa", "")
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "reviewing" && c.PR.Conflicting && agentDone(tasks)
+	})
+	r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+	waitForAll(t, r.e, "your approval to move the card to Waiting", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "waiting"
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" {
+		t.Fatalf("conflicts that were already there moved the card to %s", c.ColumnID)
+	}
+}
+
+func TestConflictsOnAChangesRequestedPRLeaveTheCardWaiting(t *testing.T) {
+	r := newReviewRig(t, "them", reviewBoard)
+	review := r.approve(t, "CHANGES_REQUESTED")
+	r.mergeable = "CONFLICTING"
+	r.gh("OPEN", "aaa", review)
+	time.Sleep(600 * time.Millisecond)
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" {
+		t.Fatalf("conflicts moved the card to %s", c.ColumnID)
+	}
+}
+
+func TestReReviewTurnEndMovesTheCardToTriage(t *testing.T) {
+	r := newReviewRig(t, "them", `{
+  "columns": [
+    {"id":"planning","name":"Planning","autoSpawn":true},
+    {"id": "reviewing", "name": "Reviewing", "autoSpawn": true,
+     "automations": {
+       "onEnter": [{"name": "Re-review", "type": "send_message", "message": "AGAIN"}],
+       "onTurnEnd": [{"name": "Triage", "type": "move_to_column", "targetColumn": "triage"}]}},
+    {"id": "triage", "name": "Triage", "autoSpawn": true},
+    {"id": "waiting", "name": "Waiting on author"},
+    {"id": "done", "name": "Done", "role": "done"}
+  ],
+  "reviewFlow": {"started": "triage", "reviewed": "waiting", "updated": "reviewing", "done": "done"}
+}`)
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Triage", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "triage" && agentDone(tasks)
+	})
+	review := `{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`
+	r.gh("OPEN", "aaa", review)
+	waitForAll(t, r.e, "your review to move the card to Waiting", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "waiting"
+	})
+	r.gh("OPEN", "bbb", review)
+	waitForAll(t, r.e, "the re-review to end and the card to land in Triage", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "triage" && c.PR.HeadSHA == "bbb" && agentDone(tasks)
+	})
+	if data, _ := os.ReadFile(r.log); !strings.Contains(string(data), "typed:AGAIN") {
+		t.Errorf("the agent was never asked to re-review:\n%s", data)
 	}
 }
 

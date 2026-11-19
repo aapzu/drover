@@ -450,7 +450,8 @@ func (e *Engine) login() (string, error) {
 // reviewStep records what changed on a PR you review and returns the move it
 // calls for, if any. A review you submit moves the card to reviewFlow.reviewed
 // from any column. New commits after it are logged and notified, and move a
-// card in reviewFlow.reviewed to reviewFlow.updated. A review already on the PR
+// card in reviewFlow.reviewed to reviewFlow.updated, as does a dismissed approval
+// of yours or merge conflicts appearing after it. A review already on the PR
 // when drover first looks is only recorded, so it moves nothing; a merge or
 // close still moves the card to reviewFlow.done. Called with mu held.
 func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string, info gh.PR, me string) prMove {
@@ -470,6 +471,18 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 			pr.ReviewedSHA = info.HeadSHA
 		}
 	}
+	prevConflicting := pr.Conflicting
+	switch info.Mergeable {
+	case "CONFLICTING":
+		pr.Conflicting = true
+	case "MERGEABLE":
+		pr.Conflicting = false
+	}
+	dismissed := !reviewed && pr.MyReview == "APPROVED" && (mine.State == "DISMISSED" || mine.SubmittedAt.IsZero())
+	if dismissed {
+		pr.MyReview = "DISMISSED"
+	}
+	conflicted := pr.MyReview == "APPROVED" && pr.Conflicting && !prevConflicting
 	if first {
 		return prMove{}
 	}
@@ -485,6 +498,14 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 	case reviewed:
 		card.AddLog(fmt.Sprintf("You reviewed PR #%d: %s", pr.Number, strings.ToLower(mine.State)))
 		return prMove{to: e.flowColumn(flow.Reviewed)}
+	case dismissed && e.inColumn(card, flow.Reviewed):
+		card.AddLog(fmt.Sprintf("Your approval of PR #%d was dismissed", pr.Number))
+		e.notify("#%d: your approval of PR #%d was dismissed", card.Number, pr.Number)
+		return prMove{to: e.flowColumn(flow.Updated)}
+	case conflicted && e.inColumn(card, flow.Reviewed):
+		card.AddLog(fmt.Sprintf("PR #%d has merge conflicts since your approval", pr.Number))
+		e.notify("#%d: PR #%d has merge conflicts since your approval", card.Number, pr.Number)
+		return prMove{to: e.flowColumn(flow.Updated)}
 	case info.HeadSHA != prevHead && pr.ReviewedSHA != "":
 		card.AddLog(fmt.Sprintf("New commits on PR #%d since your review", pr.Number))
 		e.notify("#%d: new commits on PR #%d since your review", card.Number, pr.Number)

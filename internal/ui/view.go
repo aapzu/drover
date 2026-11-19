@@ -558,6 +558,10 @@ func reviewBadge(pr *store.PR) string {
 	switch {
 	case pr.ReviewedSHA != "" && pr.HeadSHA != pr.ReviewedSHA:
 		return alert.Render("↻ new commits") + " "
+	case pr.MyReview == "DISMISSED":
+		return alert.Render("✗ approval dismissed") + " "
+	case pr.MyReview == "APPROVED" && pr.Conflicting:
+		return alert.Render("⚠ conflicts") + " "
 	case pr.MyReview == "APPROVED":
 		return idle.Render("✓ you approved") + " "
 	case pr.MyReview == "CHANGES_REQUESTED":

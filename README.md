@@ -466,7 +466,8 @@ same column targets as `prFlow`:
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
 - **updated:** you get a notice when the author pushes after your review. A
-  card in `reviewed` also moves here.
+  card in `reviewed` also moves here, as it does when your approval is
+  dismissed or the PR gets merge conflicts after you approved it.
 - **done:** where it goes once the PR merges or closes. A PR that was already
   merged or closed when drover first sees it moves nothing.
 
@@ -485,7 +486,9 @@ card within its lane only; use `m` to move it between them.
 
 The default lane is Reviewing, Triage findings and Waiting on author, with a
 `reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
-author, `updated` back to Reviewing when the author pushes, and `done` to Done. A board with a
+author, `updated` back to Reviewing when the author pushes, your approval is
+dismissed or the PR gets conflicts, and `done` to Done. Reviewing sends the card
+on to Triage findings once the re-review turn ends. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 

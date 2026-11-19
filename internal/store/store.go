@@ -168,6 +168,7 @@ type PR struct {
 	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
 	// ReviewedSHA is the commit your latest review was on.
 	ReviewedSHA string `json:"reviewedSha,omitempty"`
+	Conflicting bool   `json:"conflicting,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 

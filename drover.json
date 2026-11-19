@@ -75,6 +75,14 @@
             "message": "Review PR #{{prNumber}} ({{prUrl}}) again. Look only at what changed since your last review, and list what is still open.",
             "conditionScript": "test -n \"$DROVER_PRNUMBER\""
           }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Triage",
+            "type": "move_to_column",
+            "targetColumn": "triage",
+            "conditionScript": "test -n \"$DROVER_PRNUMBER\""
+          }
         ]
       }
     },

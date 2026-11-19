@@ -101,6 +101,8 @@ const (
 	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
 )
 
+const hasPR = `test -n "$DROVER_PRNUMBER"`
+
 const reReviewMessage = "Review PR #{{prNumber}} ({{prUrl}}) again. " +
 	"Look only at what changed since your last review, and list what is still open."
 
@@ -532,7 +534,10 @@ func Default() *Board {
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
 			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
-				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+				Automations: Automations{
+					OnEnter:   []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: hasPR}},
+					OnTurnEnd: []Automation{{Name: "Triage", Type: "move_to_column", TargetColumn: "triage", ConditionScript: hasPR}},
+				}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
 		},

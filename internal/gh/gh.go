@@ -19,6 +19,7 @@ type PR struct {
 	State          string `json:"state"`
 	ReviewDecision string `json:"reviewDecision"`
 	HeadSHA        string `json:"headRefOid"`
+	Mergeable      string `json:"mergeable"`
 	MergeCommit    *struct {
 		OID string `json:"oid"`
 	} `json:"mergeCommit"`
@@ -90,7 +91,7 @@ func run(dir, what string, args ...string) ([]byte, error) {
 
 // View fetches a pull request's title, branches, state and reviews.
 func View(dir, url string) (PR, error) {
-	out, err := run(dir, "gh pr view", "pr", "view", url, "--json", "title,headRefName,state,reviewDecision,headRefOid,mergeCommit,latestReviews,author")
+	out, err := run(dir, "gh pr view", "pr", "view", url, "--json", "title,headRefName,state,reviewDecision,headRefOid,mergeable,mergeCommit,latestReviews,author")
 	if err != nil {
 		return PR{}, err
 	}
