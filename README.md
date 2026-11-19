@@ -139,7 +139,7 @@ Each column takes these fields:
 | `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
 | `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
-| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card into an agent column without it creates the worktree and resumes the conversation there. Use it only for agents that don't edit files, such as plan mode. |
+| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card into an agent column without it creates the worktree and resumes the conversation there (for a review-lane column, in the background; see [The review lane](#the-review-lane)). Use it only for agents that don't edit files, such as plan mode. |
 | `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |
 
 A model or effort change respawns the agent with `--resume`. A permission
@@ -244,7 +244,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   worktree writes into the main checkout; list them in `linkExclude`.
   `initScript` then runs with `sh -c` in the new worktree before the agent
   starts, for example `pnpm i`. If it fails, so does the move, and the next
-  start runs it again.
+  start runs it again. Moving an agent that is already working in the project
+  root into a review-lane column is the exception: the move doesn't wait for
+  setup and succeeds even if it fails; see [The review lane](#the-review-lane).
 - **Keeping up with the base branch.** `u` fetches the card's base branch and
   fast-forwards the worktree to it. When the branch has commits of its own,
   a running agent is asked to merge it instead. `u` refuses while the agent
@@ -592,6 +594,15 @@ instead when you approve), `updated` back to Reviewing when the author pushes,
 and `done` to the lane's Done. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
+
+Moving a card whose agent is already working in the project root, such as one
+from Planning, into the lane doesn't wait for its worktree: the move returns at
+once and the agent keeps working in the root while the worktree and
+`initScript` run, so anything it edits meanwhile lands in the main checkout.
+The agent then resumes in the worktree with the lane column's settings, right
+away if it is idle and when its turn ends otherwise. If the setup fails, the
+agent stays in the root and the next move into a worktree column builds it
+again.
 
 `ctrl+n` starts a card with an agent straight in the lane, in its first
 agent column, and shows the lane if you had hidden it. `drover add --review`
