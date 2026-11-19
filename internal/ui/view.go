@@ -560,7 +560,7 @@ func reviewBadge(pr *store.PR) string {
 		return alert.Render("↻ new commits") + " "
 	case pr.MyReview == "DISMISSED":
 		return alert.Render("✗ approval dismissed") + " "
-	case pr.MyReview == "APPROVED" && pr.Conflicting:
+	case pr.MyReview == "APPROVED" && pr.Mergeable == "CONFLICTING":
 		return alert.Render("⚠ conflicts") + " "
 	case pr.MyReview == "APPROVED":
 		return idle.Render("✓ you approved") + " "

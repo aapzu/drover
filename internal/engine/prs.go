@@ -471,18 +471,20 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 			pr.ReviewedSHA = info.HeadSHA
 		}
 	}
-	prevConflicting := pr.Conflicting
-	switch info.Mergeable {
-	case "CONFLICTING":
-		pr.Conflicting = true
-	case "MERGEABLE":
-		pr.Conflicting = false
-	}
-	dismissed := !reviewed && pr.MyReview == "APPROVED" && (mine.State == "DISMISSED" || mine.SubmittedAt.IsZero())
+	dismissed := pr.MyReview == "APPROVED" && (mine.State == "DISMISSED" || mine.SubmittedAt.IsZero())
 	if dismissed {
 		pr.MyReview = "DISMISSED"
 	}
-	conflicted := pr.MyReview == "APPROVED" && pr.Conflicting && !prevConflicting
+	stale := ""
+	switch {
+	case dismissed:
+		stale = "your approval was dismissed"
+	case pr.MyReview == "APPROVED" && info.Mergeable == "CONFLICTING" && pr.Mergeable == "MERGEABLE":
+		stale = "merge conflicts since your approval"
+	}
+	if info.Mergeable == "CONFLICTING" || info.Mergeable == "MERGEABLE" {
+		pr.Mergeable = info.Mergeable
+	}
 	if first {
 		return prMove{}
 	}
@@ -498,13 +500,9 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 	case reviewed:
 		card.AddLog(fmt.Sprintf("You reviewed PR #%d: %s", pr.Number, strings.ToLower(mine.State)))
 		return prMove{to: e.flowColumn(flow.Reviewed)}
-	case dismissed && e.inColumn(card, flow.Reviewed):
-		card.AddLog(fmt.Sprintf("Your approval of PR #%d was dismissed", pr.Number))
-		e.notify("#%d: your approval of PR #%d was dismissed", card.Number, pr.Number)
-		return prMove{to: e.flowColumn(flow.Updated)}
-	case conflicted && e.inColumn(card, flow.Reviewed):
-		card.AddLog(fmt.Sprintf("PR #%d has merge conflicts since your approval", pr.Number))
-		e.notify("#%d: PR #%d has merge conflicts since your approval", card.Number, pr.Number)
+	case stale != "" && e.inColumn(card, flow.Reviewed):
+		card.AddLog(fmt.Sprintf("PR #%d: %s", pr.Number, stale))
+		e.notify("#%d: PR #%d: %s", card.Number, pr.Number, stale)
 		return prMove{to: e.flowColumn(flow.Updated)}
 	case info.HeadSHA != prevHead && pr.ReviewedSHA != "":
 		card.AddLog(fmt.Sprintf("New commits on PR #%d since your review", pr.Number))

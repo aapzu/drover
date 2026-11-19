@@ -2398,11 +2398,10 @@ const reviewBoard = `{
 // written by author. Its state and the failures of `gh pr view` and
 // `gh api user` are controlled by files in dir.
 type reviewRig struct {
-	e      *Engine
-	log    string
-	dir    string
-	author string
-	// mergeable is what gh reports for the PR's mergeable field.
+	e         *Engine
+	log       string
+	dir       string
+	author    string
 	mergeable string
 }
 
@@ -2569,18 +2568,20 @@ func TestDismissedChangesRequestedLeavesTheCardWaiting(t *testing.T) {
 
 func TestConflictsAfterYourApprovalMoveTheCardBackToReviewing(t *testing.T) {
 	r := newReviewRig(t, "them", reviewBoard)
+	r.mergeable = "MERGEABLE"
+	r.gh("OPEN", "aaa", "")
 	review := r.approve(t, "APPROVED")
 	r.mergeable = "UNKNOWN"
 	r.gh("OPEN", "aaa", review)
 	time.Sleep(600 * time.Millisecond)
-	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" || c.PR.Conflicting {
+	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" || c.PR.Mergeable == "CONFLICTING" {
 		t.Fatalf("an unknown mergeable state changed the card: %s %+v", c.ColumnID, c.PR)
 	}
 	r.mergeable = "CONFLICTING"
 	r.gh("OPEN", "aaa", review)
 	waitForAll(t, r.e, "the conflicts to move the card back to Reviewing", func(tasks []*store.Task) bool {
 		c := reviewCard(tasks)
-		return c.ColumnID == "reviewing" && c.PR.Conflicting
+		return c.ColumnID == "reviewing" && c.PR.Mergeable == "CONFLICTING"
 	})
 }
 
@@ -2588,15 +2589,7 @@ func TestConflictsAlreadyThereAtYourApprovalLeaveTheCardWaiting(t *testing.T) {
 	r := newReviewRig(t, "them", reviewBoard)
 	r.mergeable = "CONFLICTING"
 	r.gh("OPEN", "aaa", "")
-	r.ask(t)
-	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
-		c := reviewCard(tasks)
-		return c.ColumnID == "reviewing" && c.PR.Conflicting && agentDone(tasks)
-	})
-	r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
-	waitForAll(t, r.e, "your approval to move the card to Waiting", func(tasks []*store.Task) bool {
-		return reviewCard(tasks).ColumnID == "waiting"
-	})
+	r.approve(t, "APPROVED")
 	time.Sleep(600 * time.Millisecond)
 	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" {
 		t.Fatalf("conflicts that were already there moved the card to %s", c.ColumnID)
@@ -2608,7 +2601,7 @@ func TestConflictsOnAChangesRequestedPRLeaveTheCardWaiting(t *testing.T) {
 	review := r.approve(t, "CHANGES_REQUESTED")
 	r.mergeable = "CONFLICTING"
 	r.gh("OPEN", "aaa", review)
-	time.Sleep(600 * time.Millisecond)
+	waitForAll(t, r.e, "the poll to see the conflicts", func(tasks []*store.Task) bool { return reviewCard(tasks).PR.Mergeable == "CONFLICTING" })
 	if c := reviewCard(r.e.Snapshot().Tasks); c.ColumnID != "waiting" {
 		t.Fatalf("conflicts moved the card to %s", c.ColumnID)
 	}

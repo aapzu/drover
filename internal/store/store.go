@@ -168,8 +168,9 @@ type PR struct {
 	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
 	// ReviewedSHA is the commit your latest review was on.
 	ReviewedSHA string `json:"reviewedSha,omitempty"`
-	Conflicting bool   `json:"conflicting,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Mergeable is the last MERGEABLE or CONFLICTING gh reported; empty until seen.
+	Mergeable string `json:"mergeable,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // IsReview reports whether p is a PR you review, and is safe on nil.
