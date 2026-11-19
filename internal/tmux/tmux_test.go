@@ -525,3 +525,29 @@ func TestSendTextAndScreen(t *testing.T) {
 		t.Error("pasting into a missing session is not an error")
 	}
 }
+
+func TestWaitStable(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "stable"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "echo first; for i in 1 2 3 4 5 6; do sleep 0.1; echo $i; done; echo second; sleep 30"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "first")
+	start := time.Now()
+	if err := WaitStable(name, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 600*time.Millisecond {
+		t.Errorf("returned after %v while the screen was about to change", time.Since(start))
+	}
+	if screen, _ := Screen(name); !strings.Contains(screen, "second") {
+		t.Errorf("returned before the screen settled:\n%s", screen)
+	}
+	if err := WaitStable("missing", time.Second); err == nil {
+		t.Error("WaitStable on a missing session is not an error")
+	}
+}
