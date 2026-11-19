@@ -1279,8 +1279,11 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 }
 
 // activate makes sure the agent for col is running in the task's worktree, or
-// in the project root for a noWorktree column without one: an existing session is kept (or respawned when the model changes), a missing
-// one is resumed or started, then the enter group runs. card is the card being
+// in the project root for a noWorktree column without one: an existing session
+// is kept (or respawned when the model changes), a missing one is resumed or
+// started, then the enter group runs. A live agent that is working in the root
+// stays there while moveIntoWorktree builds the worktree in the background, and
+// switches to col's settings when it moves in. card is the card being
 // moved; the session belongs to its group's owner and now follows card. evict
 // lets a start you asked for suspend the longest-idle agent when every slot is
 // taken.
@@ -1290,7 +1293,12 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	e.mu.Lock()
 	t := e.owner(card)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, col, card.ID)
+	later := e.deferWorktree(t, col)
+	worktree := e.Root
+	var err error
+	if !later {
+		worktree, err = e.ensureWorktree(t, col, card.ID)
+	}
 	if err != nil {
 		e.logf(card, "Worktree failed: %v", err)
 		e.notify("#%d: %v", card.Number, err)
@@ -1342,7 +1350,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	gc := groupContext{from: from, to: col}
 
 	switch {
-	case live && changed && !busy:
+	case live && changed && !busy && !later:
 		if err := e.switchSettings(t, key, col, worktree); err != nil {
 			return err
 		}
@@ -1367,7 +1375,64 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		e.sendMessage(t, key, message)
 	}
 	e.runEnterGroup(card, enter, gc)
+	if later {
+		e.logf(card, "Creating the worktree while the agent keeps working in the project root")
+		id := card.ID
+		e.work.Go(func() { e.moveIntoWorktree(id) })
+	}
 	return nil
+}
+
+// deferWorktree reports whether the move of t's card into col should leave
+// its agent in the project root while the worktree is built: col is in the
+// review lane, the task has no worktree yet, and its agent is running in the
+// root and has a conversation to resume (it was prompted and isn't imported).
+// Called without mu held.
+func (e *Engine) deferWorktree(t *store.Task, col config.Column) bool {
+	if !col.InReviewLane() || e.rootAgent(t, col) == "" {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return t.WorktreePath == "" && !t.Sessions[store.MainSession].Imported && e.talkedTo(t, store.MainSession)
+}
+
+// moveIntoWorktree builds the worktree of a card whose agent kept working in
+// the project root and moves the agent into it with col's settings, right away
+// when the agent is idle or still starting, and once its turn ends otherwise.
+// If the worktree can't be built, the agent stays in the root and only gets the
+// settings. It takes the group lock itself.
+func (e *Engine) moveIntoWorktree(cardID string) {
+	card, owner, unlock := e.lockGroup(cardID)
+	defer unlock()
+	if card == nil {
+		return
+	}
+	defer e.setBusy(cardID, "")
+	e.mu.Lock()
+	cur := e.sessionColumn(owner)
+	e.mu.Unlock()
+	if !isAgentColumn(cur) || cur.NoWorktree {
+		e.logf(card, "Not creating the worktree: the card left the column it was moved into")
+		return
+	}
+	if _, err := e.ensureWorktree(owner, cur, cardID); err != nil {
+		e.logf(card, "Worktree failed, the agent stays in the project root: %v", err)
+		e.notify("#%d: couldn't create the worktree, the agent keeps working in the project root: %v", card.Number, err)
+	}
+	key := store.MainSession
+	var idle bool
+	e.mu.Lock()
+	if s := owner.Sessions[key]; s != nil && s.Status == store.StatusRunning && settingsDiffer(s, cur, e.board.PermissionMode(cur), e.dirOf(owner)) {
+		s.RespawnPending = true
+		idle = s.Activity == store.ActivityIdle || s.Activity == store.ActivityStarting
+	}
+	e.mu.Unlock()
+	if idle {
+		e.respawnLocked(owner.ID, key)
+	} else {
+		e.logf(card, "Agent switches to %s's settings and its worktree when its current turn ends", cur.Name)
+	}
 }
 
 // initialPrompt is the first message of a fresh session. A column whose enter

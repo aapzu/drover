@@ -607,11 +607,16 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 
 // respawnPending switches an agent whose card moved mid-turn into a column
 // with other settings or another directory, in place or by resuming its
-// conversation. A keepAgent
-// column drops a pending settings switch and keeps the agent's settings.
+// conversation. A keepAgent column drops a pending settings switch and keeps
+// the agent's settings.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
+	e.respawnLocked(taskID, key)
+}
+
+// respawnLocked is respawnPending for a caller that holds lockTask(taskID).
+func (e *Engine) respawnLocked(taskID, key string) {
 	e.mu.Lock()
 	t := e.find(taskID)
 	var s *store.Session
@@ -640,6 +645,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	if err := e.switchSettings(t, key, col, worktree); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
+		e.notify("#%d: respawning the agent failed: %v", t.Number, err)
 	}
 }
 
