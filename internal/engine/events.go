@@ -68,6 +68,7 @@ func (e *Engine) Tick() {
 				}
 			}
 		}
+		e.expireSchedules(time.Now())
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
 		followUps = append(followUps, e.backgroundScans()...)
@@ -129,6 +130,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking
 			s.Started = true
@@ -152,6 +154,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if c, ok := ev.ScheduleCall(time.Now()); ok {
+				s.ApplySchedule(c)
+			}
 			if id, ok := ev.BackgroundAgent(); ok {
 				s.Background = append(s.Background, id)
 			}
@@ -224,6 +229,20 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		}
 	}
 	return out
+}
+
+// expireSchedules drops the schedules of agents that stopped running, which
+// lose them, and ends those that missed their run. Called with mu held.
+func (e *Engine) expireSchedules(now time.Time) {
+	for _, t := range e.state.Tasks {
+		for _, s := range t.Sessions {
+			if s.Status == store.StatusRunning {
+				s.ExpireSchedules(now)
+			} else {
+				s.ClearSchedules()
+			}
+		}
+	}
 }
 
 // backgroundScans returns follow-ups that read the transcripts of sessions with
@@ -509,7 +528,8 @@ func (e *Engine) shipTask(t *store.Task) bool {
 // shipOpenedPR moves the card that took its session's first PR to the
 // prFlow's opened column once the agent is idle, unless you moved it first.
 // A PR you review goes to the reviewFlow's started column instead, once gh has
-// confirmed it isn't yours. A card whose agent runs outside drover never moves.
+// confirmed it isn't yours, also from the column imported reviews land in. A
+// card whose agent runs outside drover never moves.
 // It reports whether it moved the card. The caller holds the task lock.
 func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	e.mu.Lock()
@@ -542,7 +562,7 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 		switch {
 		case target.ID == "" || target.ID == col.ID:
 			target = config.Column{}
-		case !isAgentColumn(col):
+		case !isAgentColumn(col) && !(review && col.ID == e.board.ReviewImport(false).ID):
 			t.AddLog(fmt.Sprintf("%s, not moving to %s: the card is in %s", reason, target.Name, col.Name))
 			target = config.Column{}
 		}
