@@ -308,6 +308,11 @@ func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
 			if got := readFile(log); !strings.Contains(got, want) {
 				t.Errorf("launch env missing %q:\n%s", want, got)
 			}
+			name, _ := e.LiveSession(task.ID)
+			out, err := exec.Command("tmux", "-L", tmux.Socket, "show-options", "-Av", "-t", name, "mouse").Output()
+			if wantMouse := map[bool]string{true: "off", false: "on"}[on]; err != nil || strings.TrimSpace(string(out)) != wantMouse {
+				t.Errorf("tmux mouse = %q (err %v), want %q", out, err, wantMouse)
+			}
 		})
 	}
 }
@@ -2394,6 +2399,12 @@ const reviewBoard = `{
   "reviewFlow": {"started": "reviewing", "reviewed": "waiting", "updated": "reviewing", "done": "done"}
 }`
 
+// approvedReviewBoard is reviewBoard with a column of its own for approvals.
+var approvedReviewBoard = strings.Replace(strings.Replace(reviewBoard,
+	`{"id": "done"`, `{"id": "approved", "name": "Approved"},
+    {"id": "done"`, 1),
+	`"reviewed": "waiting",`, `"reviewed": "waiting", "approved": "approved",`, 1)
+
 // reviewRig runs an engine against a fake gh that reports one PR, number 7,
 // written by author. Its state and the failures of `gh pr view` and
 // `gh api user` are controlled by files in dir.
@@ -2556,6 +2567,22 @@ func TestDismissedApprovalMovesTheCardBackToReviewing(t *testing.T) {
 	}
 }
 
+func TestDismissedApprovalLeavesTheApprovedColumn(t *testing.T) {
+	r := newReviewRig(t, "them", approvedReviewBoard)
+	r.ask(t)
+	waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+	})
+	r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+	waitForAll(t, r.e, "your approval to move the card to Approved", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "approved"
+	})
+	r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"DISMISSED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+	waitForAll(t, r.e, "the dismissal to move the card back to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing"
+	})
+}
+
 func TestDismissedChangesRequestedLeavesTheCardWaiting(t *testing.T) {
 	r := newReviewRig(t, "them", reviewBoard)
 	review := r.approve(t, "CHANGES_REQUESTED")
@@ -2640,6 +2667,43 @@ func TestReReviewTurnEndMovesTheCardToTriage(t *testing.T) {
 	}
 }
 
+func TestReviewCardMovesToApprovedOnlyOnAnApproval(t *testing.T) {
+	r := newReviewRig(t, "them", approvedReviewBoard)
+	e := r.e
+	r.ask(t)
+	waitForAll(t, e, "the review card to move to Reviewing and its agent to finish", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+	})
+
+	commented := `{"author":{"login":"me"},"state":"COMMENTED","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`
+	r.gh("OPEN", "aaa", commented)
+	waitForAll(t, e, "a comment review to move the card to Waiting", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "waiting" && c.PR.MyReview == "COMMENTED"
+	})
+
+	approved := commented + `,
+	  {"author":{"login":"me"},"state":"APPROVED","submittedAt":"2026-10-20T10:00:00Z","commit":{"oid":"aaa"}}`
+	r.gh("OPEN", "aaa", approved)
+	waitForAll(t, e, "an approval to move the card to Approved", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "approved" && c.PR.MyReview == "APPROVED"
+	})
+
+	r.gh("OPEN", "bbb", approved)
+	waitForAll(t, e, "new commits to move the approved card back to Reviewing", func(tasks []*store.Task) bool {
+		return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+	})
+
+	changes := approved + `,
+	  {"author":{"login":"me"},"state":"CHANGES_REQUESTED","submittedAt":"2026-10-21T10:00:00Z","commit":{"oid":"bbb"}}`
+	r.gh("OPEN", "bbb", changes)
+	waitForAll(t, e, "a later changes-requested review to move the card back to Waiting", func(tasks []*store.Task) bool {
+		c := reviewCard(tasks)
+		return c.ColumnID == "waiting" && c.PR.MyReview == "CHANGES_REQUESTED"
+	})
+}
+
 func TestReviewCardWaitsForTheAgentBeforeMovingOnYourReview(t *testing.T) {
 	r := newReviewRig(t, "them", reviewBoard)
 	r.ask(t)
@@ -2660,6 +2724,27 @@ func TestReviewCardWaitsForTheAgentBeforeMovingOnYourReview(t *testing.T) {
 	waitForAll(t, r.e, "the review to move the card once the agent is idle", func(tasks []*store.Task) bool {
 		return reviewCard(tasks).ColumnID == "waiting"
 	})
+}
+
+func TestApprovingAReviewMovesTheCardToApproved(t *testing.T) {
+	board := strings.Replace(reviewBoard, `"reviewed": "waiting",`, `"reviewed": "waiting", "approved": "done",`, 1)
+	if board == reviewBoard {
+		t.Fatal("reviewBoard has no reviewed target to add approved after")
+	}
+	for _, tc := range []struct{ state, column string }{{"APPROVED", "done"}, {"CHANGES_REQUESTED", "waiting"}} {
+		t.Run(tc.state, func(t *testing.T) {
+			r := newReviewRig(t, "them", board)
+			r.ask(t)
+			waitForAll(t, r.e, "the review card to move to Reviewing", func(tasks []*store.Task) bool {
+				return reviewCard(tasks).ColumnID == "reviewing" && agentDone(tasks)
+			})
+			r.gh("OPEN", "aaa", `{"author":{"login":"me"},"state":"`+tc.state+`","submittedAt":"2026-10-19T10:00:00Z","commit":{"oid":"aaa"}}`)
+			waitForAll(t, r.e, "your review to move the card to "+tc.column, func(tasks []*store.Task) bool {
+				c := reviewCard(tasks)
+				return c.ColumnID == tc.column && c.PR.MyReview == tc.state
+			})
+		})
+	}
 }
 
 func TestReviewOfYourOwnPRIsForgotten(t *testing.T) {
