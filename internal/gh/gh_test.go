@@ -104,12 +104,12 @@ func TestNumber(t *testing.T) {
 }
 
 func TestViewParsesThePullRequest(t *testing.T) {
-	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
+	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeable":"CONFLICTING","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
 	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.Mergeable != "CONFLICTING" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
 		t.Errorf("View = %+v", pr)
 	}
 }

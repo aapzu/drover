@@ -427,8 +427,12 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 	if c, _ := board.Find(f.Done); !c.IsDone() {
 		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
 	}
-	if c, _ := board.Find(f.Updated); len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
+	c, _ := board.Find(f.Updated)
+	if len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
 		t.Errorf("reviewFlow.updated column doesn't ask for a re-review on entry: %+v", c.Automations)
+	}
+	if len(c.Automations.OnTurnEnd) != 1 || c.Automations.OnTurnEnd[0].Type != "move_to_column" || c.Automations.OnTurnEnd[0].TargetColumn != "triage" {
+		t.Errorf("reviewFlow.updated column doesn't move on to triage when the re-review ends: %+v", c.Automations)
 	}
 	if c, _ := board.Find(f.Requested); c.IsAgent() || !c.InReviewLane() {
 		t.Errorf("reviewFlow.requested = %q should be a plain column in the lane: %+v", f.Requested, c)

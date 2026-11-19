@@ -535,7 +535,8 @@ same column targets as `prFlow`:
   open and you have reviewed it, so a push or a new request brings it back,
   until it is archived.
 - **updated:** you get a notice when the author pushes after your review. A
-  card in `reviewed` or `approved` also moves here.
+  card in `reviewed` or `approved` also moves here, as it does when your
+  approval is dismissed or the PR gets merge conflicts after you approved it.
 - **done:** where it goes once the PR merges or closes. A PR that was already
   merged or closed when drover first sees it moves nothing.
 
@@ -591,7 +592,9 @@ author and its own Done (id `review-done`), with a `reviewFlow` that lands
 imported PRs (`requested`) in Review requested, sends `started` to Triage
 findings, `reviewed` to Waiting on author (`approved` goes to the lane's Done
 instead when you approve), `updated` back to Reviewing when the author pushes,
-and `done` to the lane's Done. A board with a
+your approval is dismissed or the PR gets conflicts, and `done` to the lane's
+Done. Reviewing sends the card on to Triage findings once a re-review turn
+ends. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 

@@ -458,7 +458,8 @@ func (e *Engine) login() (string, error) {
 // from any column, or to reviewFlow.approved when it approves the PR. A new
 // request for your review after it moves a card in reviewFlow.reviewed or
 // reviewFlow.approved to reviewFlow.requested, and new commits move it to
-// reviewFlow.updated; both are logged and notified. A review already on the PR
+// reviewFlow.updated; both are logged and notified. So does a dismissed approval
+// of yours or merge conflicts appearing after it. A review already on the PR
 // when drover first looks is only recorded, so it moves nothing; a merge or
 // close still moves the card to reviewFlow.done. Called with mu held.
 func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string, info gh.PR, me string) prMove {
@@ -480,6 +481,20 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 		if pr.ReviewedSHA == "" {
 			pr.ReviewedSHA = info.HeadSHA
 		}
+	}
+	dismissed := pr.MyReview == "APPROVED" && (mine.State == "DISMISSED" || mine.SubmittedAt.IsZero())
+	if dismissed {
+		pr.MyReview = "DISMISSED"
+	}
+	stale := ""
+	switch {
+	case dismissed:
+		stale = "your approval was dismissed"
+	case pr.MyReview == "APPROVED" && info.Mergeable == "CONFLICTING" && pr.Mergeable == "MERGEABLE":
+		stale = "merge conflicts since your approval"
+	}
+	if info.Mergeable == "CONFLICTING" || info.Mergeable == "MERGEABLE" {
+		pr.Mergeable = info.Mergeable
 	}
 	if first {
 		return prMove{}
@@ -516,6 +531,11 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 		if waiting {
 			return prMove{to: e.flowColumn(flow.Updated)}
 		}
+	}
+	if stale != "" && waiting {
+		card.AddLog(fmt.Sprintf("PR #%d: %s", pr.Number, stale))
+		e.notify("#%d: PR #%d: %s", card.Number, pr.Number, stale)
+		return prMove{to: e.flowColumn(flow.Updated)}
 	}
 	return prMove{}
 }
