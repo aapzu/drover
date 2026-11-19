@@ -420,17 +420,25 @@ func TestAttachDoneReturnsToTheBoard(t *testing.T) {
 	}
 
 	m = realModel(t, "named")
+	term := captureTerminal(t)
 	_, cmd = update(m, attachDoneMsg{id: m.snap.Tasks[0].ID, agent: true})
-	if msgs := runCmds(cmd); len(msgs) != 1 {
+	if msgs := runCmds(cmd); len(msgs) != 2 {
 		t.Errorf("a titled card is kept, but got %d msgs", len(msgs))
+	}
+	if term.String() != extendedKeysOn {
+		t.Errorf("attach done wrote %q, want extended keys back on", term.String())
 	}
 }
 
 func TestAttachDoneLeavesTheMouseAloneWhenItIsOff(t *testing.T) {
 	m := realModel(t, "named")
 	m.prefs.NoMouse = true
-	if _, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID}); len(runCmds(cmd)) != 0 {
-		t.Error("attach done enabled the mouse that is off")
+	captureTerminal(t)
+	_, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID})
+	for _, msg := range runCmds(cmd) {
+		if msg != nil {
+			t.Errorf("attach done enabled the mouse that is off: %T", msg)
+		}
 	}
 }
 

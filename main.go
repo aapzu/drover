@@ -99,7 +99,8 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen(), tea.WithFilter(ui.FilterKeys))
+	defer fmt.Print(ui.ExtendedKeysOff)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
