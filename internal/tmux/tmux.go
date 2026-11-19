@@ -252,6 +252,9 @@ func Screen(name string) (string, error) {
 // SendText types a message into the agent and submits it. Multi-line text is
 // pasted as one bracketed paste so newlines do not submit early.
 func SendText(name, text string) error {
+	if err := WaitStable(name, stableTimeout); err != nil {
+		return err
+	}
 	if strings.Contains(text, "\n") || len(text) > 200 {
 		if err := Paste(name, text); err != nil {
 			return err
@@ -259,8 +262,39 @@ func SendText(name, text string) error {
 	} else if err := SendLiteral(name, text); err != nil {
 		return err
 	}
-	time.Sleep(300 * time.Millisecond)
+	if err := WaitStable(name, stableTimeout); err != nil {
+		return err
+	}
 	return SendKey(name, "Enter")
+}
+
+const (
+	stableTimeout = 3 * time.Second
+	stableFor     = 300 * time.Millisecond
+	stablePoll    = 100 * time.Millisecond
+)
+
+// WaitStable returns once the screen has stopped changing for a moment, or
+// after timeout.
+func WaitStable(name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	last, since := "", time.Now()
+	for {
+		screen, err := Screen(name)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		if screen != last {
+			last, since = screen, now
+		} else if now.Sub(since) >= stableFor {
+			return nil
+		}
+		if now.After(deadline) {
+			return nil
+		}
+		time.Sleep(stablePoll)
+	}
 }
 
 // SendLiteral types text without interpreting key names.
