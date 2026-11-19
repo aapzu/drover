@@ -179,8 +179,10 @@ func New(eng *engine.Engine) Model {
 	ta.SetHeight(8)
 	si := textinput.New()
 	si.Placeholder = "Message for the agent"
+	si.Prompt = ""
 	fi := textinput.New()
 	fi.Placeholder = "Words to match"
+	fi.Prompt = ""
 	m := Model{
 		eng:         eng,
 		snap:        eng.Snapshot(),

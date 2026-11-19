@@ -60,3 +60,13 @@ func TestBoardFooter(t *testing.T) {
 		})
 	}
 }
+
+func TestInputFootersHaveOneCaret(t *testing.T) {
+	for _, md := range []mode{modeSend, modeFilter} {
+		m := realModel(t, "first")
+		m.mode = md
+		if plain := ansi.Strip(m.renderFooter()); strings.Contains(plain, "> ") {
+			t.Errorf("mode %v footer has a second prompt: %q", md, plain)
+		}
+	}
+}
