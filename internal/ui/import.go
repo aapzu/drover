@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/linear"
 )
 
@@ -21,15 +22,18 @@ var activeTab = lipgloss.NewStyle().Bold(true).Background(accent).Foreground(lip
 const (
 	sourceClaude = iota
 	sourceLinear
+	sourceReviews
+	sources
 )
 
 const importPageSize = 40
 
-// importItem is a session, an issue, or a header over the sessions started in
-// one directory.
+// importItem is a session, an issue, a PR to review, or a header over the
+// sessions started in one directory or the PRs of one source.
 type importItem struct {
 	session  *claude.Found
 	issue    *linear.Issue
+	review   *engine.ReviewPR
 	selected bool
 	header   string
 }
@@ -61,6 +65,12 @@ type issuesLoadedMsg struct {
 	err    error
 	single bool
 }
+type reviewsLoadedMsg struct {
+	gen     int
+	reviews []engine.ReviewPR
+	err     error
+	single  bool
+}
 
 func newImportState() importState {
 	ki := textinput.New()
@@ -79,6 +89,12 @@ func (m *Model) openImport(source int) tea.Cmd {
 	m.imp.loading = true
 	m.imp.gen++
 	gen, eng := m.imp.gen, m.eng
+	if source == sourceReviews {
+		return func() tea.Msg {
+			reviews, err := eng.ReviewPRs()
+			return reviewsLoadedMsg{gen: gen, reviews: reviews, err: err}
+		}
+	}
 	if !eng.HasLinear() {
 		m.imp.loading = false
 		m.imp.err = "Set LINEAR_API_KEY (linear.app → Settings → Security & access → Personal API keys) and restart."
@@ -129,7 +145,33 @@ func groupSessions(sessions []claude.Found, root string, prev map[string]bool) [
 	return items
 }
 
-// group returns the sessions under the header at index h.
+const (
+	reviewsRequested = "Requested from me"
+	reviewsReviewed  = "Reviewed by me, still open"
+)
+
+// groupReviews lists the PRs awaiting your review, then the ones you have
+// reviewed, each under a header. URLs in selected start selected.
+func groupReviews(reviews []engine.ReviewPR, selected map[string]bool) []importItem {
+	var items []importItem
+	for _, group := range []struct {
+		header   string
+		reviewed bool
+	}{{reviewsRequested, false}, {reviewsReviewed, true}} {
+		start := len(items)
+		for i := range reviews {
+			if r := &reviews[i]; r.Reviewed == group.reviewed {
+				items = append(items, importItem{review: r, selected: selected[r.URL]})
+			}
+		}
+		if len(items) > start {
+			items = slices.Insert(items, start, importItem{header: group.header})
+		}
+	}
+	return items
+}
+
+// group returns the items under the header at index h.
 func (s *importState) group(h int) []importItem {
 	end := h + 1
 	for end < len(s.items) && !s.items[end].isHeader() {
@@ -171,6 +213,34 @@ func (m Model) updateImportLoaded(msg tea.Msg) Model {
 				m.imp.cursor = i
 			}
 		}
+	case reviewsLoadedMsg:
+		if msg.gen != m.imp.gen || m.mode != modeImport {
+			return m
+		}
+		m.imp.loading = false
+		if msg.err != nil {
+			m.imp.err = msg.err.Error()
+			return m
+		}
+		m.imp.err = ""
+		var reviews []engine.ReviewPR
+		selected := map[string]bool{}
+		if msg.single {
+			for _, it := range m.imp.items {
+				if it.review != nil && it.review.URL != msg.reviews[0].URL {
+					reviews = append(reviews, *it.review)
+					selected[it.review.URL] = it.selected
+				}
+			}
+			selected[msg.reviews[0].URL] = true
+		}
+		reviews = append(reviews, msg.reviews...)
+		m.imp.items, m.imp.cursor = groupReviews(reviews, selected), 0
+		for i, it := range m.imp.items {
+			if msg.single && it.review != nil && it.review.URL == msg.reviews[0].URL {
+				m.imp.cursor = i
+			}
+		}
 	case issuesLoadedMsg:
 		if msg.gen != m.imp.gen || m.mode != modeImport {
 			return m
@@ -207,6 +277,15 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			imp.gen++
 			gen, eng := imp.gen, m.eng
 			imp.loading = true
+			if imp.source == sourceReviews {
+				return m, func() tea.Msg {
+					pr, err := eng.ReviewPRByURL(ref)
+					if err != nil {
+						return reviewsLoadedMsg{gen: gen, err: err}
+					}
+					return reviewsLoadedMsg{gen: gen, reviews: []engine.ReviewPR{pr}, single: true}
+				}
+			}
 			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
@@ -225,8 +304,11 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		m.mode = modeBoard
-	case "tab", "shift+tab":
-		cmd := m.openImport(1 - imp.source)
+	case "tab":
+		cmd := m.openImport((imp.source + 1) % sources)
+		return m, cmd
+	case "shift+tab":
+		cmd := m.openImport((imp.source + sources - 1) % sources)
 		return m, cmd
 	case "up", "k":
 		imp.cursor = max(0, imp.cursor-1)
@@ -257,15 +339,20 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case "/":
-		if imp.source == sourceLinear && m.eng.HasLinear() {
+		if imp.source == sourceReviews || imp.source == sourceLinear && m.eng.HasLinear() {
 			imp.keyEntry = true
 			imp.keyInput.Reset()
+			imp.keyInput.Placeholder = "DX-123 or a linear.app issue URL"
+			if imp.source == sourceReviews {
+				imp.keyInput.Placeholder = "a GitHub pull request URL"
+			}
 			cmd := imp.keyInput.Focus()
 			return m, cmd
 		}
 	case "enter":
 		var sessions []claude.Found
 		var issues []linear.Issue
+		var reviews []engine.ReviewPR
 		for i, it := range imp.items {
 			if !it.selected && i != imp.cursor {
 				continue
@@ -279,15 +366,18 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if it.issue != nil {
 				issues = append(issues, *it.issue)
 			}
+			if it.review != nil {
+				reviews = append(reviews, *it.review)
+			}
 		}
-		n := m.eng.ImportSessions(sessions) + len(m.eng.ImportIssues(issues))
+		n := m.eng.ImportSessions(sessions) + len(m.eng.ImportIssues(issues)) + len(m.eng.ImportReviews(reviews))
 		m.snap = m.eng.Snapshot()
 		m.mode = modeBoard
 		switch {
 		case n > 0:
 			m.selectTask(m.snap.Tasks[len(m.snap.Tasks)-1])
 			m.setFlash(fmt.Sprintf("Imported %d card(s)", n))
-		case len(sessions)+len(issues) > 0:
+		case len(sessions)+len(issues)+len(reviews) > 0:
 			m.setFlash("Already on the board")
 		}
 	}
@@ -327,7 +417,7 @@ func (m Model) renderImport(height int) string {
 		return dim.Render(" " + name + " ")
 	}
 	lines := []string{
-		tab("Claude sessions", imp.source == sourceClaude) + "  " + tab("Linear", imp.source == sourceLinear),
+		tab("Claude sessions", imp.source == sourceClaude) + "  " + tab("Linear", imp.source == sourceLinear) + "  " + tab("Reviews", imp.source == sourceReviews),
 		"",
 	}
 	switch {
@@ -337,6 +427,8 @@ func (m Model) renderImport(height int) string {
 		lines = append(lines, needsYou.Render(ansi.Wordwrap(imp.err, inner, " ")))
 	case len(imp.items) == 0 && imp.source == sourceClaude:
 		lines = append(lines, dim.Render("No running agents or `claude agents` sessions for this repository that aren't on the board yet."))
+	case len(imp.items) == 0 && imp.source == sourceReviews:
+		lines = append(lines, dim.Render("No open PRs to review that aren't on the board yet. Press / to fetch one by URL."))
 	case len(imp.items) == 0:
 		lines = append(lines, dim.Render("No open issues assigned to you. Press / to fetch one by key."))
 	}
@@ -385,19 +477,30 @@ func (m Model) renderImport(height int) string {
 		} else if is := it.issue; is != nil {
 			label = bold.Render(is.Identifier) + " " + is.Title
 			detail = dim.Render(is.State.Name + "  " + is.BranchName)
+		} else if r := it.review; r != nil {
+			label = bold.Render(fmt.Sprintf("#%d", r.Number)) + " " + r.Title
+			detail = "@" + r.Author.Login
+			if r.IsDraft {
+				detail += " · draft"
+			}
+			detail = dim.Render(detail + "  " + r.URL)
 		}
 		line := pointer + check + " " + label
 		if i == imp.cursor {
 			line = bold.Render(pointer+check+" ") + label
 		}
 		indent := ""
-		if it.session != nil {
+		if it.session != nil || it.review != nil {
 			indent = "  "
 		}
 		lines = append(lines, ansi.Truncate(indent+line, inner, "…"), indent+"      "+ansi.Truncate(detail, inner-6-len(indent), "…"))
 	}
 	if imp.keyEntry {
-		lines = append(lines, "", "Issue › "+imp.keyInput.View())
+		prompt := "Issue › "
+		if imp.source == sourceReviews {
+			prompt = "PR › "
+		}
+		lines = append(lines, "", prompt+imp.keyInput.View())
 	}
 	hint := "space select · a all · enter import · tab switch source · esc close"
 	if imp.more {
@@ -406,9 +509,15 @@ func (m Model) renderImport(height int) string {
 	if imp.source == sourceLinear {
 		hint = "space select · a all · / fetch by key · enter import · tab switch · esc close"
 	}
+	if imp.source == sourceReviews {
+		hint = "space select · a all · / fetch by URL · enter import · tab switch · esc close"
+	}
 	lines = append(lines, "", dim.Render(hint))
 	if imp.source == sourceClaude {
 		lines = append(lines, dim.Render("Running agents keep running where they are; the card mirrors them until they exit."))
+	}
+	if imp.source == sourceReviews {
+		lines = append(lines, dim.Render("No agent starts; enter on a card, or moving it to an agent column, reviews the PR."))
 	}
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

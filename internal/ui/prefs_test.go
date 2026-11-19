@@ -25,6 +25,7 @@ func TestPrefsRoundTrip(t *testing.T) {
 		ShowSettings:     true,
 		AssistantWidth:   50,
 		ReviewLane:       ptr(false),
+		HideMainLane:     true,
 	}
 	if err := want.save(root); err != nil {
 		t.Fatal(err)

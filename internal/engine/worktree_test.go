@@ -242,7 +242,7 @@ func TestShellOpensInTheMainCheckoutBeforeTheCardHasAWorktree(t *testing.T) {
 	}
 }
 
-const reviewLaneBoard = `{"initScript":%q,"columns":[
+const deferredWorktreeBoard = `{"initScript":%q,"columns":[
   {"id":"backlog","name":"Backlog"},
   {"id":"plan","name":"Planning","autoSpawn":true,"noWorktree":true},
   {"id":"triage","name":"Triage","lane":"review","autoSpawn":true%s},
@@ -252,7 +252,7 @@ func startedInPlanning(t *testing.T, initScript, triageExtra string) (e *Engine,
 	t.Helper()
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(reviewLaneBoard, initScript, triageExtra)), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(deferredWorktreeBoard, initScript, triageExtra)), 0o644)
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)

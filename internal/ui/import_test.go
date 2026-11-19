@@ -2,6 +2,8 @@ package ui
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/engine"
+	"github.com/aapzu/drover/internal/gh"
 	"github.com/aapzu/drover/internal/linear"
 )
 
@@ -533,4 +536,128 @@ func TestViewShowsTheImportModal(t *testing.T) {
 		t.Errorf("view:\n%s", view)
 	}
 	fits(t, "import", view, 120, 40)
+}
+
+func reviewPR(n int, reviewed bool) engine.ReviewPR {
+	return engine.ReviewPR{Found: gh.Found{Number: n, Title: fmt.Sprintf("Change %d", n),
+		URL: fmt.Sprintf("https://github.com/o/r/pull/%d", n), Author: gh.Author{Login: "them"}}, Reviewed: reviewed}
+}
+
+func reviewURLs(items []importItem) []string {
+	var out []string
+	for _, it := range items {
+		switch {
+		case it.isHeader():
+			out = append(out, it.header)
+		case it.selected:
+			out = append(out, "[x] "+it.review.URL)
+		default:
+			out = append(out, it.review.URL)
+		}
+	}
+	return out
+}
+
+func TestImportTabCyclesThroughReviews(t *testing.T) {
+	m := importModel(false)
+	m, _ = pressKey(m, tea.KeyTab)
+	m, cmd := pressKey(m, tea.KeyTab)
+	if m.imp.source != sourceReviews || cmd == nil || !m.imp.loading {
+		t.Fatalf("to Reviews: source %d cmd nil %v loading %v", m.imp.source, cmd == nil, m.imp.loading)
+	}
+	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "Reviews") {
+		t.Errorf("no Reviews tab:\n%s", got)
+	}
+	if m, _ = pressKey(m, tea.KeyTab); m.imp.source != sourceClaude {
+		t.Errorf("tab from Reviews went to %d", m.imp.source)
+	}
+	if m, _ = pressKey(m, tea.KeyShiftTab); m.imp.source != sourceReviews {
+		t.Errorf("shift+tab from Claude went to %d", m.imp.source)
+	}
+}
+
+func TestReviewsLoadInTwoGroups(t *testing.T) {
+	m := importModel(false)
+	m.imp.source, m.imp.gen = sourceReviews, 2
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: 1, reviews: []engine.ReviewPR{reviewPR(9, false)}})
+	if len(m.imp.items) != 0 {
+		t.Fatalf("a superseded load was shown: %v", reviewURLs(m.imp.items))
+	}
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: 2, reviews: []engine.ReviewPR{reviewPR(1, false), reviewPR(2, true), reviewPR(3, false)}})
+	want := []string{reviewsRequested, "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/3", reviewsReviewed, "https://github.com/o/r/pull/2"}
+	if got := reviewURLs(m.imp.items); !slices.Equal(got, want) || m.imp.loading {
+		t.Fatalf("items = %v, want %v", got, want)
+	}
+	m.imp.toggleGroup(0)
+	if !m.imp.items[1].selected || !m.imp.items[2].selected || m.imp.items[4].selected {
+		t.Errorf("space on the requested header: %v", reviewURLs(m.imp.items))
+	}
+
+	only := m.updateImportLoaded(reviewsLoadedMsg{gen: 2, reviews: []engine.ReviewPR{reviewPR(2, true)}})
+	if got := reviewURLs(only.imp.items); !slices.Equal(got, []string{reviewsReviewed, "https://github.com/o/r/pull/2"}) {
+		t.Errorf("an empty group kept its header: %v", got)
+	}
+	failed := m.updateImportLoaded(reviewsLoadedMsg{gen: 2, err: errors.New("gh repo view: no git remotes found")})
+	if !strings.Contains(ansi.Strip(failed.renderImport(40)), "no git remotes found") {
+		t.Error("the error is not shown")
+	}
+}
+
+func TestReviewsFetchOneByURL(t *testing.T) {
+	m := importModel(false)
+	m.imp.source = sourceReviews
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: m.imp.gen, reviews: []engine.ReviewPR{reviewPR(1, false), reviewPR(2, true)}})
+	m.imp.items[1].selected = true
+
+	m, _ = press(m, "/")
+	if !m.imp.keyEntry {
+		t.Fatal("/ did not open the URL entry")
+	}
+	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "PR › ") || !strings.Contains(got, "/ fetch by URL") {
+		t.Errorf("URL entry is not shown:\n%s", got)
+	}
+	gen := m.imp.gen
+	m, cmd := pressKey(m, tea.KeyEnter)
+	if m.imp.keyEntry || !m.imp.loading || m.imp.gen != gen+1 || cmd == nil {
+		t.Fatalf("enter: keyEntry %v loading %v cmd nil %v", m.imp.keyEntry, m.imp.loading, cmd == nil)
+	}
+
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: m.imp.gen, reviews: []engine.ReviewPR{reviewPR(5, true)}, single: true})
+	want := []string{reviewsRequested, "[x] https://github.com/o/r/pull/1", reviewsReviewed, "https://github.com/o/r/pull/2", "[x] https://github.com/o/r/pull/5"}
+	if got := reviewURLs(m.imp.items); !slices.Equal(got, want) || m.imp.cursor != 4 {
+		t.Errorf("items = %v cursor %d, want %v cursor 4", got, m.imp.cursor, want)
+	}
+}
+
+func TestReviewsImportLandsInTheReviewLane(t *testing.T) {
+	m := importOn(t)
+	m.imp.source = sourceReviews
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: m.imp.gen, reviews: []engine.ReviewPR{reviewPR(1, false), reviewPR(2, true)}})
+	m, _ = press(m, "a")
+	m, _ = pressKey(m, tea.KeyEnter)
+	if m.mode != modeBoard || m.flash != "Imported 2 card(s)" || len(m.snap.Tasks) != 2 {
+		t.Fatalf("mode %v flash %q tasks %d", m.mode, m.flash, len(m.snap.Tasks))
+	}
+	for i, want := range []string{"review-requested", "waiting-on-author"} {
+		if c := m.snap.Tasks[i]; c.ColumnID != want || len(c.Sessions) != 0 || !c.PR.IsReview() {
+			t.Errorf("#%d: column %q, %d sessions, PR %+v", c.Number, c.ColumnID, len(c.Sessions), c.PR)
+		}
+	}
+}
+
+func TestRenderReviews(t *testing.T) {
+	m := importModel(false)
+	m.imp.source = sourceReviews
+	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "Press / to fetch one by URL") {
+		t.Errorf("empty list:\n%s", got)
+	}
+	draft := reviewPR(12, false)
+	draft.IsDraft = true
+	m = m.updateImportLoaded(reviewsLoadedMsg{gen: m.imp.gen, reviews: []engine.ReviewPR{draft}})
+	got := ansi.Strip(m.renderImport(40))
+	for _, want := range []string{reviewsRequested, "#12 Change 12", "@them · draft", "No agent starts"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("view misses %q:\n%s", want, got)
+		}
+	}
 }
