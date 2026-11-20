@@ -64,7 +64,7 @@ func BoardPrompt(exe string) string {
 	cmd := ShellQuote(exe)
 	return "You are running as an agent on a drover kanban board. Your task is a card on that board, numbered in $DROVER_TASK_NUMBER.\n" +
 		"To move your card, for example when the user asks you to, run `" + cmd + " move $DROVER_TASK_NUMBER <column>`. Columns are ids or names; an unknown one is refused with the list of valid ones. " +
-		"A move can change your model or permission mode, which applies once your turn ends, and into a column that runs no agent it stops you. " +
+		"A move can change your model or permission mode, and into a column that runs no agent it stops you; both apply once your turn ends. " +
 		"Moving to Done refuses while the worktree has uncommitted changes; tell the user instead of passing --force.\n" +
 		"`" + cmd + " list` shows every card and its column. Move a card only when asked, or when the board's own instructions say so."
 }

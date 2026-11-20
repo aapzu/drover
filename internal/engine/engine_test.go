@@ -357,6 +357,87 @@ func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	}
 }
 
+const stopOnMoveBoard = `{"columns":[
+  {"id":"backlog","name":"Backlog"},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+func startSlowTurn(t *testing.T, root string) (*Engine, *store.Task) {
+	t.Helper()
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(stopOnMoveBoard), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	task := e.CreateTask("SLOW work", "")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Activity == store.ActivityThinking
+	})
+	return e, task
+}
+
+func TestMoveMidTurnStopsWhenTurnEnds(t *testing.T) {
+	root, _ := setupProject(t)
+	e, task := startSlowTurn(t, root)
+	if err := e.Move(task.ID, "backlog", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	s := e.Snapshot().Tasks[0].Sessions[store.MainSession]
+	if s.Status != store.StatusRunning || !s.StopPending {
+		t.Fatalf("a mid-turn move should keep the agent running: status=%s stopPending=%v", s.Status, s.StopPending)
+	}
+	waitFor(t, e, "the agent to stop after its turn", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s.Status == store.StatusSuspended && !s.StopPending
+	})
+}
+
+func TestMoveBackMidTurnCancelsPendingStop(t *testing.T) {
+	root, _ := setupProject(t)
+	e, task := startSlowTurn(t, root)
+	if err := e.Move(task.ID, "backlog", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityIdle
+	})
+	s := e.Snapshot().Tasks[0].Sessions[store.MainSession]
+	if s.Status != store.StatusRunning || s.StopPending {
+		t.Fatalf("moving back should cancel the stop: status=%s stopPending=%v", s.Status, s.StopPending)
+	}
+}
+
+func TestMoveMidTurnToDoneStopsImmediately(t *testing.T) {
+	root, _ := setupProject(t)
+	e, task := startSlowTurn(t, root)
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.Snapshot().Tasks[0].Sessions[store.MainSession]; s.Status != store.StatusSuspended || s.StopPending {
+		t.Fatalf("a finished card shouldn't keep an agent running: status=%s stopPending=%v", s.Status, s.StopPending)
+	}
+}
+
+func TestSendRefusedWhileStopPending(t *testing.T) {
+	root, _ := setupProject(t)
+	e, task := startSlowTurn(t, root)
+	if err := e.Move(task.ID, "backlog", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Send(task.ID, "more work"); err == nil {
+		t.Fatal("a message to an agent that is about to stop would be dropped")
+	}
+}
+
 func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 	root, log := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())

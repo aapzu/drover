@@ -718,11 +718,11 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 			t.PR.MergeMovePending = false
 		}
 		if drives {
-			// Turn-end automations of the previous visit no longer apply.
 			owner.Visit++
 			for _, s := range owner.Sessions {
 				s.TurnInVisit = false
 				s.TurnEndRow = ""
+				s.StopPending = false
 			}
 		}
 		t.Archived = false
@@ -740,8 +740,11 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		return nil
 	case keeps:
 		return nil
-	case !isAgentColumn(target):
+	case target.IsDone():
 		e.stopSessions(owner, "", store.StatusSuspended)
+		return nil
+	case !isAgentColumn(target):
+		e.stopOrDefer(owner)
 		return nil
 	case external != nil:
 		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
@@ -749,6 +752,23 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	default:
 		return e.activate(t, target, from, opts.Message, !opts.skipEnter, opts.evict)
 	}
+}
+
+// stopOrDefer stops owner's sessions.
+func (e *Engine) stopOrDefer(owner *store.Task) {
+	e.mu.Lock()
+	sess := owner.Sessions[store.MainSession]
+	busy := live(sess) && sess.Activity == store.ActivityThinking
+	if busy {
+		sess.StopPending = true
+	}
+	e.mu.Unlock()
+	if !busy {
+		e.stopSessions(owner, "", store.StatusSuspended)
+		return
+	}
+	e.stopSessions(owner, store.MainSession, store.StatusSuspended)
+	e.logf(owner, "Agent stops when its current turn ends")
 }
 
 // Start resumes or starts the agent for a task in place. A card that never had
@@ -1219,6 +1239,7 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 		s.Status = status
 		s.Activity = store.ActivityIdle
 		s.Pending = nil
+		s.StopPending = false
 		stopped++
 	}
 	e.with(func() {
@@ -1296,8 +1317,13 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		e.notify("#%d: %v", card.Number, err)
 		return err
 	}
-	e.with(func() { t.ActiveCard = card.ID })
 	key := store.MainSession
+	e.with(func() {
+		t.ActiveCard = card.ID
+		if s := t.Sessions[key]; s != nil {
+			s.StopPending = false
+		}
+	})
 	e.stopSessions(t, key, store.StatusSuspended)
 
 	e.mu.Lock()
@@ -1664,8 +1690,12 @@ func (e *Engine) Send(id, text string) error {
 	defer unlock()
 	e.mu.Lock()
 	if card != nil {
-		if s := t.Sessions[store.MainSession]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+		s := t.Sessions[store.MainSession]
+		if s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
 			t = nil
+		} else if s.StopPending {
+			e.mu.Unlock()
+			return errors.New("the agent stops when its current turn ends")
 		}
 	}
 	e.mu.Unlock()

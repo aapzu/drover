@@ -353,6 +353,9 @@ func (m Model) status(t *store.Task) string {
 	if col, _, ok := m.snap.Board.Column(driver.ColumnID); ok && s.RespawnPending {
 		pending += dim.Render(" → " + cmp.Or(m.snap.Board.PermissionMode(col), "default") + " next turn")
 	}
+	if s.StopPending {
+		pending += dim.Render(" → stops after turn")
+	}
 	if stuckStarting(s) {
 		return needsYou.Render("◆ waiting to start") + pending
 	}
