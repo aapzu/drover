@@ -403,6 +403,9 @@ func (m Model) renderCard(t *store.Task, width int, active, dragged bool, folded
 		style = style.Faint(true)
 	}
 	group := groupMarker(g, t, sibling, folded)
+	if t.Pinned {
+		group = strings.TrimSpace(muted.Render("⚑") + " " + group)
+	}
 	if m.prefs.Density == densityCompact {
 		status := strings.TrimSpace(group + " " + m.status(t))
 		line := ansi.Truncate(title, max(1, content-lipgloss.Width(status)-1), "…")
@@ -746,6 +749,7 @@ func (m Model) renderHelp() string {
 		{"I", "import running Claude Code agents, past sessions or Linear issues"},
 		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 		{"B", "show or hide hidden cards"},
+		{"P", "pin or unpin a card to the top of its column"},
 		{"A", "archive or restore a card in Done"},
 		{"C", "archive every card in Done"},
 		{"v", "show or hide archived cards"},

@@ -27,15 +27,15 @@ func TestBoardKeysMoveTheSelection(t *testing.T) {
 	}{
 		{"j", []tea.KeyMsg{key("j")}, 0, "b"},
 		{"down", []tea.KeyMsg{special(tea.KeyDown)}, 0, "b"},
-		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "c"},
+		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "a"},
 		{"k", []tea.KeyMsg{key("j"), key("j"), key("k")}, 0, "b"},
-		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "a"},
-		{"G", []tea.KeyMsg{key("G")}, 0, "c"},
-		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "a"},
+		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "c"},
+		{"G", []tea.KeyMsg{key("G")}, 0, "a"},
+		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "c"},
 		{"l", []tea.KeyMsg{key("l")}, 1, ""},
 		{"right", []tea.KeyMsg{special(tea.KeyRight)}, 1, ""},
-		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "a"},
-		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "a"},
+		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "c"},
+		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "c"},
 		{"l stops at the last column", []tea.KeyMsg{key("l"), key("l"), key("l"), key("l"), key("l"), key("l")}, 4, ""},
 		{"j in an empty column", []tea.KeyMsg{key("l"), key("j"), key("G"), key("g")}, 1, ""},
 	}
@@ -454,11 +454,11 @@ func TestHideKeyHidesTheCardUntilShown(t *testing.T) {
 	for _, msg := range runCmds(cmd) {
 		m, _ = update(m, msg)
 	}
-	if m.flash != "Hid #1. B shows hidden cards." || titles(m.tasksForColumn(0)) != "b" {
+	if m.flash != "Hid #2. B shows hidden cards." || titles(m.tasksForColumn(0)) != "a" {
 		t.Errorf("flash %q cards %q", m.flash, titles(m.tasksForColumn(0)))
 	}
 	m, _ = update(m, key("B"))
-	if titles(m.tasksForColumn(0)) != "a,b" {
+	if titles(m.tasksForColumn(0)) != "b,a" {
 		t.Errorf("cards %q with hidden cards shown", titles(m.tasksForColumn(0)))
 	}
 }

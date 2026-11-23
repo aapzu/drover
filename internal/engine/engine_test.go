@@ -3108,6 +3108,33 @@ func TestHideTaskSurvivesMove(t *testing.T) {
 	}
 }
 
+func TestPinTaskSurvivesMove(t *testing.T) {
+	root, _ := setupProject(t)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := e.CreateTask("Open", "")
+	if err := e.PinTask(task.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Move(task.ID, "done", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if !e.Snapshot().Tasks[0].Pinned {
+		t.Error("moving a card unpinned it")
+	}
+	if err := e.PinTask(task.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if e.Snapshot().Tasks[0].Pinned {
+		t.Error("card is still pinned")
+	}
+	if err := e.PinTask("nope", true); err == nil {
+		t.Error("pinned an unknown card")
+	}
+}
+
 func TestArchiveColumnSkipsHiddenCards(t *testing.T) {
 	root, _ := setupProject(t)
 	e, err := New(root)

@@ -545,6 +545,24 @@ func (e *Engine) HideTask(id string, hidden bool) error {
 	return nil
 }
 
+// PinTask pins a card to the top of its column, or unpins it.
+func (e *Engine) PinTask(id string, pinned bool) error {
+	t, _, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	e.with(func() {
+		t.Pinned = pinned
+		if pinned {
+			t.AddLog("Pinned")
+		} else {
+			t.AddLog("Unpinned")
+		}
+	})
+	return nil
+}
+
 // ArchiveTask hides a card in Done from the board, or shows it again.
 // Archiving removes the worktree once every card sharing it is archived; a
 // dirty one is kept and ErrDirty returned unless force is set.
