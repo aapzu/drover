@@ -97,6 +97,7 @@ type Session struct {
 	Started     bool   `json:"started"`
 	TurnInVisit bool   `json:"turnInVisit"`
 	TurnEndRow  string `json:"turnEndRow,omitempty"`
+	HookStops   int    `json:"hookStops,omitempty"`
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
 	RespawnPending     bool      `json:"respawnPending,omitempty"`

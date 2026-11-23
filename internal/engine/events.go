@@ -17,6 +17,8 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
+const hookLoopStops = 3
+
 // Run polls hook events and tmux, and applies the CLI's requests, until ctx is
 // done, then waits for the work it started. Automations only run while the
 // TUI is open; agents keep working in tmux when it is closed.
@@ -130,6 +132,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.HookStops = 0
 			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking
@@ -151,6 +154,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				e.addPRs(t, urls, true)
 			}
 		case "PreToolUse":
+			s.HookStops = 0
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
@@ -182,6 +186,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.Activity = store.ActivityPermission
 			}
 		case "StopFailure":
+			s.HookStops = 0
 			s.Activity = store.ActivityIdle
 			s.Started = true
 			s.TurnInVisit = false
@@ -205,6 +210,20 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			reply := ev.Reply()
 			s.LastReply = reply
 			s.Summary = ""
+			if ev.StopHookActive {
+				s.HookStops++
+			} else {
+				s.HookStops = 0
+			}
+			looping := s.HookStops == hookLoopStops
+			if s.HookStops > 1 && !looping {
+				break
+			}
+			if looping {
+				t.AddLog("Agent can't stop: a Stop hook (e.g. /goal) keeps sending it back; /goal clear releases it")
+				e.alert(t, alertNeedsYou, "can't stop: a Stop hook keeps sending it back")
+				s.TurnInVisit = true
+			}
 			out = append(out, func() { e.scanUsage(taskID, key) })
 			out = append(out, func() { e.summarize(taskID, key, reply) })
 			next := func() {

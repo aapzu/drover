@@ -35,6 +35,49 @@ func consumeLines(t *testing.T, s *store.Session, lines ...string) {
 	consume(t, &Engine{}, &store.Task{ID: "t1"}, s, lines...)
 }
 
+func TestStopHookLoopMovesToWaiting(t *testing.T) {
+	const hookStop = `{"hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"Still waiting on you."}`
+	const tool = `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`
+	const prompt = `{"hook_event_name":"UserPromptSubmit","prompt":"hi"}`
+	const failure = `{"hook_event_name":"StopFailure","error":"server_error"}`
+	const turnEnd = 3
+	for name, tc := range map[string]struct {
+		lines     []string
+		hookStops int
+		followUps int
+		logged    int
+	}{
+		"a Stop forced by a hook ends the turn": {[]string{hookStop}, 1, turnEnd, 0},
+		"the second forced Stop is skipped":     {[]string{hookStop, hookStop}, 2, turnEnd, 0},
+		"the loop is detected":                  {[]string{hookStop, hookStop, hookStop}, 3, 2 * turnEnd, 1},
+		"the loop is reported once":             {[]string{hookStop, hookStop, hookStop, hookStop, hookStop}, 5, 2 * turnEnd, 1},
+		"a tool call breaks the run":            {[]string{hookStop, hookStop, tool, hookStop}, 1, 2 * turnEnd, 0},
+		"a prompt breaks the run":               {[]string{hookStop, hookStop, prompt, hookStop}, 1, 2 * turnEnd, 0},
+		"a failed turn breaks the run":          {[]string{hookStop, hookStop, failure, hookStop}, 1, 2 * turnEnd, 0},
+		"a normal Stop ends the run":            {[]string{hookStop, hookStop, `{"hook_event_name":"Stop"}`}, 0, 2 * turnEnd, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := &Engine{board: &config.Board{}}
+			task := &store.Task{ID: "t1"}
+			e.state = &store.State{Tasks: []*store.Task{task}}
+			s := &store.Session{Activity: store.ActivityThinking}
+			followUps := consume(t, e, task, s, tc.lines...)
+			if s.HookStops != tc.hookStops || len(followUps) != tc.followUps {
+				t.Errorf("%d hook stops with %d follow-ups, want %d with %d", s.HookStops, len(followUps), tc.hookStops, tc.followUps)
+			}
+			logged := 0
+			for _, l := range task.Log {
+				if strings.Contains(l.Text, "can't stop") {
+					logged++
+				}
+			}
+			if logged != tc.logged {
+				t.Errorf("logged the loop %d times, want %d", logged, tc.logged)
+			}
+		})
+	}
+}
+
 func TestStopTracksRunningBackgroundTasks(t *testing.T) {
 	for _, c := range []struct {
 		name string
