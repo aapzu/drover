@@ -201,6 +201,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   removes the card's worktree; a worktree shared by several cards goes once all
   of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
+- **Card order.** A column lists the card that entered it last first. `P` pins
+  the selected card above the rest (`⚑`) and unpins it again. The pin stays
+  when the card moves.
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that

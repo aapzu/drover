@@ -34,6 +34,7 @@ var paletteCommands = []paletteCommand{
 	{"Move card to a column…", "m"},
 	{"Hide or unhide card", "b"},
 	{"Show or hide hidden cards", "B"},
+	{"Pin or unpin card", "P"},
 	{"Archive or restore card", "A"},
 	{"Archive every card in Done", "C"},
 	{"Show or hide archived cards", "v"},

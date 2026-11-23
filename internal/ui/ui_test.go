@@ -198,7 +198,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 	for _, k := range []string{"y", "Y"} {
 		m := realModel(t, "a", "b")
 		m, _ = update(m, key("x"))
-		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #1 "a"`) {
+		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #2 "b"`) {
 			t.Fatalf("mode %v text %q", m.mode, m.confirmText)
 		}
 		m, cmd := update(m, key(k))
@@ -208,7 +208,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 		for _, msg := range runCmds(cmd) {
 			m, _ = update(m, msg)
 		}
-		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "b" {
+		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "a" {
 			t.Errorf("%s: cards left %v", k, got)
 		}
 	}
@@ -269,12 +269,12 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"send", modeSend, func(m Model) Model { m.modalTask = m.current().ID; m.sendInput.Focus(); return m }, "Send ›"},
 		{"rename", modeRename, func(m Model) Model { m.modalTask = m.current().ID; m.renameInput.Focus(); return m }, "Rename ›"},
 		{"confirm", modeConfirm, func(m Model) Model { m.confirmText = "Really? (y/N)"; return m }, "Really?"},
-		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #1 to…"},
+		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #2 to…"},
 		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},
 		{"filter", modeFilter, func(m Model) Model { m.filterInput.Focus(); return m }, "Filter ›"},
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
 		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, ""},
-		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#1 first"},
+		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#2 second"},
 		{"usage", modeUsage, func(m Model) Model { m.detail.SetContent(m.renderUsage()); return m }, "Usage and cost"},
 		{"live", modeLive, func(m Model) Model { return withLive(m, m.current().ID) }, "LIVE"},
 	}

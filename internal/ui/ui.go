@@ -370,7 +370,12 @@ func (m Model) tasksIn(colID string) []*store.Task {
 			out = append(out, t)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return m.updatedAt(out[i]).Before(m.updatedAt(out[j])) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
+		return m.updatedAt(out[i]).After(m.updatedAt(out[j]))
+	})
 	return out
 }
 
@@ -425,7 +430,7 @@ func (m Model) columnOf(t *store.Task) string {
 	return t.ColumnID
 }
 
-// updatedAt puts a card being moved at the end of its new column, where the
+// updatedAt puts a card being moved at the top of its new column, where the
 // engine puts it.
 func (m Model) updatedAt(t *store.Task) time.Time {
 	if o := m.busy[t.ID]; o.column != "" {
@@ -462,16 +467,28 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	return tasks, nil
 }
 
-// collapseGroups keeps one card per session: the selected one, else the
-// owner, else the first in tasks. folded counts the cards dropped, by the kept
-// card's ID.
+// collapseGroups keeps one card per session: the selected one, else a pinned
+// one, else the owner, else the first in tasks. folded counts the cards
+// dropped, by the kept card's ID.
 func (m Model) collapseGroups(tasks []*store.Task, selectedID string) ([]*store.Task, map[string]int) {
 	owners := make([]*store.Task, len(tasks))
 	kept := map[string]*store.Task{}
+	rank := func(t, owner *store.Task) (r int) {
+		if t == owner {
+			r++
+		}
+		if t.Pinned {
+			r += 2
+		}
+		if t.ID == selectedID {
+			r += 4
+		}
+		return r
+	}
 	for i, t := range tasks {
 		owner := store.Owner(m.snap.Tasks, t)
 		owners[i] = owner
-		if k := kept[owner.ID]; k == nil || t.ID == selectedID || t == owner && k.ID != selectedID {
+		if k := kept[owner.ID]; k == nil || rank(t, owner) > rank(k, owner) {
 			kept[owner.ID] = t
 		}
 	}
@@ -1104,6 +1121,20 @@ func hideCard(eng *engine.Engine, busy map[string]op, id string, number int, hid
 	})
 }
 
+func pinCard(eng *engine.Engine, busy map[string]op, id string, number int, pin bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "pinning"}, func() actionDoneMsg {
+		err := eng.PinTask(id, pin)
+		msg := actionDoneMsg{err: err}
+		switch {
+		case err == nil && pin:
+			msg.done = fmt.Sprintf("Pinned #%d to the top of its column", number)
+		case err == nil:
+			msg.done = fmt.Sprintf("Unpinned #%d", number)
+		}
+		return msg
+	})
+}
+
 func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cols := m.columns()
 	t := m.current()
@@ -1418,6 +1449,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		return m, hideCard(m.eng, m.busy, t.ID, t.Number, !t.Hidden)
+	case "P":
+		if t == nil {
+			break
+		}
+		return m, pinCard(m.eng, m.busy, t.ID, t.Number, !t.Pinned)
 	case "B":
 		m.prefs.ShowHidden = !m.prefs.ShowHidden
 		m.savePrefs()
