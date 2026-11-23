@@ -34,6 +34,39 @@ func consumeLines(t *testing.T, s *store.Session, lines ...string) {
 	consume(t, &Engine{}, &store.Task{ID: "t1"}, s, lines...)
 }
 
+func TestStopHookLoopMovesToWaiting(t *testing.T) {
+	const hookStop = `{"hook_event_name":"Stop","stop_hook_active":true,"last_assistant_message":"Still waiting on you."}`
+	const tool = `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`
+	for name, tc := range map[string]struct {
+		lines     []string
+		hookStops int
+		followUps int
+		logged    bool
+	}{
+		"a Stop forced by a hook":    {[]string{hookStop}, 1, 0, false},
+		"a few forced Stops":         {[]string{hookStop, hookStop}, 2, 0, false},
+		"the loop is detected":       {[]string{hookStop, hookStop, hookStop}, 3, 1, true},
+		"the loop is reported once":  {[]string{hookStop, hookStop, hookStop, hookStop}, 4, 1, true},
+		"a tool call breaks the run": {[]string{hookStop, hookStop, tool, hookStop}, 1, 0, false},
+		"a normal Stop ends the run": {[]string{hookStop, hookStop, `{"hook_event_name":"Stop"}`}, 0, 3, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := &Engine{board: &config.Board{}}
+			task := &store.Task{ID: "t1"}
+			e.state = &store.State{Tasks: []*store.Task{task}}
+			s := &store.Session{Activity: store.ActivityThinking}
+			followUps := consume(t, e, task, s, tc.lines...)
+			if s.HookStops != tc.hookStops || len(followUps) != tc.followUps {
+				t.Errorf("%d hook stops with %d follow-ups, want %d with %d", s.HookStops, len(followUps), tc.hookStops, tc.followUps)
+			}
+			logged := len(task.Log) > 0 && strings.Contains(task.Log[len(task.Log)-1].Text, "can't stop")
+			if logged != tc.logged {
+				t.Errorf("logged the loop = %v, want %v", logged, tc.logged)
+			}
+		})
+	}
+}
+
 func TestStopTracksRunningBackgroundTasks(t *testing.T) {
 	for _, c := range []struct {
 		name string

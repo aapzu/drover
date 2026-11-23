@@ -225,6 +225,7 @@ type Event struct {
 	Prompt               string `json:"prompt"`
 	TranscriptPath       string `json:"transcript_path"`
 	LastAssistantMessage string `json:"last_assistant_message"`
+	StopHookActive       bool   `json:"stop_hook_active"`
 	PermissionMode       string `json:"permission_mode"`
 	Error                string `json:"error"`
 	ToolInput            struct {

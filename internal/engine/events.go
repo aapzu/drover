@@ -17,6 +17,11 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
+// hookLoopStops is how many turn ends in a row a Stop hook may force the agent
+// past, without a tool call between them, before the board treats the agent as
+// waiting for you.
+const hookLoopStops = 3
+
 // Run polls hook events and tmux, and applies the CLI's requests, until ctx is
 // done, then waits for the work it started. Automations only run while the
 // TUI is open; agents keep working in tmux when it is closed.
@@ -129,6 +134,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.HookStops = 0
 			s.Forked = false
 			s.Activity = store.ActivityThinking
 			s.Started = true
@@ -149,6 +155,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				e.addPRs(t, urls, true)
 			}
 		case "PreToolUse":
+			s.HookStops = 0
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
@@ -177,6 +184,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.Activity = store.ActivityPermission
 			}
 		case "StopFailure":
+			s.HookStops = 0
 			s.Activity = store.ActivityIdle
 			s.Started = true
 			s.TurnInVisit = false
@@ -200,6 +208,16 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			reply := ev.Reply()
 			s.LastReply = reply
 			s.Summary = ""
+			if ev.StopHookActive {
+				s.HookStops++
+				if s.HookStops == hookLoopStops {
+					t.AddLog("Agent can't stop: a Stop hook (e.g. /goal) keeps sending it back; /goal clear releases it")
+					e.alert(t, alertNeedsYou, "can't stop: a Stop hook keeps sending it back")
+					out = append(out, func() { e.summarize(taskID, key, reply); e.runTurnEnd(taskID, key, visit, reply) })
+				}
+				break
+			}
+			s.HookStops = 0
 			out = append(out, func() { e.scanUsage(taskID, key) })
 			out = append(out, func() { e.summarize(taskID, key, reply) })
 			next := func() {
