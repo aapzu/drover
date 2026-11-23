@@ -47,26 +47,35 @@ Then bring in the Claude Code work you already have:
 1. Press `I` to import your Claude Code agents and sessions. Running agents
    become cards in the first agent column, and past sessions land in the first
    column, ready to resume. See
-   [Importing Claude Code agents](#importing-claude-code-agents).
-2. Or press `n` to start a new card with an agent.
+   [Importing Claude Code agents](#importing-claude-code-agents). `tab`
+   switches to [Linear](#linear) issues and
+   [PRs to review](#importing-prs-to-review).
+2. Or press `n` to start a new card with an agent, or `ctrl+n` to start one
+   in the [review lane](#the-review-lane).
 
 Press `?` for every shortcut, or `ctrl+k` to search and run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
-a card to attach, drag a column's right edge or the preview's top border to
-resize, click the preview to type into the agent, and click the assistant
-panel to type into it. Dragging over the live preview selects text and
-copies it. To select text anywhere else with the terminal's own selection
-(double and triple click included), hold Option on macOS or Shift elsewhere
-while dragging. Layout is saved in `ui.json` in the project's state
+a card to attach, drag a column's right edge, the preview's top border or the review lane's
+divider to resize, click the preview to type into the agent, and click the assistant
+panel to type into it. Dragging over the preview or the assistant panel
+selects text and copies it, without the panes' borders; double click selects a
+word, triple click a line, and dragging after either extends the selection by
+words or lines. While you type into an agent that reads mouse reports
+(`disableMouse` off), clicks go to it instead. To select text anywhere else with the
+terminal's own selection, hold Option on macOS or Shift elsewhere while
+dragging. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
 `esc` and `ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop
-the agent. `ctrl+q` returns to the board.
+the agent. `ctrl+q` returns to the board. `shift+enter` inserts a newline in
+terminals that report it (iTerm2, xterm); elsewhere use `alt+enter`.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
-`pgdown` on the board. Typing in live mode jumps back to the bottom.
+`pgdown` on the board. When the agent has no history and doesn't read mouse
+reports (for example with `disableMouse`), the wheel sends it `pgup` /
+`pgdown`. Typing in live mode jumps back to the bottom.
 
 ## Columns
 
@@ -130,7 +139,7 @@ Each column takes these fields:
 | `modelOverride` | Passed as `claude --model`. Without it, the board's `defaultModel`, which defaults to `default`: Claude Code's own default model, as in `/model`. |
 | `effortOverride` | Passed as `claude --effort`. |
 | `planExitTarget` | Where a card goes once its plan is approved. Only meaningful in a column with `permissionMode` `plan`. |
-| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card into an agent column without it creates the worktree and resumes the conversation there. Use it only for agents that don't edit files, such as plan mode. |
+| `noWorktree` | On an agent column: runs the agent in the project root until the card has a worktree. The default Planning column sets it, so a new session starts without waiting for one. Moving the card into an agent column without it creates the worktree and resumes the conversation there (for a review-lane column, in the background; see [The review lane](#the-review-lane)). Use it only for agents that don't edit files, such as plan mode. |
 | `automations` | `onEnter` and `onTurnEnd` rows; see [Automations](#automations). |
 
 A model or effort change respawns the agent with `--resume`. A permission
@@ -161,11 +170,13 @@ open, and to Done once it merges:
 | Waiting for me | Agent |
 | In review | Agent; on entry it runs `/pr-review-toolkit:review-pr` |
 | Done | Done |
-| Reviewing | Agent, in the review lane, at `high` effort; on entry it asks for a re-review of the new commits |
+| Review requested | Plain, in the review lane; [imported](#importing-prs-to-review) PRs awaiting your review land here |
+| Reviewing | Agent, in the review lane, at `high` effort; on entry after a review of yours it asks for a re-review of the new commits |
 | Triage findings | Agent, in the review lane |
 | Waiting on author | Plain, in the review lane; the agent is suspended |
+| Done | Done, in the review lane |
 
-The last three are the [review lane](#the-review-lane) and come with a
+The last five are the [review lane](#the-review-lane) and come with a
 `reviewFlow` that moves the cards of PRs you review through them.
 
 When an Executing agent finishes a turn and its reply asks you for a decision or input, or hands the work back for you to review, the card moves to Waiting for me. Each turn end on Executing costs one short Haiku check. A custom board gets this row by default when its `executing` column has no `onTurnEnd` and the board has a column with id or name `waiting-for-me`, `Waiting for me` or `waiting`; set `"onTurnEnd": []` to turn it off.
@@ -177,7 +188,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   no file it uses a built-in default (Planning, Executing,
   Waiting for me, In review, Done); press `W` to write it out.
   `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
-  `worktreesDir`, `splitByPR` and those under [Agents and notifications](#agents-and-notifications).
+  `worktreesDir`, `splitByPR`, `teamReviewRequests`, `reviewRepos` (see
+  [Importing PRs to review](#importing-prs-to-review)) and those under
+  [Agents and notifications](#agents-and-notifications).
   `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
   to the repo root or absolute, e.g. `.claude/worktrees`.
 - **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
@@ -194,12 +207,17 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 - **Settings view.** `o` changes the settings in both files. Each row shows
   where its value comes from: `local`, `shared` (`drover.json`) or `default`.
   Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. Flows stay in `drover.json`.
-  `c` (or `O` on the board) opens the same view for a column's settings: pick
-  a column, then its name, color, permission mode, model, effort, `autoSpawn`,
-  `keepAgent`, `planExitTarget` or `noWorktree`. Only color, permission mode,
-  model and effort can go in `drover.local.json`. Columns can't be added,
-  removed or reordered there, and automations stay in `drover.json`.
+  allow either, and `x` removes the override. `/` searches the options by name or JSON key
+  (esc clears the search). Flows stay in `drover.json`.
+  The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
+  column's settings: pick a column, then its name, color, permission mode,
+  model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or
+  `noWorktree`. Only color, permission mode, model and effort can go in
+  `drover.local.json`. The opening prompt is the first `onEnter` row, when it is
+  a `send_message` without a condition: Enter edits it in a multi-line box (Ctrl+S
+  saves, an empty prompt removes the row) and adds the row if the column has
+  none. Columns can't be added, removed or reordered there, and other
+  automations stay in `drover.json`.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
@@ -229,7 +247,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   worktree writes into the main checkout; list them in `linkExclude`.
   `initScript` then runs with `sh -c` in the new worktree before the agent
   starts, for example `pnpm i`. If it fails, so does the move, and the next
-  start runs it again.
+  start runs it again. Moving an agent that is already working in the project
+  root into a review-lane column is the exception: the move doesn't wait for
+  setup and succeeds even if it fails; see [The review lane](#the-review-lane).
 - **Keeping up with the base branch.** `u` fetches the card's base branch and
   fast-forwards the worktree to it. When the branch has commits of its own,
   a running agent is asked to merge it instead. `u` refuses while the agent
@@ -240,9 +260,9 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
   turn ends; see [Automations](#automations). `planExitTarget` moves a card
   once its plan is approved.
 - **Context and cost.** After each turn the board reads the conversation's
-  transcript. Cards show how full the agent's context is and an estimate of
-  what the conversation has cost at list prices, like `42% · $1.20`, and the
-  header shows the board's total.
+  transcript. Cards show how full the agent's context is, like `42%`. Press
+  `$` for each card's estimated cost at list prices and the board's total;
+  prices are shown nowhere else.
 - **Agents know the board.** Each agent gets `--append-system-prompt` telling
   it that it runs on a drover board, that its card number is in its
   `$DROVER_TASK_NUMBER` environment variable, and how to use `drover move` and
@@ -270,10 +290,10 @@ These settings work in `drover.json` and, for you alone, in
 
 - **`maxConcurrent`** (default 8) caps running agents. Further starts queue,
   except that a start you make suspends the agent that has been idle longest,
-  but never one in a `keepAgent` column.
+  but never one in a `keepAgent` column or one with runs scheduled.
 - **`idleTimeoutMinutes`** suspends an agent once it has been idle that long,
-  except one in a `keepAgent` column.
-  `r` resumes it. 0, the default, never does.
+  except one in a `keepAgent` column or one with runs scheduled (see
+  [Polling agents](#polling-agents)). `r` resumes it. 0, the default, never does.
 - **`notifications`** shows a desktop notification and a notice on the board
   when an agent finishes a turn and stays idle, asks for a permission, has a
   plan for you to approve, or exits by itself. Each is on by default and fires
@@ -283,9 +303,41 @@ These settings work in `drover.json` and, for you alone, in
 - **`autoName`** titles a new session's card with a short summary of your
   first message, written with `claude -p --model haiku`. A title you edit is
   never replaced.
+- `E` renames the selected card: the input starts with its current title and
+  swaps in a suggestion made the same way as `autoName`'s, unless you've started
+  typing. It works whether or not `autoName` is on.
 - **`disableMouse`** (default `false`) starts agents and the assistant with
-  `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
-  your terminal. It applies to sessions started or resumed after you change it.
+  `CLAUDE_CODE_DISABLE_MOUSE=1` and turns tmux's mouse mode off in their
+  sessions, so your terminal handles selection and scrolling when you attach.
+  It applies to sessions started or resumed after you change it.
+- **`assistantPlugins`** and **`assistantTools`** (both empty by default) give
+  the assistant MCP tools, such as Slack's, so you can ask it to read a source and
+  turn what it finds into cards. `assistantPlugins` lists Claude Code plugin ids
+  to enable, like `"slack@claude-plugins-official"`; `assistantTools` lists the
+  tool patterns it may use without asking, each starting with `mcp__`, like
+  `"mcp__plugin_slack_slack__slack_read_*"`. Allow only read tools unless you
+  want it to write. A value in `drover.local.json` replaces the shared one.
+  What those tools return can come from anyone, so the assistant is told to
+  treat it as data and to ask before adding cards from it. An enabled plugin
+  runs as a whole, hooks included, and those aren't limited by the
+  assistant's tool rules, so list only plugins you trust.
+
+### Polling agents
+
+An agent that sets up its own runs, with `/loop`, `ScheduleWakeup` or
+`CronCreate`, is polling. The board reads those calls from the agent's hooks and
+shows the wait instead of plain idle:
+
+- The card shows `⏲ in 4m12s`, the time to the agent's next run, and `+N` when
+  it has more runs scheduled. The header counts polling agents apart from idle
+  ones.
+- `i` lists the card's runs: when, wakeup or cron, how often it ran, and why.
+- `T` opens a timeline with a row for each polling card and a mark where each
+  run falls in the next hour, six hours or day (`←` `→` change the span, `enter`
+  goes to the card).
+- An agent with runs scheduled is not suspended by `idleTimeoutMinutes` or to
+  free a slot, because Claude Code loses its runs when the agent stops. They are
+  dropped from the board when the agent stops running.
 
 ## Automations
 
@@ -323,7 +375,9 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 - **Placeholders** in `message`, `script`, `conditionScript`, `title` and
   `body`: `{{title}}`, `{{description}}`, `{{taskNumber}}`, `{{taskId}}`, `{{branchName}}`,
   `{{baseBranch}}`, `{{worktreePath}}`, `{{projectPath}}`, `{{projectName}}`,
-  `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`, `{{issueKey}}`,
+  `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}`, `{{prBranch}}`,
+  `{{prReviewedSha}}` (the commit your latest review of the PR was on, empty
+  before you review it), `{{issueKey}}`,
   `{{issueUrl}}`, `{{fromColumn}}`, `{{toColumn}}`, `{{trigger}}` and
   `{{agentReply}}`. In a `script` or `conditionScript` they are shell-quoted,
   and each is also set as an environment variable such as `$DROVER_TASKNUMBER`.
@@ -331,7 +385,9 @@ the rest; `move_to_column` ends the list either way. Nothing runs when a card en
 This repo's own board cleans up, simplifies, reviews and builds on entering
 In review. At the end of each agent turn it asks for fixes if the review
 reported issues, or has the agent open the PR once none remain (only on a card
-with no PR yet). The In review column notifies you when the PR is in review.
+with no PR yet). It also asks the agent to merge the base branch and resolve
+the conflicts when the PR has any. The In review column notifies you when the
+PR is in review.
 The column's automations, trimmed to the review and PR steps:
 
 ```json
@@ -344,6 +400,9 @@ The column's automations, trimmed to the review and PR steps:
     { "name": "Ping", "type": "notify", "title": "{{title}}", "body": "PR #{{prNumber}} is in review" }
   ],
   "onTurnEnd": [
+    { "name": "Fix conflicts", "type": "send_message",
+      "message": "PR #{{prNumber}} has merge conflicts with its base branch. Fetch the base branch, merge it into this branch, resolve the conflicts, run go build ./... and go test ./..., then push (no force push).",
+      "conditionScript": "test -n \"$DROVER_PRNUMBER\" && test \"$(gh pr view \"$DROVER_PRNUMBER\" --json mergeable --jq .mergeable)\" = CONFLICTING" },
     { "name": "Apply fixes", "type": "send_message",
       "message": "Apply the fixes the review found, then run go test ./...",
       "condition": "The message lists at least one specific review finding that is still open. Answer NO if it says nothing is left to apply, or lists findings only as skipped, declined, deferred or already fixed" },
@@ -456,25 +515,66 @@ same column targets as `prFlow`:
 
 ```json
 "reviewFlow": {
+  "requested": "review-requested",
   "started": "reviewing",
   "reviewed": "waiting-on-author",
+  "approved": "review-done",
   "updated": "reviewing",
-  "done": "done"
+  "done": "review-done"
 }
 ```
 
+- **requested:** where an [imported](#importing-prs-to-review) PR awaiting
+  your review lands. Without it, imports land in the lane's first column
+  without an agent, else in the first column. A card in `reviewed` or
+  `approved` also comes back here when your review is requested again.
 - **started:** where the card goes once the agent's turn ends and gh has
   confirmed the PR isn't yours, from an agent column.
 - **reviewed:** where it goes, from any column, when a review of yours shows up
   on the PR once the agent is idle. A review already there when drover first
   sees the PR is only recorded.
+- **approved:** where it goes instead of `reviewed` when your review approves
+  the PR. A review card in a Done column is still refreshed while its PR is
+  open and you have reviewed it, so a push or a new request brings it back,
+  until it is archived.
 - **updated:** you get a notice when the author pushes after your review. A
-  card in `reviewed` also moves here.
+  card in `reviewed` or `approved` also moves here, as it does when your
+  approval is dismissed or the PR gets merge conflicts after you approved it.
 - **done:** where it goes once the PR merges or closes. A PR that was already
   merged or closed when drover first sees it moves nothing.
 
 Your own review is never sent to the agent as feedback to address, and review
 cards don't follow a PR to release.
+
+### Importing PRs to review
+
+`I`, then `tab` to Reviews, lists open PRs by others in this repo in two
+groups:
+
+- **Requested from me:** PRs whose review is requested from you personally
+  (`user-review-requested:@me`). They land in `reviewFlow.requested`.
+- **Reviewed by me, still open:** PRs you have reviewed (`--reviewed-by=@me`).
+  They land in `reviewFlow.reviewed`.
+
+A PR in both is listed once, as requested. PRs already on the board are left
+out. `/` fetches any open PR by URL, from any repo.
+
+- Importing starts no agent. The prompt is `/code-review <url>`, so `enter`,
+  `r`, or moving the card into an agent column, reviews the PR. Once that
+  first turn ends, the card moves to `reviewFlow.started`, also from the
+  requested column.
+- Starting it on the board first asks for the `/code-review` level (`low` to
+  `max`, `high` preselected), which goes into the prompt as
+  `/code-review <level> <url>`. `esc` cancels the start. A card started any
+  other way, such as by `reviewFlow` or `drover move`, runs without a level.
+- The card then follows `reviewFlow` like any review card. A review of yours
+  already on the PR is only recorded, so the card stays where it landed.
+- **`teamReviewRequests`** (default `false`): `true` in `drover.json` or
+  `drover.local.json` also lists PRs requested from your teams
+  (`--review-requested=@me`). With CODEOWNERS that can be many.
+- **`reviewRepos`**: more repos to search, as `owner/name`, for example
+  `["acme/infra"]`. A value in `drover.local.json` replaces the shared one.
+  The agent still runs in this repo; `/code-review` reads the PR from GitHub.
 
 ### The review lane
 
@@ -484,13 +584,35 @@ a lane of its own: a second row of columns below the main ones. Give a column
 shows while it holds cards. `R` hides it or shows it again and remembers the
 choice per repo; the header counts the cards in a hidden lane. `h` and `l` walk
 from Done into the lane, and skip it while it is hidden. `H` and `L` move a
-card within its lane only; use `m` to move it between them.
+card within its lane only; use `m` to move it between them. Drag the divider
+above the lane to resize it; `0` resets the layout. `X` hides the main columns so
+only the review lane shows, and remembers it per repo too; the header counts the
+hidden cards. `X` brings the main columns back; `R` does too, and hides the
+review lane.
 
-The default lane is Reviewing, Triage findings and Waiting on author, with a
-`reviewFlow` that sends `started` to Triage findings, `reviewed` to Waiting on
-author, `updated` back to Reviewing when the author pushes, and `done` to Done. A board with a
+The default lane is Review requested, Reviewing, Triage findings, Waiting on
+author and its own Done (id `review-done`), with a `reviewFlow` that lands
+imported PRs (`requested`) in Review requested, sends `started` to Triage
+findings, `reviewed` to Waiting on author (`approved` goes to the lane's Done
+instead when you approve), `updated` back to Reviewing when the author pushes,
+your approval is dismissed or the PR gets conflicts, and `done` to the lane's
+Done. Reviewing sends the card on to Triage findings once a re-review turn
+ends. A board with a
 `drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
+
+Moving a card whose agent is already working in the project root, such as one
+from Planning, into the lane doesn't wait for its worktree: the move returns at
+once and the agent keeps working in the root while the worktree and
+`initScript` run, so anything it edits meanwhile lands in the main checkout.
+The agent then resumes in the worktree with the lane column's settings, right
+away if it is idle and when its turn ends otherwise. If the setup fails, the
+agent stays in the root and the next move into a worktree column builds it
+again.
+
+`ctrl+n` starts a card with an agent straight in the lane, in its first
+agent column, and shows the lane if you had hidden it. `drover add --review`
+does the same from the [command line](#command-line).
 
 ## Importing Claude Code agents
 
@@ -544,6 +666,7 @@ the repo or any of its worktrees:
 drover list [--json]
 drover add "Fix the login bug" -p "Steps to reproduce…" -c planning
 drover add --linear DX-123
+drover add "Review PR 123" --review
 drover move 4 "In review"
 drover edit 4 --title "Fix signup" --prompt "…"
 drover rm 4
@@ -556,7 +679,8 @@ drover ask "which cards are waiting on review?"
   changes. `--force` discards them. The branch is kept.
 - `add` puts the card in the first column and starts no agent. `add -c` into
   another agent column starts the agent, like a move. If that fails the card
-  stays in the first column and the command says why.
+  stays in the first column and the command says why. `add --review` is `-c`
+  with the review lane's entry column; it can't be combined with `-c`.
 - `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The
   title and prompt come from the issue, and one already on the board is refused.
 - The open board applies requests one at a time and the command prints the
@@ -589,12 +713,19 @@ review by default) has a merged or closed pull request of its own, it offers to 
 card on, to the merged column of your `prFlow` or to Done, and waits for you to
 agree. It runs the commands above, so changes go through the open board like
 any other.
-It takes no agent slot and isn't a card.
+It also knows drover's own docs, so you can ask it how to do something ("how do
+I hide a card?") and it names the feature and its key.
+It takes no agent slot and isn't a card, so `idleTimeoutMinutes` and slot
+evictions never suspend it.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
   focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
   `ctrl+q` returns to the board and hides the panel. You can also click the
   panel to focus it, and use the mouse wheel to scroll it.
+- From the board, `Z` (or a click on the panel's top border) makes the panel
+  fill the whole screen. Click the border again or press `ctrl+q` to put it
+  back beside the board; `ctrl+q` once more hides it. Fullscreen needs only
+  40 columns and the same 8 rows.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
   (`tmux -L drover ls`), started in the repo. It stops when the board that
   opened it quits or its terminal closes, and the conversation resumes the next
@@ -607,21 +738,31 @@ It takes no agent slot and isn't a card.
 
 What the assistant may do is the same in the panel and in `drover ask`:
 
-- Besides read-only git (below), it may only run `drover list`, `move`, `add`,
-  `edit` and `rm`, and never `--force`. Anything else is denied without asking
-  (`dontAsk` mode in the panel). It is told to ask you before deleting a card,
-  which removes its worktree. In a one-off `drover ask` you answer that in the
-  next question.
-- The repo is read-only to it, enforced in the tool permissions: Read, Grep and
-  Glob, which Claude limits to the repo, and the git subcommands `status`,
-  `log`, `show`, `diff`, `blame`, `ls-files`, `ls-tree`, `shortlog`,
-  `rev-parse`, `describe` and `cat-file`. Everything else is refused: no edit
-  or write tool, no other shell commands, and no git subcommand that changes
-  the repo, a branch or a worktree.
+- Besides read-only git (below) and `gh`, it may only run `drover list`,
+  `move`, `add`, `edit` and `rm`, and never `--force`. Anything else is denied
+  in `drover ask`, and the panel asks you first. It is told to ask you before
+  deleting a card, which removes its worktree. In a one-off `drover ask` you
+  answer that in the next question.
+- Apart from `gh` (below), the repo is read-only to it, enforced in the tool
+  permissions: Read, Grep and Glob, which Claude limits to the repo, and the
+  git subcommands `status`, `log`, `show`, `diff`, `blame`, `ls-files`,
+  `ls-tree`, `shortlog`, `rev-parse`, `describe` and `cat-file`. Everything
+  else is refused in `drover ask`, and the panel asks you first: other shell
+  commands, git subcommands that change the repo, a branch or a worktree, and
+  reads outside the repo. The edit and write tools are denied in both.
+- `gh` is allowed without prompting: it reads live pull request state, checks,
+  reviews, runs and issues, and could also merge, comment or close. It is told
+  to change GitHub only when you ask, but nothing enforces it. Its sandbox
+  allows `api.github.com`, `github.com` and `*.githubusercontent.com`; a
+  `deniedHosts` entry in managed settings still wins over that. The `gh`
+  commands that change the local checkout or run programs (`pr checkout`,
+  `repo clone` and `sync`, `run download`, `alias`, `extension`, `config`,
+  `pr merge --delete-branch`) are denied.
 - Asked for a change, it offers a card with a title and prompt and runs
   `drover add` once you agree. That is an instruction to it, not a restriction.
 - It ignores your user, project and local Claude settings, so none of your allow
-  rules or `env` apply, but CLAUDE.md files still load. Managed settings still
+  rules or `env` apply, but CLAUDE.md files still load. Only the plugins and
+  tools in `assistantPlugins` and `assistantTools` are added. Managed settings still
   apply. If they auto-allow sandboxed Bash commands, the permission rules no
   longer limit what it runs; the sandbox does, and drover denies it writes to
   the repo there.
@@ -668,3 +809,6 @@ drover ask --new "start over: what's in Planning?"
 Every pull request merged to `main` publishes a release with binaries. Label
 each PR with exactly one of `patch`, `minor`, `major` or `no-release` (a CI
 check requires it); `no-release` skips the release.
+
+Each release also adds a section to [CHANGELOG.md](CHANGELOG.md), built from
+the titles of the merged pull requests, so write PR titles for readers.

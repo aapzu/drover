@@ -100,6 +100,7 @@ type Session struct {
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
 	RespawnPending     bool      `json:"respawnPending,omitempty"`
+	StopPending        bool      `json:"stopPending,omitempty"`
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
@@ -121,6 +122,8 @@ type Session struct {
 	UsageScanPath  string       `json:"usageScanPath,omitempty"`
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
+
+	Schedules []Schedule `json:"schedules,omitempty"`
 }
 
 // HasBackground reports whether the session's background tasks are still running.
@@ -169,7 +172,11 @@ type PR struct {
 	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
 	// ReviewedSHA is the commit your latest review was on.
 	ReviewedSHA string `json:"reviewedSha,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Mergeable is the last MERGEABLE or CONFLICTING gh reported; empty until seen.
+	Mergeable string `json:"mergeable,omitempty"`
+	// ReviewRequested is whether your review was requested at the last check.
+	ReviewRequested bool   `json:"reviewRequested,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // IsReview reports whether p is a PR you review, and is safe on nil.
@@ -217,6 +224,7 @@ func (t *Task) Clone() *Task {
 		sc := *s
 		sc.Pending = append([]Pending(nil), s.Pending...)
 		sc.Background = slices.Clone(s.Background)
+		sc.Schedules = slices.Clone(s.Schedules)
 		c.Sessions[k] = &sc
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)

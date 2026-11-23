@@ -64,7 +64,7 @@ func BoardPrompt(exe string) string {
 	cmd := ShellQuote(exe)
 	return "You are running as an agent on a drover kanban board. Your task is a card on that board, numbered in $DROVER_TASK_NUMBER.\n" +
 		"To move your card, for example when the user asks you to, run `" + cmd + " move $DROVER_TASK_NUMBER <column>`. Columns are ids or names; an unknown one is refused with the list of valid ones. " +
-		"A move can change your model or permission mode, which applies once your turn ends, and into a column that runs no agent it stops you. " +
+		"A move can change your model or permission mode, and into a column that runs no agent it stops you; both apply once your turn ends. " +
 		"Moving to Done refuses while the worktree has uncommitted changes; tell the user instead of passing --force.\n" +
 		"`" + cmd + " list` shows every card and its column. Move a card only when asked, or when the board's own instructions say so."
 }
@@ -227,11 +227,20 @@ type Event struct {
 	LastAssistantMessage string `json:"last_assistant_message"`
 	PermissionMode       string `json:"permission_mode"`
 	Error                string `json:"error"`
-	ToolInput            struct {
-		Command string `json:"command"`
-	} `json:"tool_input"`
+	// ToolInput stays raw: other tools put any type in the fields a typed struct
+	// would name, and ReadEvents drops an event that fails to decode.
+	ToolInput       json.RawMessage  `json:"tool_input"`
 	ToolResponse    json.RawMessage  `json:"tool_response"`
 	BackgroundTasks []BackgroundTask `json:"background_tasks"`
+}
+
+// Command returns the shell command of a Bash call.
+func (e Event) Command() string {
+	var in struct {
+		Command string `json:"command"`
+	}
+	json.Unmarshal(e.ToolInput, &in)
+	return in.Command
 }
 
 // BackgroundTask is an agent or shell Claude Code lists in a Stop payload.
@@ -264,10 +273,11 @@ var (
 )
 
 // AsksForPR reports whether a prompt asks the agent to open a pull request,
-// like "open a PR" or "create pull requests". Slash commands never count.
+// like "open a PR" or "create pull requests". Slash commands and background
+// agent notifications never count.
 func AsksForPR(prompt string) bool {
 	prompt = strings.TrimSpace(prompt)
-	if strings.HasPrefix(prompt, "/") {
+	if strings.HasPrefix(prompt, "/") || strings.HasPrefix(prompt, "<task-notification>") {
 		return false
 	}
 	for _, m := range prAsk.FindAllStringIndex(prompt, -1) {
@@ -353,7 +363,7 @@ func (e Event) BackgroundAgent() (string, bool) {
 // `gh stack` call printed. Other commands are ignored so PRs the agent only
 // looked at never count as its own.
 func (e Event) CreatedPRs() []string {
-	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.ToolInput.Command) {
+	if e.Name != "PostToolUse" || e.ToolName != "Bash" || !prCommand.MatchString(e.Command()) {
 		return nil
 	}
 	var urls []string
