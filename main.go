@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gitx"
@@ -47,6 +48,7 @@ func main() {
 		}
 		return
 	}
+	assistant.Docs = helpDocs()
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 		fmt.Print(usage)
 		return
@@ -97,7 +99,8 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen(), tea.WithFilter(ui.FilterKeys))
+	defer fmt.Print(ui.ExtendedKeysOff)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {

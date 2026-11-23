@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -308,5 +309,134 @@ func TestBackgroundScansDropFinishedTasks(t *testing.T) {
 	}
 	if again := e.backgroundScans(); len(again) != 1 {
 		t.Errorf("the finished scan was not released: %d scans", len(again))
+	}
+}
+
+func TestStopPendingGuards(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		col    config.Column
+		status store.SessionStatus
+		key    string
+		want   bool
+	}{
+		{"column without an agent", config.Column{ID: "c"}, store.StatusRunning, store.MainSession, true},
+		{"agent column", config.Column{ID: "c", AutoSpawn: true}, store.StatusRunning, store.MainSession, false},
+		{"keepAgent column", config.Column{ID: "c", KeepAgent: true}, store.StatusRunning, store.MainSession, false},
+		{"already suspended", config.Column{ID: "c"}, store.StatusSuspended, store.MainSession, false},
+		{"other session", config.Column{ID: "c"}, store.StatusRunning, "other", false},
+	} {
+		s := &store.Session{Status: c.status, StopPending: true}
+		task := &store.Task{ID: "t1", ColumnID: "c", Sessions: map[string]*store.Session{c.key: s}}
+		e := &Engine{Root: t.TempDir(), state: &store.State{Tasks: []*store.Task{task}}, board: &config.Board{Columns: []config.Column{c.col}}}
+		if got := e.stopPending("t1", c.key); got != c.want {
+			t.Errorf("%s: stopped=%v, want %v", c.name, got, c.want)
+		}
+		if s.StopPending {
+			t.Errorf("%s: the flag should be consumed", c.name)
+		}
+		if stopped := s.Status == store.StatusSuspended; c.want && !stopped {
+			t.Errorf("%s: the session should be suspended, status %s", c.name, s.Status)
+		}
+	}
+}
+
+func TestScheduleToolsFillTheSessionsSchedules(t *testing.T) {
+	s := &store.Session{}
+	consumeLines(t, s,
+		`{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_use_id":"tu1","tool_input":{"delaySeconds":600,"prompt":"check"},"tool_response":{"scheduledFor":4102444800000}}`,
+		`{"hook_event_name":"PostToolUse","tool_name":"CronCreate","tool_input":{"cron":"*/3 * * * *","prompt":"poll"},"tool_response":{"id":"c1","recurring":true,"nextFireAt":4102444900000}}`,
+	)
+	if len(s.Schedules) != 2 || !s.Polling() {
+		t.Fatalf("schedules = %+v", s.Schedules)
+	}
+	s.EventsOffset = 0
+	consumeLines(t, s, `{"hook_event_name":"PostToolUse","tool_name":"CronDelete","tool_input":{"id":"c1"},"tool_response":{"id":"c1"}}`)
+	if len(s.Schedules) != 1 || s.Schedules[0].ID != "tu1" {
+		t.Errorf("schedules after the delete = %+v", s.Schedules)
+	}
+}
+
+func TestExpireSchedulesClearsStoppedAgents(t *testing.T) {
+	e := bareEngine(t)
+	now := time.Now()
+	sessions := map[string]*store.Session{}
+	for _, status := range []store.SessionStatus{store.StatusRunning, store.StatusSuspended, store.StatusExited, store.StatusQueued, store.StatusExternal} {
+		s := &store.Session{Status: status}
+		s.ApplySchedule(claude.ScheduleCall{Wakeup: true, ID: "w", Prompt: "p", NextAt: now.Add(time.Hour)})
+		sessions[string(status)] = s
+	}
+	e.state.Tasks = []*store.Task{{ID: "t1", Sessions: sessions}}
+	e.expireSchedules(now)
+	for status, s := range sessions {
+		if want := status == string(store.StatusRunning); s.Polling() != want {
+			t.Errorf("%s agent polls %v, want %v", status, s.Polling(), want)
+		}
+	}
+}
+
+func TestAScheduledPromptRunsItsSchedule(t *testing.T) {
+	s := &store.Session{}
+	e, task := bareEngine(t), &store.Task{ID: "t1", Title: "loop"}
+	feed := func(lines ...string) {
+		s.EventsOffset = 0
+		consume(t, e, task, s, lines...)
+	}
+	soon := time.Now().Add(time.Second).UnixMilli()
+	call := func(id string) string {
+		return fmt.Sprintf(`{"hook_event_name":"PostToolUse","tool_name":"ScheduleWakeup","tool_use_id":%q,"tool_input":{"delaySeconds":1,"prompt":"check the build"},"tool_response":{"scheduledFor":%d}}`, id, soon)
+	}
+	cron := fmt.Sprintf(`{"hook_event_name":"PostToolUse","tool_name":"CronCreate","tool_input":{"cron":"*/5 * * * *","prompt":"poll"},"tool_response":{"id":"c1","recurring":true,"nextFireAt":%d}}`, soon)
+	feed(call("tu1"), cron)
+
+	feed(`{"hook_event_name":"UserPromptSubmit","prompt":"something typed"}`)
+	if len(s.Schedules) != 2 {
+		t.Fatalf("an unrelated prompt ran a schedule: %+v", s.Schedules)
+	}
+
+	feed(`{"hook_event_name":"UserPromptSubmit","prompt":"check the build"}`, call("tu2"))
+	if len(s.Schedules) != 2 {
+		t.Fatalf("schedules = %+v, want the cron and one wakeup", s.Schedules)
+	}
+	for _, sc := range s.Schedules {
+		if sc.ID == "tu1" {
+			t.Error("the wakeup that ran is still scheduled")
+		}
+	}
+
+	feed(`{"hook_event_name":"UserPromptSubmit","prompt":"poll"}`)
+	for _, sc := range s.Schedules {
+		if sc.ID == "c1" && (sc.Runs != 1 || !sc.NextAt.After(time.Now())) {
+			t.Errorf("cron after its run = %+v, want 1 run and a later time", sc)
+		}
+	}
+}
+
+func pollingPair(e *Engine) (polling, plain *store.Session) {
+	long := time.Now().Add(-time.Hour)
+	polling = &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, UpdatedAt: long, Tmux: "polling"}
+	polling.ApplySchedule(claude.ScheduleCall{Wakeup: true, ID: "w", Prompt: "p", NextAt: time.Now().Add(time.Hour)})
+	plain = &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, UpdatedAt: long, Tmux: "plain"}
+	e.state.Tasks = []*store.Task{
+		{ID: "polling", Sessions: map[string]*store.Session{store.MainSession: polling}},
+		{ID: "plain", Sessions: map[string]*store.Session{store.MainSession: plain}},
+	}
+	return polling, plain
+}
+
+func TestPollingAgentsAreNotSuspendedForIdleness(t *testing.T) {
+	e := bareEngine(t)
+	e.board.IdleTimeoutMinutes = 1
+	pollingPair(e)
+	if got := len(e.idleTimeouts()); got != 1 {
+		t.Errorf("%d agents to suspend, want only the one that doesn't poll", got)
+	}
+}
+
+func TestPollingAgentsAreNotEvictedForASlot(t *testing.T) {
+	e := bareEngine(t)
+	polling, _ := pollingPair(e)
+	if victim := e.freeSlot(&store.Task{ID: "new"}); victim != "plain" || polling.Status != store.StatusRunning {
+		t.Errorf("freeSlot suspended %q, want only the agent that doesn't poll", victim)
 	}
 }

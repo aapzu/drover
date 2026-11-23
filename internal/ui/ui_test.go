@@ -198,7 +198,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 	for _, k := range []string{"y", "Y"} {
 		m := realModel(t, "a", "b")
 		m, _ = update(m, key("x"))
-		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #1 "a"`) {
+		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #2 "b"`) {
 			t.Fatalf("mode %v text %q", m.mode, m.confirmText)
 		}
 		m, cmd := update(m, key(k))
@@ -208,7 +208,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 		for _, msg := range runCmds(cmd) {
 			m, _ = update(m, msg)
 		}
-		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "b" {
+		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "a" {
 			t.Errorf("%s: cards left %v", k, got)
 		}
 	}
@@ -267,13 +267,15 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"board", modeBoard, nil, "Planning"},
 		{"form", modeForm, func(m Model) Model { m.openForm(m.current()); return m }, "Edit task"},
 		{"send", modeSend, func(m Model) Model { m.modalTask = m.current().ID; m.sendInput.Focus(); return m }, "Send ›"},
+		{"rename", modeRename, func(m Model) Model { m.modalTask = m.current().ID; m.renameInput.Focus(); return m }, "Rename ›"},
 		{"confirm", modeConfirm, func(m Model) Model { m.confirmText = "Really? (y/N)"; return m }, "Really?"},
-		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #1 to…"},
+		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #2 to…"},
 		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},
 		{"filter", modeFilter, func(m Model) Model { m.filterInput.Focus(); return m }, "Filter ›"},
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
 		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, ""},
-		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#1 first"},
+		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#2 second"},
+		{"usage", modeUsage, func(m Model) Model { m.detail.SetContent(m.renderUsage()); return m }, "Usage and cost"},
 		{"live", modeLive, func(m Model) Model { return withLive(m, m.current().ID) }, "LIVE"},
 	}
 	for _, size := range [][2]int{{120, 40}, {80, 24}} {
@@ -336,10 +338,13 @@ func TestHeaderCountsAgentsByState(t *testing.T) {
 	m.filter = "zz"
 
 	got := ansi.Strip(m.renderHeader())
-	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz", "$2.00"} {
+	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("header misses %q: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "$") {
+		t.Errorf("header shows a cost: %q", got)
 	}
 	m.branch = "main"
 	if got := ansi.Strip(m.renderHeader()); !strings.Contains(got, "on main") {
@@ -415,17 +420,25 @@ func TestAttachDoneReturnsToTheBoard(t *testing.T) {
 	}
 
 	m = realModel(t, "named")
+	term := captureTerminal(t)
 	_, cmd = update(m, attachDoneMsg{id: m.snap.Tasks[0].ID, agent: true})
-	if msgs := runCmds(cmd); len(msgs) != 1 {
+	if msgs := runCmds(cmd); len(msgs) != 2 {
 		t.Errorf("a titled card is kept, but got %d msgs", len(msgs))
+	}
+	if term.String() != extendedKeysOn {
+		t.Errorf("attach done wrote %q, want extended keys back on", term.String())
 	}
 }
 
 func TestAttachDoneLeavesTheMouseAloneWhenItIsOff(t *testing.T) {
 	m := realModel(t, "named")
 	m.prefs.NoMouse = true
-	if _, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID}); len(runCmds(cmd)) != 0 {
-		t.Error("attach done enabled the mouse that is off")
+	captureTerminal(t)
+	_, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID})
+	for _, msg := range runCmds(cmd) {
+		if msg != nil {
+			t.Errorf("attach done enabled the mouse that is off: %T", msg)
+		}
 	}
 }
 
