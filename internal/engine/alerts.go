@@ -91,7 +91,7 @@ func (e *Engine) suspendable(owner *store.Task, s *store.Session) bool {
 // queued.
 func idle(s *store.Session) bool {
 	return s.Status == store.StatusRunning && s.Activity == store.ActivityIdle && s.Started &&
-		len(s.Pending) == 0 && !s.RespawnPending && !s.HasBackground()
+		len(s.Pending) == 0 && !s.RespawnPending && !s.StopPending && !s.HasBackground()
 }
 
 // idleTimeouts returns follow-ups suspending agents idle for longer than the

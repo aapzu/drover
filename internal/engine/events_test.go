@@ -269,6 +269,35 @@ func TestBackgroundScansDropFinishedTasks(t *testing.T) {
 	}
 }
 
+func TestStopPendingGuards(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		col    config.Column
+		status store.SessionStatus
+		key    string
+		want   bool
+	}{
+		{"column without an agent", config.Column{ID: "c"}, store.StatusRunning, store.MainSession, true},
+		{"agent column", config.Column{ID: "c", AutoSpawn: true}, store.StatusRunning, store.MainSession, false},
+		{"keepAgent column", config.Column{ID: "c", KeepAgent: true}, store.StatusRunning, store.MainSession, false},
+		{"already suspended", config.Column{ID: "c"}, store.StatusSuspended, store.MainSession, false},
+		{"other session", config.Column{ID: "c"}, store.StatusRunning, "other", false},
+	} {
+		s := &store.Session{Status: c.status, StopPending: true}
+		task := &store.Task{ID: "t1", ColumnID: "c", Sessions: map[string]*store.Session{c.key: s}}
+		e := &Engine{Root: t.TempDir(), state: &store.State{Tasks: []*store.Task{task}}, board: &config.Board{Columns: []config.Column{c.col}}}
+		if got := e.stopPending("t1", c.key); got != c.want {
+			t.Errorf("%s: stopped=%v, want %v", c.name, got, c.want)
+		}
+		if s.StopPending {
+			t.Errorf("%s: the flag should be consumed", c.name)
+		}
+		if stopped := s.Status == store.StatusSuspended; c.want && !stopped {
+			t.Errorf("%s: the session should be suspended, status %s", c.name, s.Status)
+		}
+	}
+}
+
 func TestScheduleToolsFillTheSessionsSchedules(t *testing.T) {
 	s := &store.Session{}
 	consumeLines(t, s,

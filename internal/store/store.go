@@ -99,6 +99,7 @@ type Session struct {
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
 	RespawnPending     bool      `json:"respawnPending,omitempty"`
+	StopPending        bool      `json:"stopPending,omitempty"`
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`

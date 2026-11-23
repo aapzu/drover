@@ -193,8 +193,8 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			t.AddLog(msg)
 			e.alert(t, alertNeedsYou, "turn failed: "+reason)
-			if s.RespawnPending {
-				out = append(out, func() { e.respawnPending(taskID, key) })
+			if s.RespawnPending || s.StopPending {
+				out = append(out, func() { e.turnEnded(taskID, key) })
 			}
 		case "Stop":
 			s.Activity = store.ActivityIdle
@@ -216,9 +216,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.TurnInVisit = false
 				next = func() { e.runTurnEnd(taskID, key, visit, reply) }
 			}
-			if s.RespawnPending {
+			if s.RespawnPending || s.StopPending {
 				then := next
-				next = func() { e.respawnPending(taskID, key); then() }
+				next = func() { e.turnEnded(taskID, key); then() }
 			}
 			out = append(out, func() { next(); e.alertTurnDone(taskID, key, reply) })
 		}
@@ -323,7 +323,7 @@ func (e *Engine) checkInterrupted() []func() {
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {
-					e.respawnPending(taskID, key)
+					e.turnEnded(taskID, key)
 					e.flushPending(task, key)
 				}
 			})
@@ -623,6 +623,40 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 			s.TurnInVisit = true
 		}
 	})
+}
+
+// turnEnded applies a deferred stop, or failing that a deferred settings
+// switch, once the agent's turn ends.
+func (e *Engine) turnEnded(taskID, key string) {
+	if !e.stopPending(taskID, key) {
+		e.respawnPending(taskID, key)
+	}
+}
+
+// stopPending stops an agent whose card moved mid-turn into a column that runs
+// no agent. It reports whether the agent was stopped.
+func (e *Engine) stopPending(taskID, key string) bool {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	var s *store.Session
+	due := false
+	if t != nil {
+		s = t.Sessions[key]
+		col := e.sessionColumn(t)
+		due = s != nil && s.StopPending && s.Status == store.StatusRunning &&
+			key == store.MainSession && !isAgentColumn(col) && !col.KeepAgent
+	}
+	if s != nil {
+		s.StopPending = false
+	}
+	e.mu.Unlock()
+	if !due {
+		return false
+	}
+	e.stopSessions(t, "", store.StatusSuspended)
+	return true
 }
 
 // respawnPending switches an agent whose card moved mid-turn into a column
