@@ -10,8 +10,7 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// liveExitKey is the only key live mode and the assistant panel keep; it matches
-// tmux.DetachKey.
+// liveExitKey leaves live mode and the assistant panel; it matches tmux.DetachKey.
 // Option chords can't be reserved: macOS types them as characters such as å.
 const liveExitKey = "ctrl+q"
 
@@ -229,13 +228,20 @@ func (m Model) startLive() (Model, tea.Cmd) {
 	return m, tea.Batch(liveTick(m.liveGen), cmd)
 }
 
+func (m Model) leaveLiveCmd() tea.Cmd {
+	if t := m.current(); t != nil {
+		return m.discardSilent(t.ID)
+	}
+	return nil
+}
+
 func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == liveExitKey {
+	switch msg.String() {
+	case liveExitKey, "esc":
 		m.mode = modeBoard
-		if t := m.current(); t != nil {
-			return m, m.discardSilent(t.ID)
-		}
-		return m, nil
+		return m, m.leaveLiveCmd()
+	case paletteKey:
+		return m, tea.Batch(m.leaveLiveCmd(), m.openPalette())
 	}
 	if msg.Type == tea.KeyCtrlZ {
 		return m, nil
@@ -246,7 +252,7 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	name, ok := m.liveSession(t.ID)
 	if !ok {
-		m.setFlash("No running agent here. Ctrl-q returns to the board.")
+		m.setFlash("No running agent here. Ctrl-q or esc returns to the board.")
 		return m, nil
 	}
 	job, ok := keyJobFor(name, msg)

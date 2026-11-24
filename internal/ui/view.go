@@ -152,8 +152,8 @@ func (m Model) renderFooter() string {
 	}
 	hints := map[mode]string{
 		modePalette:   "↑↓ select  enter run  esc cancel",
-		modeLive:      "LIVE: ctrl+q back to board",
-		modeAssistant: "ASSISTANT: ctrl+q hide panel",
+		modeLive:      "LIVE: ctrl+q or esc back to board  ctrl+k commands",
+		modeAssistant: "ASSISTANT: ctrl+q or esc hide panel  ctrl+k commands",
 		modeForm:      "tab switch field  ctrl+s save  esc cancel",
 		modeMove:      "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:   "y confirm  any other key cancels",
@@ -617,7 +617,7 @@ func (m Model) renderPreview(height int) string {
 	style := panelStyle
 	if m.mode == modeLive {
 		style = style.BorderForeground(accent)
-		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● LIVE") + title + dim.Render("· ctrl+q back to board ")
+		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● LIVE") + title + dim.Render("· ctrl+q or esc back to board ")
 	} else if m.drag.kind == dragPreview {
 		style = style.BorderForeground(accent)
 	}
@@ -725,12 +725,12 @@ func (m Model) renderHelp() string {
 		{"e", "edit title and prompt"},
 		{"x / D", "delete task (branch is kept)"},
 		{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
-		{"tab", "type into the agent from the preview (Ctrl-q returns)"},
+		{"tab", "type into the agent from the preview (Ctrl-q or esc returns)"},
 		{"s", "send a message to the agent"},
 		{"r", "start or resume the agent in place"},
 		{"S", "suspend the agent (resume later with r)"},
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
-		{":", "open and type into the assistant panel (Ctrl-q returns to the board and hides it)"},
+		{":", "open and type into the assistant panel (Ctrl-q or esc returns to the board and hides it)"},
 		{"N", "start a new assistant conversation"},
 		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
 		{"u", "update the worktree from its base branch"},
@@ -774,7 +774,8 @@ func (m Model) renderHelp() string {
 		{"click preview", "type into the agent"},
 		{"click assistant", "type into the assistant"},
 	}) + "\n\n" + section("Live mode", [][2]string{
-		{"ctrl+q", "back to board"},
+		{"ctrl+q, esc", "back to board"},
+		{"ctrl+k", "search and run a command"},
 		{"mouse wheel", "scroll the agent's history"},
 		{"click", "goes to agents that track the mouse"},
 		{"typing", "jumps back to the bottom"},
