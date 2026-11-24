@@ -294,7 +294,8 @@ func (m Model) mainLaneHidden() bool {
 // reviewLaneShown reports whether the review lane is drawn: always while the
 // main lane is hidden, else per the ReviewLane pref, and with none set, while
 // the lane holds cards. It is also drawn while ctrl+n starts a review, so the
-// new card shows even when the lane was hidden.
+// new card shows even when the lane was hidden. A filter matching only the
+// lane's cards shows it too, for as long as the filter is set.
 func (m Model) reviewLaneShown() bool {
 	if m.startingReview {
 		return true
@@ -303,9 +304,9 @@ func (m Model) reviewLaneShown() bool {
 		return true
 	}
 	if shown := m.prefs.ReviewLane; shown != nil {
-		return *shown && m.hasReviewLane()
+		return *shown && m.hasReviewLane() || m.filterMatchesOnlyReviewLane()
 	}
-	return m.laneCards(true) > 0
+	return m.laneCards(true) > 0 || m.filterMatchesOnlyReviewLane()
 }
 
 // lanes is the indexes of the columns on each row of the board: the main
@@ -1324,6 +1325,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 	case "c":
 		if t != nil {
 			name, err := m.eng.Shell(t.ID)
@@ -1569,6 +1571,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateBoard(msg)
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 		m.mode = modeBoard
 		return m, nil
 	case "enter":
@@ -1578,7 +1581,36 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.filter = strings.TrimSpace(m.filterInput.Value())
+	if m.filterMatchesOnlyReviewLane() {
+		if cards, _ := m.columnCards(m.col); len(cards) == 0 {
+			for i := range m.columns() {
+				if cards, _ := m.columnCards(i); len(cards) > 0 {
+					m.col = i
+					break
+				}
+			}
+		}
+	}
+	m.col = m.shownColumn(m.col)
 	return m, cmd
+}
+
+// filterMatchesOnlyReviewLane reports whether the filter has matches, and all
+// of them are in the review lane's columns.
+func (m Model) filterMatchesOnlyReviewLane() bool {
+	if m.filter == "" {
+		return false
+	}
+	found := false
+	for i, c := range m.columns() {
+		if cards, _ := m.columnCards(i); len(cards) > 0 {
+			if !c.InReviewLane() {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 // openRename opens the rename prompt with the card's title and asks for a

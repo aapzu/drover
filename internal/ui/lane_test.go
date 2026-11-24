@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
@@ -313,6 +314,47 @@ func TestReviewLaneIgnoresArchivedAndHiddenCards(t *testing.T) {
 	m.prefs.ShowHidden = true
 	if !m.reviewLaneShown() {
 		t.Error("B didn't bring the lane back")
+	}
+}
+
+func TestFilterShowsHiddenReviewLaneOnlyWhileItAloneMatches(t *testing.T) {
+	typeFilter := func(m Model, s string) Model {
+		m.filterInput = textinput.New()
+		m, _ = update(m, key("/"))
+		for _, r := range s {
+			m, _ = update(m, key(string(r)))
+		}
+		return m
+	}
+	hidden := func() Model {
+		m := laneModel(t)
+		m.prefs.ReviewLane = ptr(false)
+		return m
+	}
+
+	m := typeFilter(hidden(), "rev")
+	if !m.reviewLaneShown() || m.col != 2 {
+		t.Errorf("filter matching only the lane: shown=%v col=%d, want shown and column 2", m.reviewLaneShown(), m.col)
+	}
+	if m.prefs.ReviewLane == nil || *m.prefs.ReviewLane {
+		t.Error("the filter overwrote the saved lane choice")
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.reviewLaneShown() || m.col != 1 {
+		t.Errorf("after esc: shown=%v col=%d, want hidden and column 1", m.reviewLaneShown(), m.col)
+	}
+
+	m = typeFilter(hidden(), "re")
+	m, _ = update(m, key("x"))
+	if m.reviewLaneShown() {
+		t.Error("lane stayed shown once the filter matched nothing")
+	}
+
+	if m := typeFilter(hidden(), "main"); m.reviewLaneShown() {
+		t.Error("filter matching the main board showed the lane")
+	}
+	if m := typeFilter(hidden(), "#"); m.reviewLaneShown() {
+		t.Error("filter matching both lanes showed the lane")
 	}
 }
 
