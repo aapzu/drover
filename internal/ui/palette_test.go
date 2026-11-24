@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func paletteModel() Model {
@@ -61,22 +62,23 @@ func TestPaletteMatchesEveryWordInNameOrKey(t *testing.T) {
 func TestPaletteRunsTheChosenCommand(t *testing.T) {
 	tests := []struct {
 		search string
-		pick   int
+		key    string
 		mode   mode
 		cmd    bool
+		quits  bool
 	}{
-		{"filter", 0, modeFilter, true},
-		{"help", 0, modeHelp, false},
-		{"column…", 0, modeMove, false},
-		{"delete task", 0, modeConfirm, false},
-		{"next column", 0, modeBoard, true},
-		{"quit", 1, modeBoard, true},
-		{"zzz", 0, modePalette, false},
+		{"filter", "/", modeFilter, true, false},
+		{"help", "?", modeHelp, false, false},
+		{"column…", "m", modeMove, false, false},
+		{"delete task", "x", modeConfirm, false, false},
+		{"next column", "L", modeBoard, true, false},
+		{"quit", "q", modeBoard, true, true},
+		{"zzz", "", modePalette, false, false},
 	}
 	for _, tt := range tests {
 		m := typeInPalette(openedPalette(t), tt.search)
-		for range tt.pick {
-			m = pressInPalette(m, tea.KeyDown)
+		if tt.key != "" {
+			m = pickByKey(t, m, tt.key)
 		}
 		next, cmd := m.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
 		if got := next.(Model).mode; got != tt.mode {
@@ -85,14 +87,24 @@ func TestPaletteRunsTheChosenCommand(t *testing.T) {
 		if (cmd != nil) != tt.cmd {
 			t.Errorf("%q: got a cmd = %v, want %v", tt.search, cmd != nil, tt.cmd)
 		}
+		if tt.quits {
+			if _, ok := cmd().(tea.QuitMsg); !ok {
+				t.Errorf("Quit returned %T, want tea.QuitMsg", cmd())
+			}
+		}
 	}
+}
 
-	m := typeInPalette(openedPalette(t), "quit")
-	m = pressInPalette(m, tea.KeyDown)
-	_, cmd := m.updatePalette(tea.KeyMsg{Type: tea.KeyEnter})
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Errorf("Quit returned %T, want tea.QuitMsg", cmd())
+func pickByKey(t *testing.T, m Model, key string) Model {
+	t.Helper()
+	for range len(m.paletteMatches()) {
+		if m.paletteMatches()[m.paletteSel].key == key {
+			return m
+		}
+		m = pressInPalette(m, tea.KeyDown)
 	}
+	t.Fatalf("no command on %q among the matches", key)
+	return m
 }
 
 func TestPaletteIsReachedThroughUpdate(t *testing.T) {
@@ -152,13 +164,25 @@ func TestPaletteClosesAndReopensEmpty(t *testing.T) {
 	}
 }
 
-func TestPaletteKeysAreUnique(t *testing.T) {
-	seen := map[string]bool{}
-	for _, c := range paletteCommands {
-		if seen[c.key] {
-			t.Errorf("two commands press %q", c.key)
+func TestEveryPaletteCommandIsListedInTheHelp(t *testing.T) {
+	m := paletteModel()
+	m.width = 60
+	listed := map[string]bool{}
+	for _, line := range strings.Split(ansi.Strip(m.renderHelp()), "\n") {
+		cell, _, _ := strings.Cut(strings.TrimLeft(line, "│ "), "  ")
+		for _, alt := range strings.Split(cell, " / ") {
+			for _, k := range strings.FieldsFunc(alt, func(r rune) bool { return r == ',' || r == ' ' }) {
+				listed[k] = true
+			}
 		}
-		seen[c.key] = true
+	}
+	for _, c := range paletteCommands {
+		if c.key == "?" {
+			continue
+		}
+		if !listed[c.key] {
+			t.Errorf("the palette runs %q on %q but the help doesn't list that key", c.name, c.key)
+		}
 	}
 }
 

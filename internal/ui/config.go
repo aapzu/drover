@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aapzu/drover/internal/config"
 )
@@ -402,42 +403,54 @@ func configSources(root string) []string {
 
 func (m Model) renderConfig() string {
 	width := min(76, m.width-4)
-	lines := []string{bold.Render("Settings"), ""}
+	head := []string{bold.Render("Settings"), ""}
 	if query := m.configQuery(); query != "" && !m.configFilterInput.Focused() {
-		lines = append(lines, dim.Render("search: "+query+" (esc clears)"), "")
+		head = append(head, dim.Render("search: "+query+" (esc clears)"), "")
 	}
+	var rows []string
+	selectedRow := 0
 	visible := m.configVisible()
 	if len(visible) == 0 {
-		lines = append(lines, dim.Render("No matching settings"))
+		rows = append(rows, dim.Render("No matching settings"))
 	}
 	for n, i := range visible {
 		opt := configOptions[i]
 		if opt.shared && (n == 0 || !configOptions[visible[n-1]].shared) {
-			lines = append(lines, "", dim.Render("drover.json only"))
+			rows = append(rows, "", dim.Render("drover.json only"))
 		}
 		selected := i == m.configSel
 		prefix, name := "  ", fmt.Sprintf("%-32s", opt.name)
 		if selected {
 			prefix, name = "▸ ", bold.Render(name)
+			selectedRow = len(rows)
 		}
 		value, note := fmt.Sprintf("%-12s", configValue(opt, m.snap.Board)), dim.Render(m.configSrc[i])
 		if selected && m.configEditing {
 			value = m.configInput.View()
 			note = dim.Render("→ " + m.configLayer.FileName())
 		}
-		lines = append(lines, prefix+name+value+"  "+note)
+		rows = append(rows, prefix+name+value+"  "+note)
 	}
 	if m.configQuery() == "" {
 		prefix, name := "  ", fmt.Sprintf("%-32s", "Columns…")
+		rows = append(rows, "")
 		if m.onColumnsRow() {
 			prefix, name = "▸ ", bold.Render(name)
+			selectedRow = len(rows)
 		}
 		count := fmt.Sprintf("%d columns", len(m.snap.Board.Columns))
 		if len(m.snap.Board.Columns) == 1 {
 			count = "1 column"
 		}
-		lines = append(lines, "", prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
+		rows = append(rows, prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
 	}
-	lines = append(lines, "", dim.Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt."))
+	foot := dim.Width(width - 4).Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt.")
+	if room := m.height - 7 - len(head) - lipgloss.Height(foot); m.height > 0 && len(rows) > room {
+		room = max(room, 3)
+		start := clamp(selectedRow-room/2, 0, len(rows)-room)
+		rows = rows[start : start+room]
+	}
+	lines := append(head, rows...)
+	lines = append(lines, "", foot)
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

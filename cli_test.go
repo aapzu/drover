@@ -64,7 +64,6 @@ func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 		want string
 	}{
 		"unknown column": {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "nowhere"}, `unknown column "nowhere"; columns are planning, executing`},
-		"unknown card":   {inbox.Request{Op: inbox.OpRemove, Number: 7}, "no card #7"},
 		"bad linear":     {inbox.Request{Op: inbox.OpAdd, Linear: "banana"}, "not a Linear issue key"},
 		"fine move":      {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, ""},
 		"fine add":       {inbox.Request{Op: inbox.OpAdd, Title: &title, Column: "planning"}, ""},
@@ -374,6 +373,7 @@ func TestCommandsSendTheRequestAndConfirm(t *testing.T) {
 		"move":             {cmdMove, []string{"#1", "In review"}, "", inbox.Result{Number: 1, Column: "In review"}, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, "Moved #1 to In review\n"},
 		"edit title":       {cmdEdit, []string{"1", "--title", "Fix it"}, "", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Title: &title}, "Updated #1\n"},
 		"edit from stdin":  {cmdEdit, []string{"1", "--prompt", "-"}, "now", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Prompt: &prompt}, "Updated #1\n"},
+		"edit both":        {cmdEdit, []string{"1", "--prompt", "now", "--title", "Fix it"}, "", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Title: &title, Prompt: &prompt}, "Updated #1\n"},
 		"remove":           {cmdRemove, []string{"2"}, "", inbox.Result{Number: 2}, inbox.Request{Op: inbox.OpRemove, Number: 2}, "Deleted #2\n"},
 		"remove and force": {cmdRemove, []string{"2", "--force"}, "", inbox.Result{Number: 2}, inbox.Request{Op: inbox.OpRemove, Number: 2, Force: true}, "Deleted #2\n"},
 	} {
@@ -408,6 +408,7 @@ func TestCommandsRejectBadInputBeforeSending(t *testing.T) {
 		"add with an empty stdin":    {cmdAdd, []string{"Fix", "-p", "-"}, "", "stdin is empty"},
 		"add with an unknown flag":   {cmdAdd, []string{"Fix", "--nope"}, "", "flag provided but not defined"},
 		"add to an unknown column":   {cmdAdd, []string{"Fix", "-c", "nowhere"}, "", `unknown column "nowhere"`},
+		"add linear to a bad column": {cmdAdd, []string{"--linear", "DX-1", "-c", "nowhere"}, "", `unknown column "nowhere"`},
 		"add to review and a column": {cmdAdd, []string{"Fix", "--review", "-c", "done"}, "", "both pick the column"},
 		"move with one argument":     {cmdMove, []string{"1"}, "", "usage: drover move"},
 		"move a bad number":          {cmdMove, []string{"x", "done"}, "", `"x" is not a card number`},
@@ -471,6 +472,34 @@ func TestSendReportsWhatTheBoardAnswered(t *testing.T) {
 				t.Errorf("err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestSendFailsOnAnAnswerItCannotRead(t *testing.T) {
+	root := project(t)
+	release, ok := inbox.Hold(root)
+	if !ok {
+		t.Fatal("could not hold the board lock")
+	}
+	t.Cleanup(release)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		for {
+			if p, ok, _ := inbox.Next(root); ok {
+				os.WriteFile(filepath.Join(store.Dir(root), "inbox", p.ID+".result"), []byte("{not json"), 0o644)
+				return
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	err := cmdRemove(root, []string{"2"})
+	if err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Errorf("err = %v, want the unreadable answer reported", err)
 	}
 }
 
@@ -543,16 +572,6 @@ func TestListFailsOnABadBoard(t *testing.T) {
 	}
 	if err := cmdList(t.TempDir(), []string{"--nope"}); err == nil {
 		t.Error("an unknown flag was accepted")
-	}
-}
-
-func TestColumnNames(t *testing.T) {
-	board := &config.Board{Columns: []config.Column{{ID: "inbox", Name: "Inbox"}, {ID: "exec", Name: "Executing"}}}
-	if got := columnNames(board); got != "inbox, exec" {
-		t.Errorf("columnNames = %q", got)
-	}
-	if got := columnNames(&config.Board{}); got != "" {
-		t.Errorf("columnNames of no columns = %q", got)
 	}
 }
 

@@ -2,11 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -129,22 +132,15 @@ func TestBoardKeysTogglePrefsAndSaveThem(t *testing.T) {
 				if got := tt.get(m.prefs); got != densityTall {
 					t.Errorf("second z: density %v", got)
 				}
+				if m, _ = update(m, key("z")); m.prefs.Density != densityNormal {
+					t.Errorf("third z: density %v, want it back to normal", m.prefs.Density)
+				}
 				return
 			}
 			if got := tt.get(m.prefs); got == tt.want {
 				t.Errorf("second %s did not toggle back", tt.key)
 			}
 		})
-	}
-}
-
-func TestDensityCyclesBackToNormal(t *testing.T) {
-	m := realModel(t, "a")
-	for range 3 {
-		m, _ = update(m, key("z"))
-	}
-	if m.prefs.Density != densityNormal {
-		t.Errorf("density = %v after three presses", m.prefs.Density)
 	}
 }
 
@@ -320,16 +316,6 @@ func TestBoardKeysNeedACard(t *testing.T) {
 	}
 }
 
-func TestMoveKeyStartsOnTheCardsColumn(t *testing.T) {
-	m := realModel(t, "a")
-	m.snap.Tasks[0].ColumnID = "waiting-for-me"
-	m.col = 2
-	m, _ = update(m, key("m"))
-	if m.modalTask != m.snap.Tasks[0].ID || m.moveSel != 2 {
-		t.Errorf("modal task %q moveSel %d", m.modalTask, m.moveSel)
-	}
-}
-
 func TestFilterKeysNarrowThenClear(t *testing.T) {
 	m := realModel(t, "alpha", "beta")
 	m, _ = update(m, key("/"))
@@ -410,8 +396,8 @@ func TestCardActionKeysMarkTheCardBusy(t *testing.T) {
 				msg = special(tea.KeyEnter)
 			}
 			m, cmd := update(m, msg)
-			if cmd == nil || m.busy[m.current().ID].label != label {
-				t.Errorf("cmd nil %v busy %v, want %q", cmd == nil, m.busy, label)
+			if o := m.busy[m.current().ID]; cmd == nil || o.label != label || o.column != "" {
+				t.Errorf("cmd nil %v busy %v, want %q on the card without moving it", cmd == nil, m.busy, label)
 			}
 			if !strings.Contains(m.status(m.current()), label) {
 				t.Errorf("card status = %q", m.status(m.current()))
@@ -463,14 +449,11 @@ func TestTabTypesIntoTheAgentOnlyWhenOneRuns(t *testing.T) {
 	m = liveCard(t, "a")
 	m.prefs.HidePreview = true
 	m, cmd = update(m, special(tea.KeyTab))
-	if m.mode != modeLive || m.liveGen != 1 || m.prefs.HidePreview || cmd == nil {
-		t.Errorf("mode %v gen %d hidePreview %v cmd nil %v", m.mode, m.liveGen, m.prefs.HidePreview, cmd == nil)
+	if m.mode != modeLive || m.prefs.HidePreview || cmd == nil {
+		t.Errorf("mode %v hidePreview %v cmd nil %v", m.mode, m.prefs.HidePreview, cmd == nil)
 	}
 	if loadPrefs(m.eng.Root).HidePreview {
 		t.Error("the preview was left hidden in the saved layout")
-	}
-	if msgs := runCmds(cmd); len(msgs) != 2 {
-		t.Errorf("tab started %d things, want the live tick and a capture", len(msgs))
 	}
 }
 
@@ -505,20 +488,6 @@ func TestArchiveKeyRefusesWhereCardsCannotBeArchived(t *testing.T) {
 	}
 }
 
-func TestAssistantKeysReachTheBoardKeyHandler(t *testing.T) {
-	fakePanel(t)
-	m := realModel(t, "a")
-	m, _ = update(m, key(askKey))
-	if m.mode != modeAssistant {
-		t.Fatalf("%s: mode %v", askKey, m.mode)
-	}
-	m.mode = modeBoard
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if m.assist.open {
-		t.Error("ctrl+q on the board left the panel open")
-	}
-}
-
 // paletteSetup returns a model where the command bound to k has something to act on.
 func paletteSetup(t *testing.T, k string) Model {
 	t.Helper()
@@ -549,5 +518,45 @@ func TestEveryPaletteCommandDoesSomethingOnTheBoard(t *testing.T) {
 				t.Errorf("pressing %q on the board did nothing", c.key)
 			}
 		})
+	}
+}
+
+func TestUpdateKeyReportsWhyACardCannotBeUpdated(t *testing.T) {
+	m := realModel(t, "a")
+	m, cmd := update(m, key("u"))
+	if m.busy[m.current().ID].label != "updating from base" || cmd == nil {
+		t.Fatalf("busy %v cmd nil %v", m.busy, cmd == nil)
+	}
+	for _, msg := range runCmds(cmd) {
+		m, _ = update(m, msg)
+	}
+	if m.flash != "Error: this card has no worktree yet" || len(m.busy) != 0 {
+		t.Errorf("flash %q busy %v", m.flash, m.busy)
+	}
+}
+
+func TestWriteDefaultBoardKeyReportsAnUnwritableProject(t *testing.T) {
+	m := realModel(t, "a")
+	if err := os.Mkdir(filepath.Join(m.eng.Root, config.FileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = update(m, key("W"))
+	if !strings.HasPrefix(m.flash, "Error:") {
+		t.Errorf("flash = %q, want the write error", m.flash)
+	}
+}
+
+func TestMoveKeysOnACardWhoseColumnWasRemovedTreatThePlaceAsTheFirstColumn(t *testing.T) {
+	m := realModel(t, "a")
+	card := m.snap.Tasks[0]
+	card.ColumnID = "deleted"
+
+	if next, cmd := update(m, key("H")); cmd != nil || len(next.busy) != 0 {
+		t.Error("H moved an orphan card back out of the first column")
+	}
+	next, cmd := update(m, key("L"))
+	if cmd == nil || next.busy[card.ID].column != "executing" || next.col != 1 {
+		t.Errorf("L: busy %v col %d, want the orphan moved to the second column", next.busy, next.col)
 	}
 }

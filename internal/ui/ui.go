@@ -1095,9 +1095,14 @@ func moveTo(eng mover, busy map[string]op, id string, number int, target config.
 	})
 }
 
+type archiver interface {
+	snapshotter
+	ArchiveTask(id string, archived, force bool) error
+}
+
 // archiveCard archives or restores a card off the UI thread. A worktree with
 // uncommitted changes asks first, then retries with force.
-func archiveCard(eng *engine.Engine, busy map[string]op, id string, number int, archive, force bool) tea.Cmd {
+func archiveCard(eng archiver, busy map[string]op, id string, number int, archive, force bool) tea.Cmd {
 	return runOp(eng, busy, id, op{label: "archiving"}, func() actionDoneMsg {
 		err := eng.ArchiveTask(id, archive, force)
 		msg := actionDoneMsg{err: err}

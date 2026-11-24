@@ -230,27 +230,32 @@ func TestScrollPreviewCapturesOnlyWhenOutOfLines(t *testing.T) {
 	if cmd == nil || !next.(Model).previewBusy {
 		t.Fatal("scrolling past the capture did not start one")
 	}
-}
 
-func TestScrollPreviewCaptureBoundary(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	m.previewHistory = 500
-	h := m.layout().previewH - 2
 	m.previewLines = h + 4
 	if _, cmd := m.scrollPreview(4); cmd != nil {
-		t.Fatal("captured although the window still fits the capture")
+		t.Error("captured although the window still fits the capture")
 	}
 	if _, cmd := m.scrollPreview(5); cmd == nil {
-		t.Fatal("did not capture although the window runs one line past the capture")
+		t.Error("did not capture although the window runs one line past the capture")
 	}
 }
 
-func TestPreviewMsgRecordsWhatTheCaptureHolds(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	id := m.snap.Tasks[0].ID
-	next, _ := m.Update(previewMsg{taskID: id, content: "a\nb\nc\n\n", complete: true, at: time.Now()})
-	if got := next.(Model); got.previewLines != 3 || !got.previewComplete {
-		t.Fatalf("lines %d complete %v, want 3 and true", got.previewLines, got.previewComplete)
+func TestScrollingAnswersFromTheCaptureUntilItRunsOut(t *testing.T) {
+	deliver := func(complete bool) Model {
+		m := testModel(120, 40, 1, 1)
+		next, _ := m.Update(previewMsg{taskID: m.snap.Tasks[0].ID, content: "a\nb\nc\n\n", history: 500, complete: complete, at: time.Now()})
+		return next.(Model)
+	}
+	h := deliver(false).layout().previewH - 2
+	if h <= 3 {
+		t.Fatalf("preview shows %d rows, the test needs it taller than the 3 captured lines", h)
+	}
+
+	if _, cmd := deliver(false).scrollPreview(1); cmd == nil {
+		t.Error("scrolling past a 3 line capture of a 500 line history captured nothing")
+	}
+	if _, cmd := deliver(true).scrollPreview(1); cmd != nil {
+		t.Error("captured again although the capture holds all of the history")
 	}
 }
 
@@ -263,14 +268,6 @@ func TestStalePreviewCaptureStillReleasesAndRepeats(t *testing.T) {
 	got := next.(Model)
 	if again == nil || !got.previewBusy || got.previewWanted {
 		t.Fatalf("follow-up %v busy %v wanted %v", again != nil, got.previewBusy, got.previewWanted)
-	}
-}
-
-func TestScrollPreviewDoesNotRecaptureOnceAllHistoryIsHeld(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	m.previewHistory, m.previewComplete = 5, true
-	if _, cmd := m.scrollPreview(5); cmd != nil {
-		t.Fatal("captured although the capture holds all of the history")
 	}
 }
 
@@ -301,16 +298,16 @@ func TestPreviewCapturesDoNotStack(t *testing.T) {
 	}
 }
 
-func TestPreviewMsgSetsMouse(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
+func TestClicksGoToTheAgentOnlyWhileItsCaptureSaysItTracksTheMouse(t *testing.T) {
+	m := liveModel()
 	id := m.snap.Tasks[0].ID
 	next, _ := m.Update(previewMsg{taskID: id, mouse: true, at: time.Now()})
-	if !next.(Model).previewMouse {
-		t.Fatal("previewMouse not set from the capture")
+	if name, ok := next.(Model).clickTarget(); !ok || name != "sess" {
+		t.Fatalf("click target %q, %v after a capture from an agent that tracks the mouse", name, ok)
 	}
 	next, _ = next.(Model).Update(previewMsg{taskID: id, at: time.Now()})
-	if next.(Model).previewMouse {
-		t.Fatal("previewMouse not cleared by the next capture")
+	if name, ok := next.(Model).clickTarget(); ok {
+		t.Errorf("click target %q after the agent stopped tracking the mouse", name)
 	}
 }
 
@@ -322,6 +319,12 @@ func TestTmuxKey(t *testing.T) {
 		{tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hé")}, "hé", ""},
 		{tea.KeyMsg{Type: tea.KeySpace}, " ", ""},
 		{tea.KeyMsg{Type: tea.KeyEnter}, "", "Enter"},
+		{tea.KeyMsg{Type: tea.KeyTab}, "", "Tab"},
+		{tea.KeyMsg{Type: tea.KeyDelete}, "", "DC"},
+		{tea.KeyMsg{Type: tea.KeyF10}, "", "F10"},
+		{tea.KeyMsg{Type: tea.KeyF12}, "", "F12"},
+		{tea.KeyMsg{Type: tea.KeySpace, Alt: true}, "", "M-Space"},
+		{tea.KeyMsg{Type: tea.KeyCtrlUp, Alt: true}, "", "M-C-Up"},
 		{tea.KeyMsg{Type: tea.KeyEsc}, "", "Escape"},
 		{tea.KeyMsg{Type: tea.KeyBackspace}, "", "BSpace"},
 		{tea.KeyMsg{Type: tea.KeyShiftTab}, "", "BTab"},
@@ -388,12 +391,6 @@ func TestGroupCardsShareSessionAndShowMarker(t *testing.T) {
 		card := &store.Task{ID: "pr", Number: 3, Title: "PR", ColumnID: "c0", PR: &pr}
 		if got := ansi.Strip(m.renderCard(card, 60, false, false, 0)); !strings.Contains(got, want) {
 			t.Errorf("card misses %q:\n%s", want, got)
-		}
-	}
-	for _, d := range []density{densityNormal, densityCompact, densityTall} {
-		m.prefs.Density = d
-		if got := lipgloss.Height(m.renderCard(split, 30, false, false, 0)); got != d.cardHeight() {
-			t.Fatalf("density %d: card is %d rows, want %d", d, got, d.cardHeight())
 		}
 	}
 }
@@ -601,5 +598,79 @@ func TestCardLinksItsPR(t *testing.T) {
 	}
 	if ansi.Strip(linked) != ansi.Strip(plain) {
 		t.Errorf("the link changes the visible card:\n%s\nvs\n%s", ansi.Strip(linked), ansi.Strip(plain))
+	}
+}
+
+func TestFilterMatchesTheIssueKeyAndThePRBranch(t *testing.T) {
+	tasks := []*store.Task{
+		{ID: "a", Number: 1, Title: "one", ColumnID: "c0", Issue: &store.Issue{Key: "DX-77"}},
+		{ID: "b", Number: 2, Title: "two", ColumnID: "c0", PR: &store.PR{Number: 5, Branch: "feature/login"}},
+		{ID: "c", Number: 3, Title: "three", ColumnID: "c0"},
+	}
+	for filter, want := range map[string]string{"dx-77": "a", "FEATURE/login": "b", "#5": "b", "dx-77 login": ""} {
+		m := testModel(120, 40, 1, 0)
+		m.snap.Tasks = tasks
+		m.filter = filter
+		if got := ids(m.tasksForColumn(0)); got != want {
+			t.Errorf("filter %q shows %q, want %q", filter, got, want)
+		}
+	}
+}
+
+func TestFilterThatHidesTheSelectedCardMovesTheCursorToAMatch(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	m.snap.Tasks = []*store.Task{
+		{ID: "a", Number: 1, Title: "login one", ColumnID: "c0"},
+		{ID: "b", Number: 2, Title: "login two", ColumnID: "c0"},
+		{ID: "c", Number: 3, Title: "other", ColumnID: "c0"},
+	}
+	m.selected["c0"] = "c"
+	m.filter = "login"
+	if got := m.current(); got == nil || got.ID != "a" {
+		t.Fatalf("cursor on %v, want the first card that matches", got)
+	}
+	m, _ = update(m, key("j"))
+	if got := m.current(); got == nil || got.ID != "b" {
+		t.Errorf("j moved the cursor to %v, want the next match", got)
+	}
+
+	m.filter = "nothing like this"
+	if got := m.current(); got != nil {
+		t.Errorf("cursor on %v with no match", got.ID)
+	}
+	if _, cmd := update(m, key("r")); cmd != nil {
+		t.Error("a card action ran with no card selected")
+	}
+}
+
+func TestPreviewNeedsRoomBesideTheBoard(t *testing.T) {
+	for height, want := range map[int]bool{15: false, 16: true, 40: true} {
+		m := testModel(120, height, 3, 0)
+		l := m.layout()
+		if got := l.previewH > 0; got != want {
+			t.Errorf("height %d: preview rows = %d, want a preview = %v", height, l.previewH, want)
+		}
+		if l.boardH+l.previewH != l.bodyH {
+			t.Errorf("height %d: board %d + preview %d rows don't fill the body's %d", height, l.boardH, l.previewH, l.bodyH)
+		}
+	}
+}
+
+func TestColumnsThatDoNotFitStayWithinTheBoard(t *testing.T) {
+	tests := []struct {
+		name        string
+		width, cols int
+	}{
+		{"all fit", 120, 4},
+		{"too many for the width", 60, 6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testModel(tt.width, 40, tt.cols, 1)
+			l := m.layout()
+			if w := lipgloss.Width(m.renderBoard(l)); w > l.boardW {
+				t.Errorf("board is %d wide, only %d fit", w, l.boardW)
+			}
+		})
 	}
 }

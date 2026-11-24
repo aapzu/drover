@@ -242,6 +242,53 @@ func TestShellOpensInTheMainCheckoutBeforeTheCardHasAWorktree(t *testing.T) {
 	}
 }
 
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestUpdateFromBaseSaysWhichBranchItUsed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		origin func(t *testing.T, root string)
+		want   string
+	}{
+		"no origin means the local branch": {nil, "up to date with main"},
+		"a reachable origin": {func(t *testing.T, root string) {
+			remote := filepath.Join(t.TempDir(), "origin.git")
+			gitIn(t, root, "clone", "-q", "--bare", root, remote)
+			gitIn(t, root, "remote", "add", "origin", remote)
+		}, "up to date with origin/main"},
+		"an origin that cannot be fetched": {func(t *testing.T, root string) {
+			gitIn(t, root, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+		}, "up to date with local main (fetch failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _, _ := releaseRepo(t)
+			if tc.origin != nil {
+				tc.origin(t, root)
+			}
+			worktree := filepath.Join(t.TempDir(), "wt")
+			gitIn(t, root, "worktree", "add", "-q", "-b", "wt", worktree, "main")
+			e := bareEngine(t)
+			e.Root, e.isRepo = root, true
+			card := &store.Task{ID: "a", Number: 1, WorktreePath: worktree, BaseBranch: "main"}
+			e.state.Tasks = []*store.Task{card}
+
+			got, err := e.UpdateFromBase(card.ID)
+
+			if err != nil || !strings.Contains(got, tc.want) {
+				t.Errorf("UpdateFromBase = %q, %v; want it to say %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
 const deferredWorktreeBoard = `{"initScript":%q,"columns":[
   {"id":"backlog","name":"Backlog"},
   {"id":"plan","name":"Planning","autoSpawn":true,"noWorktree":true},

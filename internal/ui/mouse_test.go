@@ -266,13 +266,28 @@ func TestDraggingACardMovesItToTheColumnItIsDroppedOn(t *testing.T) {
 	}
 }
 
-func TestDraggingStartsAfterAVerticalWobble(t *testing.T) {
-	m := mouseModel(t)
-	y := firstCardY(m)
-	m, _ = update(m, mousePress(5, y))
-	m, _ = update(m, mouseMotion(5, y+1))
-	if m.drag.kind != dragCard {
-		t.Errorf("drag = %v after moving a row", m.drag.kind)
+func TestACardDragStartsOnceThePointerMovesAway(t *testing.T) {
+	tests := []struct {
+		name   string
+		dx, dy int
+		drag   dragKind
+	}{
+		{"a row down", 0, 1, dragCard},
+		{"two cells right", 2, 0, dragCard},
+		{"two cells left", -2, 0, dragCard},
+		{"one cell left", -1, 0, dragPending},
+		{"one cell right", 1, 0, dragPending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := mouseModel(t)
+			y := firstCardY(m)
+			m, _ = update(m, mousePress(45, y))
+			m, _ = update(m, mouseMotion(45+tt.dx, y+tt.dy))
+			if m.drag.kind != tt.drag {
+				t.Errorf("drag = %v, want %v", m.drag.kind, tt.drag)
+			}
+		})
 	}
 }
 
@@ -374,8 +389,8 @@ func TestDragFromTheColumnEdgeResizesTheColumnAndSavesIt(t *testing.T) {
 		t.Fatalf("drag = %+v", m.drag)
 	}
 	m, _ = update(m, mouseMotion(60, y))
-	if got := m.prefs.ColumnWidths["c0"]; got != 62 {
-		t.Errorf("width = %d, want the edge following the pointer", got)
+	if on, before := m.layout().hitTest(m, 60, y), m.layout().hitTest(m, 59, y); on.kind != hitColumnEdge || before.kind == hitColumnEdge {
+		t.Errorf("hit under the pointer %v, one cell left %v; want the resize handle to start under the pointer", on.kind, before.kind)
 	}
 	m, _ = update(m, mouseMotion(2, y))
 	if got := m.prefs.ColumnWidths["c0"]; got != minResizedWidth {
@@ -386,8 +401,8 @@ func TestDragFromTheColumnEdgeResizesTheColumnAndSavesIt(t *testing.T) {
 		t.Error("the layout was saved before the drag ended")
 	}
 	m, _ = update(m, mouseRelease(60, y))
-	if m.drag.kind != dragNone || loadPrefs(m.eng.Root).ColumnWidths["c0"] != 62 {
-		t.Errorf("drag %v saved widths %v", m.drag.kind, loadPrefs(m.eng.Root).ColumnWidths)
+	if saved := loadPrefs(m.eng.Root).ColumnWidths["c0"]; m.drag.kind != dragNone || saved == 0 || saved != m.prefs.ColumnWidths["c0"] {
+		t.Errorf("drag %v saved widths %v, want the width on screen", m.drag.kind, loadPrefs(m.eng.Root).ColumnWidths)
 	}
 }
 

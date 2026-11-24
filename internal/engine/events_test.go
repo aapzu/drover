@@ -138,20 +138,19 @@ func TestEventsFollowTheMovedTranscript(t *testing.T) {
 
 func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 	for name, tc := range map[string]struct {
-		session   *store.Session
-		title     string
-		line      string
-		activity  store.Activity
-		followUps int
-		check     func(t *testing.T, task *store.Task, s *store.Session)
+		session  *store.Session
+		title    string
+		line     string
+		activity store.Activity
+		check    func(t *testing.T, task *store.Task, s *store.Session)
 	}{
 		"startup ends starting": {
 			session: &store.Session{Activity: store.ActivityStarting}, line: `{"hook_event_name":"SessionStart","source":"startup"}`,
-			activity: store.ActivityIdle, followUps: 1,
+			activity: store.ActivityIdle,
 		},
 		"clear starts a new conversation": {
 			session: &store.Session{Activity: store.ActivityThinking, TurnInVisit: true, TurnEndRow: "Row"}, line: `{"hook_event_name":"SessionStart","source":"clear"}`,
-			activity: store.ActivityIdle, followUps: 1,
+			activity: store.ActivityIdle,
 			check: func(t *testing.T, _ *store.Task, s *store.Session) {
 				if s.TurnInVisit || s.TurnEndRow != "" {
 					t.Errorf("clear kept the old turn: %+v", s)
@@ -178,7 +177,7 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 		},
 		"a prompt starts a turn and names the card": {
 			session: &store.Session{Activity: store.ActivityIdle}, line: `{"hook_event_name":"UserPromptSubmit","prompt":"Fix the typo\nin the readme"}`,
-			activity: store.ActivityThinking, followUps: 1,
+			activity: store.ActivityThinking,
 			check: func(t *testing.T, task *store.Task, s *store.Session) {
 				if !s.Started || !s.TurnInVisit || task.Title != "Fix the typo" || task.Prompt != "Fix the typo\nin the readme" {
 					t.Errorf("after the prompt: session %+v, title %q, prompt %q", s, task.Title, task.Prompt)
@@ -217,13 +216,13 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 		},
 		"the plan is approved": {
 			session: &store.Session{Activity: store.ActivityIdle}, line: `{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode"}`,
-			activity: store.ActivityThinking, followUps: 1,
+			activity: store.ActivityThinking,
 		},
 		"a permission request": {
 			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, activity: store.ActivityPermission,
 		},
 		"a plan ready for review": {
-			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`, activity: store.ActivityPermission, followUps: 1,
+			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode"}`, activity: store.ActivityPermission,
 		},
 		"a permission notification": {
 			session: &store.Session{Activity: store.ActivityThinking}, line: `{"hook_event_name":"Notification","notification_type":"permission_prompt"}`, activity: store.ActivityPermission,
@@ -233,7 +232,7 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 		},
 		"the turn ends": {
 			session: &store.Session{Activity: store.ActivityThinking, Summary: "old"}, line: `{"hook_event_name":"Stop","last_assistant_message":"All done."}`,
-			activity: store.ActivityIdle, followUps: 3,
+			activity: store.ActivityIdle,
 			check: func(t *testing.T, _ *store.Task, s *store.Session) {
 				if !s.Started || s.LastReply != "All done." || s.Summary != "" {
 					t.Errorf("after the stop: %+v", s)
@@ -242,10 +241,19 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 		},
 		"the turn of a visit ends": {
 			session: &store.Session{Activity: store.ActivityThinking, TurnInVisit: true}, line: `{"hook_event_name":"Stop"}`,
-			activity: store.ActivityIdle, followUps: 3,
+			activity: store.ActivityIdle,
 			check: func(t *testing.T, _ *store.Task, s *store.Session) {
 				if s.TurnInVisit {
 					t.Error("the turn still counts as in the visit")
+				}
+			},
+		},
+		"a failed turn goes idle and holds the queue": {
+			session: &store.Session{Activity: store.ActivityThinking, TurnInVisit: true, TurnEndRow: "Row", Pending: []store.Pending{{Text: "next"}}},
+			line:    `{"hook_event_name":"StopFailure","error":"rate_limit"}`, activity: store.ActivityIdle,
+			check: func(t *testing.T, task *store.Task, s *store.Session) {
+				if !s.Started || s.TurnInVisit || s.TurnEndRow != "" || len(s.Pending) != 1 || !hasLog(task, "Turn failed: rate_limit; 1 queued message(s) held") {
+					t.Errorf("after the failure: %+v, log %v", s, task.Log)
 				}
 			},
 		},
@@ -264,9 +272,9 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 			task := &store.Task{ID: "t1", Title: tc.title}
 			e.state = &store.State{Tasks: []*store.Task{task}}
 			before := time.Now()
-			followUps := consume(t, e, task, tc.session, tc.line)
-			if tc.session.Activity != tc.activity || len(followUps) != tc.followUps {
-				t.Errorf("activity = %q with %d follow-ups, want %q with %d", tc.session.Activity, len(followUps), tc.activity, tc.followUps)
+			consume(t, e, task, tc.session, tc.line)
+			if tc.session.Activity != tc.activity {
+				t.Errorf("activity = %q, want %q", tc.session.Activity, tc.activity)
 			}
 			if tc.session.UpdatedAt.Before(before) || tc.session.EventsOffset == 0 {
 				t.Errorf("the session was not marked as updated: %+v", tc.session)
@@ -309,6 +317,157 @@ func TestBackgroundScansDropFinishedTasks(t *testing.T) {
 	}
 	if again := e.backgroundScans(); len(again) != 1 {
 		t.Errorf("the finished scan was not released: %d scans", len(again))
+	}
+}
+
+func TestTickMarksAnAgentWhoseTmuxSessionIsGoneAsExited(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	for name, tc := range map[string]struct {
+		quietFor     time.Duration
+		launching    bool
+		want         store.SessionStatus
+		wantActivity store.Activity
+	}{
+		"gone for a while":     {time.Minute, false, store.StatusExited, store.ActivityIdle},
+		"just updated":         {0, false, store.StatusRunning, store.ActivityThinking},
+		"still being launched": {time.Minute, true, store.StatusRunning, store.ActivityThinking},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := bareEngine(t)
+			card := &store.Task{ID: "t1", Number: 51, Title: "Vanishing agent " + name, ColumnID: e.board.FirstColumn().ID, Sessions: map[string]*store.Session{
+				store.MainSession: {Key: store.MainSession, Status: store.StatusRunning, Activity: store.ActivityThinking, Started: true,
+					Tmux: "repo-51-gone", UpdatedAt: time.Now().Add(-tc.quietFor)},
+			}}
+			e.state.Tasks = []*store.Task{card}
+			if tc.launching {
+				e.launching.Store("repo-51-gone", true)
+			}
+
+			e.Tick()
+			e.work.Wait()
+
+			s := card.Sessions[store.MainSession]
+			if s.Status != tc.want {
+				t.Fatalf("status = %s, want %s", s.Status, tc.want)
+			}
+			exited := tc.want == store.StatusExited
+			if hasLog(card, "Agent exited") != exited || s.Activity != tc.wantActivity {
+				t.Errorf("activity %s, log %v", s.Activity, card.Log)
+			}
+			if got := desktopNotified("#51 " + card.Title + ":"); exited != (len(got) == 1 && strings.HasSuffix(got[0], "agent exited")) {
+				t.Errorf("notifications = %q", got)
+			}
+		})
+	}
+}
+
+func TestReconcileMarksVanishedAgentsExitedSoTheyCanResume(t *testing.T) {
+	e := bareEngine(t)
+	running := &store.Session{Status: store.StatusRunning, Activity: store.ActivityThinking, Tmux: "repo-1-gone"}
+	suspended := &store.Session{Status: store.StatusSuspended, Tmux: "repo-2-gone"}
+	e.state.Tasks = []*store.Task{
+		{ID: "a", Sessions: map[string]*store.Session{store.MainSession: running}},
+		{ID: "b", Sessions: map[string]*store.Session{store.MainSession: suspended}},
+	}
+	e.reconcile()
+	if running.Status != store.StatusExited || running.Activity != store.ActivityIdle || suspended.Status != store.StatusSuspended {
+		t.Errorf("running %s/%s, suspended %s", running.Status, running.Activity, suspended.Status)
+	}
+}
+
+func TestBlankPaneAfterABackgroundForkHandsTheConversationToPollExternal(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := bareEngine(t)
+	task := &store.Task{ID: "t1", Number: 1}
+	e.state.Tasks = []*store.Task{task}
+	s := &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, Forked: true, AgentSessionID: "bg-conversation",
+		Tmux: "repo-1-gone", Pending: []store.Pending{{Text: "queued"}}, Background: []string{"toolu_1"}}
+
+	consume(t, e, task, s, `{"hook_event_name":"SessionStart","source":"startup","session_id":"blank"}`)
+
+	if s.Status != store.StatusExternal || !s.Imported || s.Forked || s.Pending != nil || s.Background != nil || s.AgentSessionID != "bg-conversation" {
+		t.Errorf("session after the fork moved to the background: %+v", s)
+	}
+	if !hasLog(task, "Conversation moved to background session") {
+		t.Errorf("log = %v", task.Log)
+	}
+}
+
+func TestClaimTurn(t *testing.T) {
+	const move = `{"name":"Go","type":"move_to_column","targetColumn":"Review"}`
+	for name, tc := range map[string]struct {
+		status     store.SessionStatus
+		activity   store.Activity
+		noSession  bool
+		wantColumn string
+		wantTurn   bool
+	}{
+		"a turn in progress joins the visit":          {store.StatusRunning, store.ActivityThinking, false, "exec", true},
+		"a turn that already ended runs its turn end": {store.StatusRunning, store.ActivityIdle, false, "review", false},
+		"a suspended agent is left alone":             {store.StatusSuspended, store.ActivityThinking, false, "exec", false},
+		"no session":                                  {noSession: true, wantColumn: "exec"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e, card := turnEndEngine(t, move)
+			s := card.Sessions[store.MainSession]
+			s.Status, s.Activity = tc.status, tc.activity
+			if tc.noSession {
+				card.Sessions = nil
+			}
+
+			e.claimTurn(card, card.ID)
+			e.work.Wait()
+
+			if card.ColumnID != tc.wantColumn || s.TurnInVisit != tc.wantTurn {
+				t.Errorf("column %q, turn in visit %v; want %q, %v", card.ColumnID, s.TurnInVisit, tc.wantColumn, tc.wantTurn)
+			}
+		})
+	}
+}
+
+func TestQueuedSessionWhoseWorktreeFailsExitsAndTellsYou(t *testing.T) {
+	e := bareEngine(t)
+	e.isRepo = true
+	card := &store.Task{ID: "t1", Number: 3, Title: "Queued", ColumnID: "exec", Sessions: map[string]*store.Session{
+		store.MainSession: {Key: store.MainSession, Status: store.StatusRunning, Activity: store.ActivityStarting, Tmux: "repo-3-gone"},
+	}}
+	e.state.Tasks = []*store.Task{card}
+	e.board = &config.Board{Columns: []config.Column{{ID: "exec", Name: "Executing", AutoSpawn: true}}}
+
+	e.launchQueued(card, store.MainSession)
+
+	if s := card.Sessions[store.MainSession]; s.Status != store.StatusExited || s.Activity != store.ActivityIdle || !hasLog(card, "Worktree failed") {
+		t.Errorf("session %+v, log %v", s, card.Log)
+	}
+	if got := notice(e); !strings.HasPrefix(got, "#3: ") {
+		t.Errorf("notice = %q", got)
+	}
+}
+
+func TestReviewPromptNominatesTheCardsOwnPR(t *testing.T) {
+	e := bareEngine(t)
+	task := &store.Task{ID: "t1", Number: 1, Title: "Review it", ColumnID: e.board.FirstColumn().ID}
+	e.state.Tasks = []*store.Task{task}
+
+	consume(t, e, task, &store.Session{Activity: store.ActivityIdle},
+		`{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}`)
+
+	if task.PR == nil || task.PR.Number != 7 || !task.PR.Review || !hasLog(task, "Reviewing PR #7") {
+		t.Errorf("PR = %+v, log %v", task.PR, task.Log)
+	}
+}
+
+func TestPRCreatedByTheAgentIsTrackedWhenTheToolFinishes(t *testing.T) {
+	e := bareEngine(t)
+	task := &store.Task{ID: "t1", Number: 1, Title: "Ship it", ColumnID: "exec"}
+	e.state.Tasks = []*store.Task{task}
+
+	consume(t, e, task, &store.Session{Activity: store.ActivityThinking},
+		`{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --fill"},"tool_response":{"stdout":"https://github.com/o/r/pull/12\n"}}`)
+
+	if task.PR == nil || task.PR.Number != 12 || task.PR.Review {
+		t.Errorf("PR = %+v, log %v", task.PR, task.Log)
 	}
 }
 

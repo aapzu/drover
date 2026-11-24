@@ -331,21 +331,30 @@ func (e *Engine) render(t *store.Task, tpl string, gc groupContext, shell bool) 
 // runShellRow runs script with sh -c in the worktree of the card's session, or
 // the project root without one.
 func (e *Engine) runShellRow(t *store.Task, row config.Automation, script string, gc groupContext) error {
-	timeout := time.Duration(max(1, min(row.TimeoutMinutes, 120))) * time.Minute
-	if row.TimeoutMinutes == 0 {
-		timeout = 10 * time.Minute
-	}
 	vars := e.vars(t, gc)
 	var env []string
 	for k, v := range vars {
 		env = append(env, "DROVER_"+strings.ToUpper(k)+"="+v)
 	}
-	return runShell(e.stopping, vars["worktreePath"], e.render(t, script, gc, true), env, timeout)
+	return runShell(e.stopping, vars["worktreePath"], e.render(t, script, gc, true), env, shellTimeout(row.TimeoutMinutes), shellWaitDelay)
 }
+
+// shellTimeout is how long a script row may run: 10 minutes unless the row
+// says, capped at 2 hours.
+func shellTimeout(minutes int) time.Duration {
+	if minutes == 0 {
+		return 10 * time.Minute
+	}
+	return time.Duration(max(1, min(minutes, 120))) * time.Minute
+}
+
+// shellWaitDelay is how long runShell waits for output to close after the
+// script exits, so a background child holding the pipe cannot hang it.
+const shellWaitDelay = 5 * time.Second
 
 // runShell runs script with sh -c in dir, killing it after timeout. Its error
 // ends with the last of the script's output.
-func runShell(ctx context.Context, dir, script string, env []string, timeout time.Duration) error {
+func runShell(ctx context.Context, dir, script string, env []string, timeout, waitDelay time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-c", script)
@@ -353,7 +362,7 @@ func runShell(ctx context.Context, dir, script string, env []string, timeout tim
 	cmd.Env = append(os.Environ(), env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 5 * time.Second
+	cmd.WaitDelay = waitDelay
 	out, err := cmd.CombinedOutput()
 	if err == nil || errors.Is(err, exec.ErrWaitDelay) {
 		return nil

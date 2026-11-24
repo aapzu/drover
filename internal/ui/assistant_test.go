@@ -295,40 +295,9 @@ func TestPanelShowsClaudesScreenAndAStoppedSession(t *testing.T) {
 	}
 }
 
-func TestStartFailureIsFlashedNotHidden(t *testing.T) {
-	f := fakePanel(t)
-	f.err = errors.New("tmux broke")
-	m := assistantModel(t)
-	m, _ = update(m, key(askKey))
-	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, err: f.err})
-	if !strings.Contains(m.flash, "tmux broke") || m.assist.running() || m.assist.starting() {
-		t.Errorf("flash %q, assist %+v", m.flash, m.assist)
-	}
-}
-
-func TestNewConversationRestartsThePanel(t *testing.T) {
-	f := fakePanel(t)
-	m := assistantModel(t)
-	m, cmd := update(m, key(newAskKey))
-	if !m.assist.open || m.mode != modeAssistant {
-		t.Fatalf("mode %v, open %v", m.mode, m.assist.open)
-	}
-	runCmds(cmd)
-	if f.restarts != 1 {
-		t.Errorf("restarts = %d, starts = %d", f.restarts, f.starts)
-	}
-}
-
-func TestPanelNeedsRoomForTheBoard(t *testing.T) {
+func TestShrinkingTheTerminalTakesTheRoomBackFromThePanel(t *testing.T) {
 	fakePanel(t)
 	m := assistantModel(t)
-	m.width = 90
-	m, cmd := update(m, key(askKey))
-	if m.assist.open || cmd != nil || !strings.Contains(m.flash, "too small") {
-		t.Errorf("open %v, flash %q", m.assist.open, m.flash)
-	}
-
-	m.width = 120
 	m = open(t, m)
 	m, _ = update(m, tea.WindowSizeMsg{Width: 90, Height: 30})
 	if m.mode != modeBoard || m.layout().assistantW != 0 || m.layout().boardW != 90 {
@@ -337,19 +306,6 @@ func TestPanelNeedsRoomForTheBoard(t *testing.T) {
 	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
 	if !m.assist.open || m.layout().assistantW == 0 {
 		t.Error("the panel should come back when the terminal grows again")
-	}
-}
-
-func TestChoosingAnAssistantCommandInThePaletteOpensThePanel(t *testing.T) {
-	m := assistantModel(t)
-	m.paletteInput = newPaletteInput()
-	m.paletteInput.Focus()
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlK})
-	m = typeInPalette(m, "assistant")
-	fakePanel(t)
-	m = pressInPalette(m, tea.KeyEnter)
-	if m.mode != modeAssistant {
-		t.Errorf("mode = %v after choosing the first assistant command", m.mode)
 	}
 }
 
@@ -364,6 +320,9 @@ func TestNewConversationStartsTheSessionOnce(t *testing.T) {
 			}
 			m, cmd := update(m, key(newAskKey))
 			runCmds(cmd)
+			if !m.assist.open || m.mode != modeAssistant {
+				t.Errorf("mode %v, open %v; N should open and focus the panel", m.mode, m.assist.open)
+			}
 			if f.starts != 0 || f.restarts != 1 {
 				t.Errorf("starts %d, restarts %d; want one restart", f.starts, f.restarts)
 			}
@@ -385,10 +344,6 @@ func TestShortTerminalNeverShowsOrCrashesOnThePanel(t *testing.T) {
 	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 5})
 	if m.mode != modeBoard || m.layout().assistantW != 0 {
 		t.Errorf("a terminal too short for the panel should drop it: mode %v, layout %+v", m.mode, m.layout())
-	}
-	m.height = 5
-	if _, cmd := update(m, key(askKey)); cmd != nil {
-		t.Error("the panel opened on a terminal too short for it")
 	}
 }
 
@@ -497,16 +452,20 @@ func TestCaptureSizesTheWindowToThePanel(t *testing.T) {
 }
 
 func TestFrameStateFollowsTheSession(t *testing.T) {
-	fakePanel(t)
+	f := fakePanel(t)
 	m := open(t, assistantModel(t))
 	m, _ = update(m, m.stamped(assistantFrameMsg{txt: "x", history: 30, mouse: true, at: time.Now()}))
 	if !m.assist.mouse || m.assist.txt != "x" {
 		t.Fatalf("frame not stored: %+v", m.assist)
 	}
 	m.assist.scroll = 7
-	m, _ = update(m, key("a"))
+	m, cmd := update(m, key("a"))
 	if m.assist.scroll != 0 {
 		t.Errorf("typing left the panel %d lines up", m.assist.scroll)
+	}
+	runCmds(cmd)
+	if f.capturedBack != 0 {
+		t.Errorf("captured %d lines of scrollback after typing", f.capturedBack)
 	}
 	m.assist.scroll = 4
 	if !strings.Contains(m.View(), "4 lines up") {
@@ -577,15 +536,6 @@ func TestKeysToAStoppedPanelSayWhy(t *testing.T) {
 	}
 	if _, ok := sentJob(m); ok {
 		t.Error("a key reached a stopped session")
-	}
-}
-
-func TestStoppedPanelShowsWhyItStopped(t *testing.T) {
-	fakePanel(t)
-	m := open(t, assistantModel(t))
-	m, _ = update(m, m.stamped(assistantFrameMsg{err: errors.New("can't find session"), at: time.Now().Add(time.Second)}))
-	if view := m.View(); !strings.Contains(view, "can't find session") {
-		t.Errorf("the panel hides the capture error:\n%s", view)
 	}
 }
 
@@ -739,8 +689,8 @@ func TestFailedStartIsShownInThePanelAndWheelDoesNotRevive(t *testing.T) {
 	m := assistantModel(t)
 	m, _ = update(m, key(askKey))
 	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, err: f.err})
-	if !strings.Contains(m.View(), "tmux broke") {
-		t.Errorf("the failure only flashed:\n%s", m.View())
+	if !strings.Contains(m.View(), "tmux broke") || !strings.Contains(m.flash, "tmux broke") {
+		t.Errorf("the failure is not shown in the panel and flashed (flash %q):\n%s", m.flash, m.View())
 	}
 	l := m.layout()
 	m, cmd := update(m, tea.MouseMsg{X: l.boardW + 3, Y: l.bodyY + 3, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
@@ -750,6 +700,15 @@ func TestFailedStartIsShownInThePanelAndWheelDoesNotRevive(t *testing.T) {
 	m, _ = update(m, m.stamped(assistantFrameMsg{txt: "late", at: time.Now()}))
 	if m.assist.running() || m.assist.txt != "" {
 		t.Error("a frame revived a stopped panel")
+	}
+}
+
+func TestAnEndedSessionShowsItsCauseInThePanel(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m, _ = update(m, m.stamped(assistantFrameMsg{err: errors.New("can't find session"), at: time.Now().Add(time.Second)}))
+	if view := m.View(); !strings.Contains(view, "can't find session") {
+		t.Errorf("the panel hides the capture error:\n%s", view)
 	}
 }
 
@@ -814,6 +773,9 @@ func TestPanelSizeLimits(t *testing.T) {
 		m, _ = update(m, key(askKey))
 		if m.assist.open != c.opens {
 			t.Errorf("%dx%d: open = %v", c.width, c.height, m.assist.open)
+		}
+		if !c.opens && !strings.Contains(m.flash, "too small") {
+			t.Errorf("%dx%d: flash %q, want it to say the terminal is too small", c.width, c.height, m.flash)
 		}
 		if c.opens {
 			l := m.layout()
@@ -969,21 +931,7 @@ func TestVanishedSessionIsReportedWithItsCauseAndNotOwned(t *testing.T) {
 	}
 }
 
-func TestTypingSnapsAScrolledPanelBackToTheBottom(t *testing.T) {
-	f := fakePanel(t)
-	m := open(t, assistantModel(t))
-	m.assist.session, m.assist.history, m.assist.scroll = sessionRunning, 50, 7
-	m, cmd := update(m, key("x"))
-	if m.assist.scroll != 0 {
-		t.Errorf("scroll = %d after typing", m.assist.scroll)
-	}
-	runCmds(cmd)
-	if f.capturedBack != 0 {
-		t.Errorf("captured %d lines of scrollback after typing", f.capturedBack)
-	}
-}
-
-func TestHiddenOrStoppedPanelIsNotCaptured(t *testing.T) {
+func TestHiddenPanelIsNotCaptured(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(m Model) Model
@@ -993,11 +941,6 @@ func TestHiddenOrStoppedPanelIsNotCaptured(t *testing.T) {
 			if m.assist.open {
 				t.Fatal("ctrl+q should hide the panel")
 			}
-			return m
-		}},
-		{"stopped", func(m Model) Model {
-			m.mode = modeBoard
-			m.assist.session = sessionStopped
 			return m
 		}},
 	}

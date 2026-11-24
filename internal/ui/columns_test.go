@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/config"
 )
@@ -48,14 +49,19 @@ func openColumn(t *testing.T, m Model, id, option string) Model {
 		t.Fatalf("no column %q", id)
 	}
 	m = pressColumns(t, m, keyPress("enter"))
+	m.columnOptSel = columnOptionIndex(t, option)
+	return m
+}
+
+func columnOptionIndex(t *testing.T, name string) int {
+	t.Helper()
 	for i, opt := range columnOptions {
-		if opt.name == option {
-			m.columnOptSel = i
-			return m
+		if opt.name == name {
+			return i
 		}
 	}
-	t.Fatalf("no option %q", option)
-	return m
+	t.Fatalf("no column option %q", name)
+	return 0
 }
 
 func typeColumn(t *testing.T, m Model, value string) Model {
@@ -371,6 +377,89 @@ func TestColumnsDoNotOpenWithoutColumns(t *testing.T) {
 	next, _ := m.updateBoard(key("O"))
 	if got := next.(Model); got.mode == modeColumns || got.flash == "" {
 		t.Errorf("mode=%v flash=%q", got.mode, got.flash)
+	}
+}
+
+func TestColumnsListKeysNavigateAndClose(t *testing.T) {
+	m, _ := columnsModel(t)
+	m = m.openColumns()
+	last := len(m.snap.Board.Columns) - 1
+
+	m = pressColumns(t, m, key("k"))
+	if m.columnSel != 0 {
+		t.Errorf("selection %d after going up from the first column", m.columnSel)
+	}
+	for range last + 3 {
+		m = pressColumns(t, m, key("j"))
+	}
+	if m.columnSel != last {
+		t.Fatalf("selection %d after going down past the end, want %d", m.columnSel, last)
+	}
+
+	for _, open := range []tea.KeyMsg{keyPress("enter"), key("l"), special(tea.KeyRight)} {
+		m = pressColumns(t, m, open)
+		if !m.columnOpen || m.columnID != m.snap.Board.Columns[last].ID {
+			t.Errorf("%q: open %v on %q, want the last column opened", open.String(), m.columnOpen, m.columnID)
+		}
+		m.columnOpen = false
+	}
+	for _, closing := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("O")} {
+		m.mode = modeBoard
+		m = m.openColumns()
+		if m = pressColumns(t, m, closing); m.mode != modeBoard {
+			t.Errorf("%q left mode %v, want the board", closing.String(), m.mode)
+		}
+	}
+}
+
+func TestColumnsOptionKeysNavigateAndStepBack(t *testing.T) {
+	m, _ := columnsModel(t)
+	m = openColumn(t, m, "run", "Name")
+	for range len(columnOptions) + 3 {
+		m = pressColumns(t, m, key("j"))
+	}
+	if m.columnOptSel != len(columnOptions)-1 {
+		t.Errorf("option %d after going down past the end", m.columnOptSel)
+	}
+	for range len(columnOptions) + 3 {
+		m = pressColumns(t, m, key("k"))
+	}
+	if m.columnOptSel != 0 {
+		t.Errorf("option %d after going up past the start", m.columnOptSel)
+	}
+	for _, back := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("h"), special(tea.KeyLeft)} {
+		open := openColumn(t, m, "run", "Name")
+		if open = pressColumns(t, open, back); open.columnOpen || open.mode != modeColumns {
+			t.Errorf("%q: open %v mode %v, want the list again inside the columns view", back.String(), open.columnOpen, open.mode)
+		}
+	}
+}
+
+func TestColumnsFooterHintFollowsWhatYouAreDoing(t *testing.T) {
+	m, _ := columnsModel(t)
+	m.mode = modeColumns
+	tests := []struct {
+		name  string
+		setup func(m *Model)
+		want  string
+	}{
+		{"the list", func(*Model) {}, "enter open"},
+		{"a column's options", func(m *Model) { m.columnOpen = true }, "x reset"},
+		{"editing a setting that has two files", func(m *Model) {
+			m.columnOpen, m.columnEditing = true, true
+			m.columnOptSel = columnOptionIndex(t, "Color")
+		}, "tab drover.json / drover.local.json"},
+		{"editing a shared-only setting", func(m *Model) {
+			m.columnOpen, m.columnEditing = true, true
+			m.columnOptSel = columnOptionIndex(t, "Run an agent")
+		}, "enter save  esc cancel"},
+	}
+	for _, tt := range tests {
+		next := m
+		tt.setup(&next)
+		if got := ansi.Strip(next.renderFooter()); !strings.Contains(got, tt.want) {
+			t.Errorf("%s: footer %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }
 

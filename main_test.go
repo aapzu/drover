@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func git(t *testing.T, dir string, args ...string) {
@@ -79,12 +81,23 @@ func TestMainProcess(t *testing.T) {
 
 func runMain(t *testing.T, args string) (stdout, stderr string, exit int) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestMainProcess$")
-	cmd.Dir = t.TempDir()
+	return runMainIn(t, t.TempDir(), args, "")
+}
+
+func runMainIn(t *testing.T, dir, args, stdin string) (stdout, stderr string, exit int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMainProcess$")
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = []string{"DROVER_TEST_ARGS=" + args, "XDG_STATE_HOME=" + t.TempDir(), "PATH=" + t.TempDir()}
 	var out, errOut strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err := cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("drover %s still running after 30s", args)
+	}
 	if ee, ok := err.(*exec.ExitError); ok {
 		exit = ee.ExitCode()
 	} else if err != nil {
@@ -102,9 +115,6 @@ func TestMainDispatch(t *testing.T) {
 		"help word":                   {"help", 0, "Usage:", ""},
 		"short help":                  {"-h", 0, "drover ask", ""},
 		"long help":                   {"--help", 0, "Change the board from outside it", ""},
-		"version word":                {"version", 0, "drover ", ""},
-		"long version":                {"--version", 0, "drover ", ""},
-		"short version":               {"-v", 0, "drover ", ""},
 		"hook without a file":         {"hook", 0, "", ""},
 		"cli command error":           {"move 1 nowhere", 1, "", `drover: unknown column "nowhere"`},
 		"a directory opens the board": {"some-dir", 1, "", "drover: tmux is required"},
@@ -116,5 +126,57 @@ func TestMainDispatch(t *testing.T) {
 				t.Errorf("exit = %d, stdout = %q, stderr = %q", exit, out, errOut)
 			}
 		})
+	}
+}
+
+func TestMainPrintsTheVersion(t *testing.T) {
+	want := "drover " + buildVersion() + "\n"
+	for _, arg := range []string{"version", "--version", "-v"} {
+		if out, _, exit := runMain(t, arg); exit != 0 || !strings.Contains(out, want) {
+			t.Errorf("drover %s: exit = %d, stdout = %q, want it to contain %q", arg, exit, out, want)
+		}
+	}
+}
+
+func TestHookRecordsTheEventFromStdin(t *testing.T) {
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+
+	runMainIn(t, dir, "hook "+events, "{\n  \"hook_event_name\": \"Stop\",\n  \"session_id\": \"s1\"\n}\n")
+	runMainIn(t, dir, "hook "+events, `{"hook_event_name":"UserPromptSubmit"}`)
+
+	data, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"hook_event_name":"Stop","session_id":"s1"}` + "\n" + `{"hook_event_name":"UserPromptSubmit"}` + "\n"
+	if string(data) != want {
+		t.Errorf("events file = %q, want one compact line per event: %q", data, want)
+	}
+}
+
+func TestHookIgnoresWhatItCannotRecord(t *testing.T) {
+	dir := t.TempDir()
+	for name, args := range map[string]struct{ args, stdin string }{
+		"not JSON":            {"hook events.jsonl", "not json"},
+		"two arguments":       {"hook events.jsonl extra", `{"hook_event_name":"Stop"}`},
+		"gate with arguments": {"hook-gate a b", ""},
+	} {
+		if out, errOut, exit := runMainIn(t, dir, args.args, args.stdin); exit != 0 || errOut != "" {
+			t.Errorf("%s: exit = %d, stdout = %q, stderr = %q, want a silent success", name, exit, out, errOut)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("hooks that cannot record left %d files behind", len(entries))
+	}
+}
+
+func TestHookGateReturnsAtOnceWithoutAGate(t *testing.T) {
+	start := time.Now()
+	if _, errOut, exit := runMainIn(t, t.TempDir(), "hook-gate "+filepath.Join(t.TempDir(), "gate"), ""); exit != 0 || errOut != "" {
+		t.Errorf("exit = %d, stderr = %q", exit, errOut)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("hook-gate held the agent for %s though no gate was open", d)
 	}
 }
