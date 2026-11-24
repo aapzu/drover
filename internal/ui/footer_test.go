@@ -11,7 +11,7 @@ import (
 )
 
 func TestBoardFooter(t *testing.T) {
-	const hint = "ctrl+k commands · ? help"
+	const hint = "ctrl+k search · ? help"
 	running := func(m *Model) {
 		task := m.snap.Tasks[0]
 		task.Branch = "aapeli/dx-1-foo"

@@ -236,7 +236,7 @@ func TestHelpClosesOnAnyKey(t *testing.T) {
 	for _, k := range []tea.KeyMsg{key("x"), special(tea.KeyEnter), special(tea.KeyEsc), key("?")} {
 		m := realModel(t, "a")
 		m, _ = update(m, key("?"))
-		if m.mode != modeHelp || !strings.Contains(m.View(), "search and run a command") {
+		if m.mode != modeHelp || !strings.Contains(m.View(), "search cards and run a command") {
 			t.Fatalf("? did not open the help")
 		}
 		m, cmd := update(m, k)
@@ -270,7 +270,7 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"rename", modeRename, func(m Model) Model { m.modalTask = m.current().ID; m.renameInput.Focus(); return m }, "Rename ›"},
 		{"confirm", modeConfirm, func(m Model) Model { m.confirmText = "Really? (y/N)"; return m }, "Really?"},
 		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #2 to…"},
-		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},
+		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Search"},
 		{"filter", modeFilter, func(m Model) Model { m.filterInput.Focus(); return m }, "Filter ›"},
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
 		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, ""},
