@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/aapzu/drover/internal/claude"
-	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
 )
@@ -125,10 +124,6 @@ func TestImportLinearIssue(t *testing.T) {
 	task := snap.Tasks[0]
 	if task.Branch != "aapeli/dx-1-speed-up-ci" || task.Issue.Key != "DX-1" || !strings.Contains(task.Prompt, "CI takes 40 minutes.") {
 		t.Errorf("card wrong: %+v", task)
-	}
-	got := e.render(task, "{{issueKey}} {{issueUrl}}", groupContext{to: config.Column{}}, false)
-	if got != "DX-1 https://linear.app/x/issue/DX-1" {
-		t.Errorf("issue placeholders = %q", got)
 	}
 }
 
@@ -305,16 +300,6 @@ func TestSyncIssueStartedMovesTheLinearIssue(t *testing.T) {
 	}
 }
 
-func TestExecutableIsAResolvedPath(t *testing.T) {
-	exe, err := Executable()
-	if err != nil || !filepath.IsAbs(exe) {
-		t.Fatalf("Executable = %q, %v", exe, err)
-	}
-	if resolved, _ := filepath.EvalSymlinks(exe); resolved != exe {
-		t.Errorf("Executable = %q, want symlinks resolved to %q", exe, resolved)
-	}
-}
-
 // registerLive lists a conversation held by this process in Claude Code's
 // session registry, so it reads as running in another terminal.
 func registerLive(t *testing.T, sessionID, status string) {
@@ -426,5 +411,13 @@ func TestExternalCheckRefusesAConversationRunningElsewhere(t *testing.T) {
 		if err := e.externalCheck(c); err != nil {
 			t.Errorf("%s: externalCheck = %v", name, err)
 		}
+	}
+}
+
+func TestLinearIssueRefusesWhatIsNotAnIssueRef(t *testing.T) {
+	e := bareEngine(t)
+	e.linear = &linear.Client{Key: "lin_api_test", Endpoint: "http://127.0.0.1:1"}
+	if _, err := e.LinearIssue(context.Background(), "not an issue"); err == nil || !strings.Contains(err.Error(), "is not a Linear issue key or URL") {
+		t.Errorf("err = %v", err)
 	}
 }

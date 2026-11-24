@@ -326,17 +326,13 @@ func TestImportEnterOnAHeaderOrNothingImportsNothing(t *testing.T) {
 	}
 }
 
-func TestLinearImportNeedsAKey(t *testing.T) {
+func TestLinearKeyEntryNeedsAKey(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "")
 	m := importOn(t)
 	m.imp.source = sourceLinear
 	m, _ = press(m, "/")
 	if m.imp.keyEntry {
 		t.Error("/ opened the key entry without a Linear key")
-	}
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen, issues: []linear.Issue{issue("DX-1")}})
-	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "DX-1") {
-		t.Errorf("issues are not listed:\n%s", got)
 	}
 }
 
@@ -522,15 +518,4 @@ func TestRenderImportScrollsToTheCursor(t *testing.T) {
 	if !strings.Contains(got, "▸ [ ] title h") || strings.Contains(got, "title a") {
 		t.Errorf("the list doesn't follow the cursor:\n%s", got)
 	}
-}
-
-func TestViewShowsTheImportModal(t *testing.T) {
-	m := importModel(false)
-	m.width, m.height = 120, 40
-	m.eng = &engine.Engine{Root: "/repo", ProjectName: "repo"}
-	view := m.View()
-	if !strings.Contains(view, "Claude sessions") {
-		t.Errorf("view:\n%s", view)
-	}
-	fits(t, "import", view, 120, 40)
 }

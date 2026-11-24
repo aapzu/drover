@@ -551,3 +551,152 @@ func TestRemoveWorktreeFallbacks(t *testing.T) {
 		t.Errorf("the directory git refused to remove is still there: %v", err)
 	}
 }
+
+func TestCreateWorktreeReusesAnExistingOne(t *testing.T) {
+	root := newRepo(t)
+	worktrees := filepath.Join(root, ".drover", "worktrees")
+	path, err := CreateWorktree(root, worktrees, "1", "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(path, "wip.txt"), []byte("work"), 0o644)
+
+	again, err := CreateWorktree(root, worktrees, "1", "feature", "main")
+	if err != nil || again != path {
+		t.Fatalf("second CreateWorktree = %q, %v; want %q", again, err, path)
+	}
+	if _, err := os.Stat(filepath.Join(path, "wip.txt")); err != nil {
+		t.Errorf("reusing the worktree lost its files: %v", err)
+	}
+}
+
+func TestCreateWorktreeFolder(t *testing.T) {
+	root := newRepo(t)
+	worktrees := filepath.Join(root, ".drover", "worktrees")
+
+	t.Run("a folder with something in it is refused and left alone", func(t *testing.T) {
+		stray := filepath.Join(worktrees, "1")
+		os.MkdirAll(stray, 0o755)
+		os.WriteFile(filepath.Join(stray, "mine.txt"), []byte("x"), 0o644)
+		if _, err := CreateWorktree(root, worktrees, "1", "a", "main"); err == nil || !strings.Contains(err.Error(), "not empty") {
+			t.Fatalf("CreateWorktree over a non-empty folder: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(stray, "mine.txt")); err != nil {
+			t.Errorf("the folder's file was removed: %v", err)
+		}
+		if refExists(root, "refs/heads/a") {
+			t.Error("a branch was created even though the worktree wasn't")
+		}
+	})
+
+	t.Run("an empty folder is used", func(t *testing.T) {
+		os.MkdirAll(filepath.Join(worktrees, "2"), 0o755)
+		path, err := CreateWorktree(root, worktrees, "2", "b", "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := git(t, path, "rev-parse", "--abbrev-ref", "HEAD"); got != "b" {
+			t.Errorf("worktree branch = %q", got)
+		}
+	})
+}
+
+func TestCreateWorktreeChecksOutAnExistingBranchWithItsCommits(t *testing.T) {
+	root := newRepo(t)
+	git(t, root, "checkout", "-q", "-b", "feature")
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "earlier work")
+	git(t, root, "checkout", "-q", "main")
+
+	path, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "feature", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := git(t, path, "log", "-1", "--format=%s"); got != "earlier work" {
+		t.Errorf("worktree HEAD = %q; the branch's commits should be kept, not reset to base", got)
+	}
+}
+
+func TestCreateWorktreeDoesNotCopyClaudeCommands(t *testing.T) {
+	root := newRepo(t)
+	os.MkdirAll(filepath.Join(root, ".claude", "commands"), 0o755)
+	os.WriteFile(filepath.Join(root, ".claude", "commands", "deploy.md"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte("{}"), 0o644)
+	git(t, root, "add", ".")
+	git(t, root, "commit", "-q", "-m", "commands")
+
+	path, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "b", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(path, ".claude", "commands")); err == nil {
+		t.Error("the worktree has its own copy of .claude/commands, so Claude would list every command twice")
+	}
+	if _, err := os.Stat(filepath.Join(path, ".claude", "settings.json")); err != nil {
+		t.Errorf("the rest of .claude was left out too: %v", err)
+	}
+}
+
+func TestEnsureExcludedFromALinkedWorktreeWritesToTheSharedExclude(t *testing.T) {
+	root := newRepo(t)
+	wt, err := CreateWorktree(root, filepath.Join(root, ".drover", "worktrees"), "1", "b", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureExcluded(wt, filepath.Join(wt, ".drover", "worktrees")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".git", "info", "exclude"))
+	if err != nil || !strings.Contains(string(data), "/.drover/\n") {
+		t.Errorf("the main repository's info/exclude = %q, %v", data, err)
+	}
+}
+
+func TestEnsureExcludedKeepsAnUnterminatedLastLine(t *testing.T) {
+	root := newRepo(t)
+	exclude := filepath.Join(root, ".git", "info", "exclude")
+	os.MkdirAll(filepath.Dir(exclude), 0o755)
+	os.WriteFile(exclude, []byte("*.log"), 0o644)
+	if err := EnsureExcluded(root, filepath.Join(root, ".drover", "worktrees")); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(exclude)
+	if !strings.HasPrefix(string(data), "*.log\n/.drover/\n") {
+		t.Errorf("info/exclude = %q; the existing last line was glued to the new pattern", data)
+	}
+}
+
+func TestMainRootOfABareRepository(t *testing.T) {
+	tmp, _ := filepath.EvalSymlinks(t.TempDir())
+	bare := filepath.Join(tmp, "bare.git")
+	git(t, tmp, "init", "-q", "--bare", "-b", "main", bare)
+	if _, err := MainRoot(bare); err == nil {
+		t.Error("a bare repository has no checkout, yet MainRoot succeeded")
+	}
+}
+
+func TestFetchFromAnOriginWithoutTheBranch(t *testing.T) {
+	tmp := t.TempDir()
+	root, origin := filepath.Join(tmp, "repo"), filepath.Join(tmp, "origin.git")
+	git(t, tmp, "init", "-q", "-b", "main", root)
+	git(t, tmp, "init", "-q", "--bare", origin)
+	git(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	git(t, root, "remote", "add", "origin", origin)
+	git(t, root, "push", "-q", "origin", "main")
+
+	if ref, err := Fetch(root, "nope"); err == nil {
+		t.Errorf("Fetch of a missing branch = %q, nil", ref)
+	}
+	if ref, err := FetchRelease(root, "release"); err == nil {
+		t.Errorf("FetchRelease of a missing explicit branch = %q, nil; it must not fall back to main", ref)
+	}
+	if ref, err := FetchRelease(root, "main"); err != nil || ref != "refs/remotes/origin/main" {
+		t.Errorf("FetchRelease(main) = %q, %v", ref, err)
+	}
+}
+
+func TestFastForwardToAMissingRef(t *testing.T) {
+	root := newRepo(t)
+	if n, err := FastForward(root, "refs/remotes/origin/nope"); err == nil || n != 0 {
+		t.Errorf("FastForward to a missing ref = %d, %v; want an error", n, err)
+	}
+}

@@ -8,11 +8,15 @@ import (
 	"time"
 )
 
-func TestChangesRequestedAt(t *testing.T) {
-	at := func(s string) time.Time {
-		v, _ := time.Parse(time.RFC3339, s)
-		return v
+func at(s string) time.Time {
+	v, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
 	}
+	return v
+}
+
+func TestChangesRequestedAtIsTheNewestChangesRequestedReview(t *testing.T) {
 	pr := PR{LatestReviews: []Review{
 		{State: "CHANGES_REQUESTED", SubmittedAt: at("2026-10-01T10:00:00Z")},
 		{State: "APPROVED", SubmittedAt: at("2026-10-03T10:00:00Z")},
@@ -25,22 +29,35 @@ func TestChangesRequestedAt(t *testing.T) {
 	if got := (PR{}).ChangesRequestedAt(); !got.IsZero() {
 		t.Errorf("no reviews: %v", got)
 	}
-	mine := func(login, state, when string) Review {
+}
+
+func TestReviewedByIsTheLoginsNewestReview(t *testing.T) {
+	by := func(login, state, when string) Review {
 		return Review{Author: Author{Login: login}, State: state, SubmittedAt: at(when)}
 	}
-	reviewed := PR{LatestReviews: []Review{
-		mine("them", "APPROVED", "2026-10-05T10:00:00Z"),
-		mine("me", "COMMENTED", "2026-10-01T10:00:00Z"),
-		mine("me", "CHANGES_REQUESTED", "2026-10-02T10:00:00Z"),
+	pr := PR{LatestReviews: []Review{
+		by("them", "APPROVED", "2026-10-05T10:00:00Z"),
+		by("me", "COMMENTED", "2026-10-01T10:00:00Z"),
+		by("me", "CHANGES_REQUESTED", "2026-10-02T10:00:00Z"),
 	}}
-	if got := reviewed.ReviewedBy("me"); got.State != "CHANGES_REQUESTED" {
+	if got := pr.ReviewedBy("me"); got.State != "CHANGES_REQUESTED" {
 		t.Errorf("ReviewedBy = %+v, want my newest review", got)
 	}
-	if got := reviewed.ReviewedBy("nobody"); !got.SubmittedAt.IsZero() {
+	if got := pr.ReviewedBy("nobody"); !got.SubmittedAt.IsZero() {
 		t.Errorf("ReviewedBy without a review: %+v", got)
 	}
-	if (PR{}).MergeOID() != "" {
-		t.Error("MergeOID without a merge commit")
+}
+
+func TestMergeOID(t *testing.T) {
+	if got := (PR{}).MergeOID(); got != "" {
+		t.Errorf("MergeOID without a merge commit = %q", got)
+	}
+	var merged PR
+	merged.MergeCommit = &struct {
+		OID string `json:"oid"`
+	}{OID: "def"}
+	if got := merged.MergeOID(); got != "def" {
+		t.Errorf("MergeOID = %q, want def", got)
 	}
 }
 
@@ -95,7 +112,9 @@ func TestNumber(t *testing.T) {
 		"https://github.com/acme/widgets/pull/42/files": 0,
 		"https://github.com/acme/widgets/issues/42":     0,
 		"https://github.com/acme/widgets/pull/":         0,
-		"":                                              0,
+		"https://github.com/acme/widgets/pull/42/":      0,
+		"https://github.com/acme/widgets/pull/42?x=1":   0,
+		"": 0,
 	} {
 		if got := Number(url); got != want {
 			t.Errorf("Number(%q) = %d, want %d", url, got, want)
@@ -110,6 +129,17 @@ func TestViewParsesThePullRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+		t.Errorf("View = %+v", pr)
+	}
+}
+
+func TestViewOfAnOpenPullRequestHasNoMergeCommitOrReviews(t *testing.T) {
+	fakeGh(t, `echo '{"title":"Wip","headRefName":"wip","state":"OPEN","reviewDecision":"","headRefOid":"abc","mergeCommit":null,"author":{"login":"me"}}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.MergeOID() != "" || len(pr.LatestReviews) != 0 || !pr.ChangesRequestedAt().IsZero() {
 		t.Errorf("View = %+v", pr)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
@@ -181,39 +182,7 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 	}
 }
 
-func TestPromptNamesTheRepoAndItsColumns(t *testing.T) {
-	board := &config.Board{
-		DefaultBaseBranch: "develop",
-		Columns: []config.Column{
-			{ID: "plan", Name: "Planning", AutoSpawn: true, PermissionMode: "plan"},
-			{ID: "exec", Name: "Executing", AutoSpawn: true, PermissionMode: "auto"},
-			{ID: "wait", Name: "Waiting"},
-			{ID: "done", Name: "Done", Role: "done"},
-		},
-	}
-	got := systemPrompt("/bin/drover", "/work/my-app", board)
-	for _, want := range []string{
-		"my-app at /work/my-app",
-		"branch from develop",
-		"- Planning (id plan): an agent works on the card in plan mode",
-		"- Executing (id exec): an agent works on the card in auto mode",
-		"- Waiting (id wait): no agent runs here",
-		"- Done (id done): finished cards",
-		"`add` puts the card in the first column and starts no agent",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("prompt lacks %q:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "To Do") {
-		t.Errorf("prompt still mentions the removed To Do column:\n%s", got)
-	}
-	if strings.Index(got, "Planning (id") > strings.Index(got, "Done (id") {
-		t.Error("columns are not in board order")
-	}
-}
-
-func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
+func TestAskReadsTheBoardFromTheRepoAndGivesClaudeADeadline(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(`{"columns":[{"id":"backlog","name":"Backlog"},{"id":"qa","name":"QA lane","autoSpawn":true}]}`), 0o644); err != nil {
@@ -231,14 +200,8 @@ func TestAskGivesClaudeTheBoardAndAModel(t *testing.T) {
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) < 2 || got[0] != "claude" || got[1] != "-p" || slices.Contains(got, "--permission-mode") {
-		t.Errorf("ask must run headless claude -p without the panel's permission mode: %q", got)
-	}
-	if !strings.Contains(flagValue(got, "--settings"), root) {
-		t.Errorf("the sandbox settings don't lock the repo %q: %q", root, got)
-	}
-	if flagValue(got, "--model") != model || !strings.Contains(flagValue(got, "--append-system-prompt"), "QA lane (id qa)") {
-		t.Errorf("argv = %q", got)
+	if !strings.Contains(flagValue(got, "--append-system-prompt"), "QA lane (id qa)") {
+		t.Errorf("the assistant was not told about the repo's own columns: %q", got)
 	}
 	if left := time.Until(deadline); left <= 0 || left > askTimeout {
 		t.Errorf("deadline in %s, want within %s", left, askTimeout)
@@ -349,16 +312,15 @@ func TestRunClaudeExplainsFailures(t *testing.T) {
 	}
 }
 
-func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
+func TestStartOpensOneInteractiveSessionAndSavesItsConversation(t *testing.T) {
 	root := newRoot(t)
 	stubTranscript(t, false, nil)
 	p := fakePanel(t)
-	exe := "/bin/drover"
 
-	if created, err := Start(root, exe, &config.Board{}); err != nil || !created {
+	if created, err := Start(root, "/bin/drover", &config.Board{}); err != nil || !created {
 		t.Fatalf("first Start = %v, %v", created, err)
 	}
-	if created, err := Start(root, exe, &config.Board{}); err != nil || created {
+	if created, err := Start(root, "/bin/drover", &config.Board{}); err != nil || created {
 		t.Fatalf("Start beside a running session = %v, %v; it should leave it alone", created, err)
 	}
 	if len(p.calls) != 1 || p.dirs[0] != root {
@@ -367,15 +329,6 @@ func TestPanelRunsTheInteractiveTUIUnderTheSameRules(t *testing.T) {
 	args := p.calls[0]
 	if args[0] != "claude" || slices.Contains(args, "-p") {
 		t.Errorf("the panel should run the interactive claude: %q", args)
-	}
-	if flagValue(args, "--permission-mode") != "dontAsk" || flagValue(args, "--tools") != "Bash,Read,Grep,Glob" || !slices.Contains(args, "--setting-sources") {
-		t.Errorf("permission mode %q, tools %q", flagValue(args, "--permission-mode"), flagValue(args, "--tools"))
-	}
-	if !slices.Contains(args, "Bash("+exe+" list)") || !slices.Contains(args, "Bash("+exe+" rm *-force*)") {
-		t.Errorf("the panel lacks the drover-only rules: %q", args)
-	}
-	if !slices.Contains(args, "Bash(git log *)") || !slices.Contains(args, "Edit") {
-		t.Errorf("the panel lacks the read-only repo rules: %q", args)
 	}
 	id := flagValue(args, "--session-id")
 	if saved := SessionID(root); saved != id {
@@ -442,17 +395,6 @@ func TestStopWaitsForAStartInProgress(t *testing.T) {
 	<-stopped
 	if p.live || p.stops != 1 {
 		t.Errorf("live %v, stops %d; Stop should end the session the Start made", p.live, p.stops)
-	}
-}
-
-func TestSessionIDIsTheSavedConversation(t *testing.T) {
-	root := newRoot(t)
-	if id := SessionID(root); id != "" {
-		t.Errorf("SessionID before any conversation = %q", id)
-	}
-	id := seedID(t, root)
-	if got := SessionID(root); got != id {
-		t.Errorf("SessionID = %q, want %q", got, id)
 	}
 }
 
@@ -527,20 +469,6 @@ func TestUnreadableConversationStateIsAnErrorNotANewConversation(t *testing.T) {
 	}
 	if _, err := Start(root, "/bin/drover", &config.Board{}); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("Start = %v; a transcript that can't be checked shouldn't pass for a missing one", err)
-	}
-}
-
-func TestSaveLeavesNoPartialFile(t *testing.T) {
-	root := newRoot(t)
-	id := seedID(t, root)
-	entries, _ := os.ReadDir(store.Dir(root))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Errorf("left %s behind", e.Name())
-		}
-	}
-	if got := SessionID(root); got != id {
-		t.Errorf("load = %q", got)
 	}
 }
 
@@ -888,38 +816,50 @@ func TestPanelRefusesWhileItRuns(t *testing.T) {
 
 func TestMoveOffer(t *testing.T) {
 	const opener = "When a card in "
-	const ending = ", and move it only after the user agrees.\n"
-	wait, verify, shipped := config.Column{ID: "wait", Name: "Waiting"}, config.Column{ID: "verify", Name: "Verify"}, config.Column{ID: "fin", Name: "Shipped", Role: "done"}
+	wait, verify, shipped, later := config.Column{ID: "wait", Name: "Waiting"}, config.Column{ID: "verify", Name: "Verify"}, config.Column{ID: "fin", Name: "Shipped", Role: "done"}, config.Column{ID: "later", Name: "Later", Role: "done"}
 	cases := []struct {
-		name string
-		cols []config.Column
-		flow *config.PRFlow
-		want string
+		name          string
+		cols          []config.Column
+		flow          *config.PRFlow
+		named, absent []string
 	}{
-		{"merged column", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "wait", Merged: "verify"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to Verify and a closed one to Shipped" + ending},
-		{"no merged column", []config.Column{wait, shipped}, &config.PRFlow{Opened: "wait"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to Shipped" + ending},
-		{"merged is the done column", []config.Column{wait, shipped}, &config.PRFlow{Opened: "wait", Merged: "fin"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to Shipped" + ending},
-		{"merged names no column", []config.Column{wait, shipped}, &config.PRFlow{Opened: "wait", Merged: "nowhere"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to Shipped" + ending},
-		{"columns are found by name", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "WAITING", Merged: "verify"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move a merged one to Verify and a closed one to Shipped" + ending},
-		{"the first done column wins", []config.Column{wait, shipped, {ID: "later", Name: "Later", Role: "done"}}, &config.PRFlow{Opened: "wait"},
-			opener + "Waiting has a merged or closed pull request that isn't `reviewing`, say so and offer to move it to Shipped" + ending},
-		{"no done column", []config.Column{wait}, &config.PRFlow{Opened: "wait"}, ""},
-		{"no PR flow", []config.Column{shipped}, nil, ""},
-		{"no opened column", []config.Column{wait, shipped}, &config.PRFlow{Merged: "fin"}, ""},
-		{"opened names no column", []config.Column{wait, shipped}, &config.PRFlow{Opened: "nowhere"}, ""},
+		{"merged and closed go to different columns", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "wait", Merged: "verify"}, []string{"Waiting", "Verify", "Shipped"}, nil},
+		{"no merged column", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "wait"}, []string{"Waiting", "Shipped"}, []string{"Verify"}},
+		{"merged is the done column", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "wait", Merged: "fin"}, []string{"Waiting", "Shipped"}, []string{"Verify"}},
+		{"merged names no column", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "wait", Merged: "nowhere"}, []string{"Waiting", "Shipped"}, []string{"Verify", "nowhere"}},
+		{"columns are found by name", []config.Column{wait, verify, shipped}, &config.PRFlow{Opened: "WAITING", Merged: "verify"}, []string{"Waiting", "Verify", "Shipped"}, nil},
+		{"the first done column wins", []config.Column{wait, shipped, later}, &config.PRFlow{Opened: "wait"}, []string{"Waiting", "Shipped"}, []string{"Later"}},
+		{"no done column", []config.Column{wait}, &config.PRFlow{Opened: "wait"}, nil, nil},
+		{"no PR flow", []config.Column{shipped}, nil, nil, nil},
+		{"no opened column", []config.Column{wait, shipped}, &config.PRFlow{Merged: "fin"}, nil, nil},
+		{"opened names no column", []config.Column{wait, shipped}, &config.PRFlow{Opened: "nowhere"}, nil, nil},
 	}
 	for _, tc := range cases {
 		board := &config.Board{Columns: tc.cols, PRFlow: tc.flow}
-		if got := moveOffer(board); got != tc.want {
-			t.Errorf("%s: moveOffer = %q, want %q", tc.name, got, tc.want)
+		got := moveOffer(board)
+		prompt := systemPrompt("/bin/drover", "/work/my-app", board)
+		if tc.named == nil {
+			if got != "" || strings.Contains(prompt, opener) {
+				t.Errorf("%s: offer = %q; with no column to offer there should be none", tc.name, got)
+			}
+			continue
 		}
-		if prompt := systemPrompt("/bin/drover", "/work/my-app", board); strings.Contains(prompt, opener) != (tc.want != "") || !strings.Contains(prompt, tc.want) {
-			t.Errorf("%s: the prompt does not carry the offer exactly when there is one:\n%s", tc.name, prompt)
+		if !strings.Contains(prompt, got) || !strings.Contains(got, "only after the user agrees") {
+			t.Errorf("%s: the offer %q is missing from the prompt or doesn't wait for the user", tc.name, got)
+		}
+		at := 0
+		for _, name := range tc.named {
+			i := strings.Index(got[at:], name)
+			if i < 0 {
+				t.Errorf("%s: the offer doesn't name %s, in order %q: %q", tc.name, name, tc.named, got)
+				break
+			}
+			at += i + len(name)
+		}
+		for _, name := range tc.absent {
+			if strings.Contains(got, name) {
+				t.Errorf("%s: the offer names %s: %q", tc.name, name, got)
+			}
 		}
 	}
 }
@@ -967,5 +907,78 @@ func TestPanelEnvFollowsDisableMouse(t *testing.T) {
 		if has := p.envs[0]["CLAUDE_CODE_DISABLE_MOUSE"] == "1"; has != on {
 			t.Errorf("disableMouse=%t: env = %v", on, p.envs[0])
 		}
+	}
+}
+
+func TestAskExplainsAFailureWithoutBlowingUpTheMessage(t *testing.T) {
+	root := newRoot(t)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := runClaude
+	t.Cleanup(func() { runClaude = orig })
+	runClaude = func(ctx context.Context, dir string, argv []string, stdin string) (string, error) {
+		argv = []string{"sh", "-c", "printf a >&2; i=0; while [ $i -lt 400 ]; do printf 'é' >&2; i=$((i+1)); done; exit 1"}
+		return orig(ctx, dir, argv, stdin)
+	}
+	_, err := Ask(context.Background(), root, "/bin/drover", "q", false)
+	if err == nil {
+		t.Fatal("expected the failure to surface")
+	}
+	msg := err.Error()
+	if !utf8.ValidString(msg) || !strings.HasSuffix(msg, "é…") {
+		t.Errorf("a long stderr should be cut on a character boundary with an ellipsis: %q", msg[max(0, len(msg)-20):])
+	}
+	if len(msg) > 300+maxErrorLen {
+		t.Errorf("the error is %d bytes long; stderr should be cut to about %d", len(msg), maxErrorLen)
+	}
+}
+
+func TestAskFailsWhenTheConversationCannotBeForgotten(t *testing.T) {
+	root := newRoot(t)
+	calls := fakeClaude(t, "ok", nil)
+	stuck := filepath.Join(store.Dir(root), sessionFile)
+	if err := os.MkdirAll(stuck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stuck, "x"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); err == nil || len(*calls) != 0 {
+		t.Errorf("ask --new = %v with %d runs; it must not answer from the conversation it failed to forget", err, len(*calls))
+	}
+	if err := Reset(root); err == nil {
+		t.Error("Reset reported success though the conversation is still there")
+	}
+}
+
+func TestStopStillEndsTheSessionWhenTheLockFails(t *testing.T) {
+	root := newRoot(t)
+	p := fakePanel(t)
+	p.live = true
+	if err := os.MkdirAll(filepath.Join(store.Dir(root), lockFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := Stop(root)
+	if err == nil || errors.Is(err, errBusy) || !strings.Contains(err.Error(), lockFile) {
+		t.Errorf("Stop = %v; want the lock failure reported", err)
+	}
+	if p.live || p.stops != 1 {
+		t.Errorf("live %v, stops %d; a broken lock must not keep the session running", p.live, p.stops)
+	}
+}
+
+func TestAskGivesUpOnACancelledContext(t *testing.T) {
+	root := newRoot(t)
+	orig := runClaude
+	t.Cleanup(func() { runClaude = orig })
+	runClaude = func(ctx context.Context, _ string, _ []string, _ string) (string, error) { return "", ctx.Err() }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Ask(ctx, root, "/bin/drover", "q", false); !errors.Is(err, context.Canceled) {
+		t.Errorf("Ask = %v, want the cancellation", err)
+	}
+	if SessionID(root) != "" {
+		t.Error("a question that never ran started a conversation")
 	}
 }

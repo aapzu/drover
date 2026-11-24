@@ -970,7 +970,7 @@ func (e *Engine) ensureWorktree(t *store.Task, col config.Column, busyID string)
 	if err == nil && board.InitScript != "" {
 		e.setBusy(busyID, "running init script")
 		env := []string{"DROVER_PROJECTPATH=" + e.Root, "DROVER_WORKTREEPATH=" + path, "DROVER_BRANCHNAME=" + branch}
-		if err = runShell(e.stopping, path, board.InitScript, env, 10*time.Minute); err != nil {
+		if err = runShell(e.stopping, path, board.InitScript, env, 10*time.Minute, shellWaitDelay); err != nil {
 			err = fmt.Errorf("init script: %w", err)
 		}
 	}

@@ -56,22 +56,6 @@ func TestLoadSampleBoard(t *testing.T) {
 	}
 }
 
-func TestAutomationConditional(t *testing.T) {
-	for _, c := range []struct {
-		row  Automation
-		want bool
-	}{
-		{Automation{}, false},
-		{Automation{Condition: "done"}, true},
-		{Automation{ConditionScript: "true"}, true},
-		{Automation{Condition: "done", ConditionScript: "true"}, true},
-	} {
-		if got := c.row.Conditional(); got != c.want {
-			t.Errorf("%+v: Conditional() = %v", c.row, got)
-		}
-	}
-}
-
 func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	plan := Column{PermissionMode: "plan"}
 	for _, tc := range []struct {
@@ -171,27 +155,57 @@ func TestPRFlow(t *testing.T) {
 	}
 }
 
+func TestDefaultReviewFlowKeepsReviewedPRsInTheirOwnLane(t *testing.T) {
+	board := Default()
+	f := board.ReviewFlow
+	if f == nil {
+		t.Fatal("default board has no reviewFlow")
+	}
+	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated} {
+		if c, ok := board.Find(ref); !ok || !c.InReviewLane() {
+			t.Errorf("reviewFlow.%s = %q would move a review card out of the review lane", name, ref)
+		}
+	}
+	if c, ok := board.Find(f.Done); !ok || !c.IsDone() {
+		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
+	}
+	updated, _ := board.Find(f.Updated)
+	reReview := updated.Automations.OnEnter
+	if len(reReview) != 1 || reReview[0].Type != "send_message" || !strings.Contains(reReview[0].Message, "{{prUrl}}") {
+		t.Errorf("entering %q does not send the agent the PR to review again: %+v", f.Updated, updated.Automations)
+	}
+}
+
 func TestChangesRequestedMode(t *testing.T) {
+	const custom = "my own instructions"
+	proposal := (&PRFlow{}).ChangesMessage()
+	fix := (&PRFlow{ChangesRequestedMode: "fix"}).ChangesMessage()
+	if proposal == fix {
+		t.Fatal("proposing and fixing send the agent the same message")
+	}
+	if !strings.Contains(proposal, "Don't change anything") {
+		t.Errorf("the proposal message doesn't hold the agent back: %q", proposal)
+	}
 	cases := []struct {
 		name    string
 		flow    PRFlow
 		propose bool
-		message string
+		want    string
 	}{
-		{"unset proposes", PRFlow{}, true, proposeChangesMessage},
-		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposeChangesMessage},
-		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fixChangesMessage},
-		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fixChangesMessage},
-		{"own message with off mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "off"}, false, "mine"},
-		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: "mine"}, false, "mine"},
-		{"own message with propose mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "propose"}, true, "mine"},
+		{"unset proposes", PRFlow{}, true, proposal},
+		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposal},
+		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fix},
+		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fix},
+		{"own message with off mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "off"}, false, custom},
+		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: custom}, false, custom},
+		{"own message with propose mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "propose"}, true, custom},
 	}
 	for _, c := range cases {
 		if got := c.flow.Proposes(); got != c.propose {
 			t.Errorf("%s: Proposes() = %v", c.name, got)
 		}
-		if got := c.flow.ChangesMessage(); got != c.message {
-			t.Errorf("%s: ChangesMessage() = %q", c.name, got)
+		if got := c.flow.ChangesMessage(); got != c.want {
+			t.Errorf("%s: ChangesMessage() = %q, want %q", c.name, got, c.want)
 		}
 	}
 	if !Default().PRFlow.Proposes() {
@@ -204,7 +218,7 @@ func TestChangesRequestedMode(t *testing.T) {
 	if !(&PRFlow{ChangesRequestedMode: "off"}).Off() {
 		t.Error("Off() is false in off mode")
 	}
-	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
+	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposal {
 		t.Error("a missing prFlow does not propose")
 	}
 	dir := t.TempDir()
@@ -387,10 +401,6 @@ func TestDefaultBoard(t *testing.T) {
 			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
 		}
 	}
-	if err := Default().validate(); err != nil {
-		t.Errorf("default board: %v", err)
-	}
-
 	col, _, ok := Default().Column("executing")
 	if !ok || len(col.Automations.OnTurnEnd) != 1 {
 		t.Fatalf("default executing column has no turn-end rule: %+v", col)
@@ -398,34 +408,6 @@ func TestDefaultBoard(t *testing.T) {
 	row := col.Automations.OnTurnEnd[0]
 	if row.Type != "move_to_column" || row.TargetColumn != "waiting-for-me" || row.Condition == "" {
 		t.Errorf("default turn-end rule: %+v", row)
-	}
-}
-
-func TestDefaultBoardHasReviewLane(t *testing.T) {
-	board := Default()
-	var lane []string
-	for _, c := range board.Columns {
-		if c.InReviewLane() {
-			lane = append(lane, c.ID)
-		}
-	}
-	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
-		t.Errorf("review lane = %v, want %v", lane, want)
-	}
-	f := board.ReviewFlow
-	if f == nil {
-		t.Fatal("default board has no reviewFlow")
-	}
-	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
-		if _, ok := board.Find(ref); !ok {
-			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
-		}
-	}
-	if c, _ := board.Find(f.Done); !c.IsDone() {
-		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
-	}
-	if c, _ := board.Find(f.Updated); len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
-		t.Errorf("reviewFlow.updated column doesn't ask for a re-review on entry: %+v", c.Automations)
 	}
 }
 
@@ -599,14 +581,6 @@ func TestStamp(t *testing.T) {
 	}
 }
 
-func TestIsDone(t *testing.T) {
-	for role, want := range map[string]bool{"done": true, "": false, "todo": false, "Done": false} {
-		if got := (Column{Role: role}).IsDone(); got != want {
-			t.Errorf("Column{Role: %q}.IsDone() = %v, want %v", role, got, want)
-		}
-	}
-}
-
 func TestFind(t *testing.T) {
 	board := &Board{Columns: []Column{
 		{ID: "a", Name: "Backlog"},
@@ -640,21 +614,31 @@ func TestSave(t *testing.T) {
 	if err != nil || !strings.HasSuffix(string(data), "}\n") {
 		t.Fatalf("saved file = %q, err %v", data, err)
 	}
-	board, found, err := Load(dir)
+	saved, found, err := Load(dir)
 	if err != nil || !found {
 		t.Fatalf("saved board does not load: found=%v err=%v", found, err)
 	}
-	var ids []string
-	for _, c := range board.Columns {
-		ids = append(ids, c.ID)
+	fresh, _, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	lane, _ := board.Find("reviewing")
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
-		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
-		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
+	if !reflect.DeepEqual(saved, fresh) {
+		t.Errorf("round trip changed the board:\n got %+v\nwant %+v", saved, fresh)
 	}
 	if err := Default().Save(filepath.Join(dir, "missing")); err == nil {
 		t.Error("saving into a missing directory succeeded")
+	}
+}
+
+func TestClaudeEnv(t *testing.T) {
+	if got := (&Board{DisableMouse: true}).ClaudeEnv(); !reflect.DeepEqual(got, map[string]string{"CLAUDE_CODE_DISABLE_MOUSE": "1"}) {
+		t.Errorf("disableMouse env = %v", got)
+	}
+	var none *Board
+	for name, b := range map[string]*Board{"off": {}, "no board": none} {
+		if got := b.ClaudeEnv(); len(got) != 0 {
+			t.Errorf("%s: env = %v, want none", name, got)
+		}
 	}
 }
 

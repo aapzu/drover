@@ -294,23 +294,31 @@ func configSources(root string) []string {
 
 func (m Model) renderConfig() string {
 	width := min(76, m.width-4)
-	lines := []string{bold.Render("Settings"), ""}
+	var rows []string
+	selectedRow := 0
 	for i, opt := range configOptions {
 		if opt.shared && (i == 0 || !configOptions[i-1].shared) {
-			lines = append(lines, "", dim.Render("drover.json only"))
+			rows = append(rows, "", dim.Render("drover.json only"))
 		}
 		selected := i == m.configSel
 		prefix, name := "  ", fmt.Sprintf("%-32s", opt.name)
 		if selected {
 			prefix, name = "▸ ", bold.Render(name)
+			selectedRow = len(rows)
 		}
 		value, note := fmt.Sprintf("%-12s", configValue(opt, m.snap.Board)), dim.Render(m.configSrc[i])
 		if selected && m.configEditing {
 			value = m.configInput.View()
 			note = dim.Render("→ " + m.configLayer.FileName())
 		}
-		lines = append(lines, prefix+name+value+"  "+note)
+		rows = append(rows, prefix+name+value+"  "+note)
 	}
+	if room := m.height - 10; m.height > 0 && len(rows) > room {
+		room = max(room, 3)
+		start := clamp(selectedRow-room/2, 0, len(rows)-room)
+		rows = rows[start : start+room]
+	}
+	lines := append([]string{bold.Render("Settings"), ""}, rows...)
 	lines = append(lines, "", dim.Render("c edits columns. Flows and automations live in drover.json only."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

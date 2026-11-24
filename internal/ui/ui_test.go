@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,27 @@ func liveCard(t *testing.T, titles ...string) Model {
 	t.Helper()
 	m := realModel(t, titles...)
 	return withLive(m, m.current().ID)
+}
+
+// msgTypes is the Go type name of each message a command produces, in order. Match it with hasMsg.
+func msgTypes(cmd tea.Cmd) []string {
+	var out []string
+	for _, msg := range runCmds(cmd) {
+		out = append(out, fmt.Sprintf("%T", msg))
+	}
+	return out
+}
+
+func hasMsg(types []string, name string) bool {
+	return slices.ContainsFunc(types, func(s string) bool { return strings.Contains(s, name) })
+}
+
+// runBatch is the commands of a tea.Batch, without running them.
+func runBatch(cmd tea.Cmd) []tea.Cmd {
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		return batch
+	}
+	return []tea.Cmd{cmd}
 }
 
 func special(k tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: k} }
@@ -182,9 +205,21 @@ func TestDetailShowsTheCardAndScrolls(t *testing.T) {
 		t.Error("View doesn't show the detail")
 	}
 
-	m, _ = update(m, special(tea.KeyDown))
-	if m.mode != modeDetail {
-		t.Fatalf("a scroll key left the detail view: mode %v", m.mode)
+	for i := range 80 {
+		m.snap.Tasks[0].Log = append(m.snap.Tasks[0].Log, store.LogEntry{At: time.Now(), Text: fmt.Sprintf("event %d", i)})
+	}
+	m, _ = update(m, key("i"))
+	m, _ = update(m, key("i"))
+	if strings.Contains(m.detail.View(), "event 0") {
+		t.Fatalf("the oldest log line is on the first screen:\n%s", m.detail.View())
+	}
+	m, _ = update(m, special(tea.KeyPgDown))
+	if m.mode != modeDetail || m.detail.YOffset == 0 {
+		t.Fatalf("pgdown: mode %v offset %d, want the detail scrolled", m.mode, m.detail.YOffset)
+	}
+	m, _ = update(m, special(tea.KeyPgUp))
+	if m.detail.YOffset != 0 {
+		t.Errorf("pgup: offset %d, want back at the top", m.detail.YOffset)
 	}
 	for _, k := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("i")} {
 		next, _ := update(m, k)
@@ -272,15 +307,13 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},
 		{"filter", modeFilter, func(m Model) Model { m.filterInput.Focus(); return m }, "Filter ›"},
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
-		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, ""},
+		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, "Settings"},
 		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#1 first"},
+		{"columns", modeColumns, func(m Model) Model { m = m.openColumns(); return m }, "Columns"},
 		{"live", modeLive, func(m Model) Model { return withLive(m, m.current().ID) }, "LIVE"},
 	}
 	for _, size := range [][2]int{{120, 40}, {80, 24}} {
 		for _, tt := range modes {
-			if tt.name == "config" && size[1] < 30 {
-				continue
-			}
 			t.Run(fmt.Sprintf("%s %dx%d", tt.name, size[0], size[1]), func(t *testing.T) {
 				m := realModel(t, "first", "second")
 				m, _ = update(m, tea.WindowSizeMsg{Width: size[0], Height: size[1]})
@@ -385,17 +418,14 @@ func TestSessionStartedWithoutALiveAgentOnlySelects(t *testing.T) {
 
 func TestSessionStartedErrorIsFlashed(t *testing.T) {
 	m := realModel(t, "a")
-	m, cmd := update(m, sessionStartedMsg{task: m.snap.Tasks[0], err: errors.New("no slot")})
-	if m.flash != "Error: no slot" || cmd != nil {
-		t.Errorf("flash %q cmd nil %v", m.flash, cmd == nil)
-	}
-}
-
-func TestSessionStartedWithoutACardFlashesTheError(t *testing.T) {
-	m := realModel(t, "a")
-	m, cmd := update(m, sessionStartedMsg{err: errors.New("first column runs no agent")})
-	if m.flash != "Error: first column runs no agent" || cmd != nil {
-		t.Errorf("flash %q cmd nil %v", m.flash, cmd == nil)
+	for name, msg := range map[string]sessionStartedMsg{
+		"with its card":    {task: m.snap.Tasks[0], err: errors.New("no slot")},
+		"without its card": {err: errors.New("no slot")},
+	} {
+		next, cmd := update(m, msg)
+		if next.flash != "Error: no slot" || cmd != nil {
+			t.Errorf("%s: flash %q cmd nil %v", name, next.flash, cmd == nil)
+		}
 	}
 }
 
@@ -410,21 +440,21 @@ func TestAttachDoneReturnsToTheBoard(t *testing.T) {
 	if o := m.busy[m.snap.Tasks[0].ID]; o.label != "discarding" {
 		t.Errorf("an untitled card should be discarded, busy = %v", m.busy)
 	}
-	if cmd == nil {
-		t.Error("attach done should turn the mouse back on and discard the card")
+	if types := msgTypes(cmd); !hasMsg(types, "enableMouse") || !hasMsg(types, "actionDoneMsg") {
+		t.Errorf("attach done sent %v, want the mouse back on and the card discarded", types)
 	}
 
 	m = realModel(t, "named")
-	_, cmd = update(m, attachDoneMsg{id: m.snap.Tasks[0].ID, agent: true})
-	if msgs := runCmds(cmd); len(msgs) != 1 {
-		t.Errorf("a titled card is kept, but got %d msgs", len(msgs))
+	m, cmd = update(m, attachDoneMsg{id: m.snap.Tasks[0].ID, agent: true})
+	if types := msgTypes(cmd); !hasMsg(types, "enableMouse") || hasMsg(types, "actionDoneMsg") || len(m.busy) != 0 {
+		t.Errorf("a titled card is kept: sent %v busy %v", types, m.busy)
 	}
 }
 
 func TestAttachDoneLeavesTheMouseAloneWhenItIsOff(t *testing.T) {
 	m := realModel(t, "named")
 	m.prefs.NoMouse = true
-	if _, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID}); len(runCmds(cmd)) != 0 {
+	if _, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID}); hasMsg(msgTypes(cmd), "enableMouse") {
 		t.Error("attach done enabled the mouse that is off")
 	}
 }
@@ -461,9 +491,8 @@ func TestExternalAttachAsksBeforeTakingOver(t *testing.T) {
 		t.Fatalf("mode %v cmd nil %v text %q", m.mode, cmd == nil, m.confirmText)
 	}
 	m, cmd = update(m, key("y"))
-	msgs := runCmds(cmd)
-	if _, ok := msgs[0].(takeOverDoneMsg); !ok || len(msgs) != 1 {
-		t.Errorf("y should take over, got %T", msgs)
+	if types := msgTypes(cmd); !slices.Equal(types, []string{"ui.takeOverDoneMsg"}) {
+		t.Errorf("y should take over, got %v", types)
 	}
 }
 
@@ -691,10 +720,23 @@ func TestSyncFocusTellsTheEngineWhereYouAre(t *testing.T) {
 }
 
 func TestInitEnablesTheMouseUnlessItIsOff(t *testing.T) {
-	m := realModel(t, "a")
-	if cmd := m.Init(); cmd == nil {
-		t.Fatal("Init started nothing")
+	enablesMouse := func(m Model) bool {
+		want := reflect.ValueOf(tea.EnableMouseCellMotion).Pointer()
+		return slices.ContainsFunc(runBatch(m.Init()), func(c tea.Cmd) bool { return reflect.ValueOf(c).Pointer() == want })
 	}
+
+	m := realModel(t, "a")
+	if !enablesMouse(m) {
+		t.Error("Init does not enable the mouse")
+	}
+	m.prefs.NoMouse = true
+	if enablesMouse(m) {
+		t.Error("Init enables the mouse although it is turned off")
+	}
+}
+
+func TestNewLoadsTheSavedLayout(t *testing.T) {
+	m := realModel(t, "a")
 	m.prefs.NoMouse = true
 	if err := m.prefs.save(m.eng.Root); err != nil {
 		t.Fatal(err)
@@ -726,5 +768,48 @@ func TestWriteDefaultBoardKey(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(m.eng.Root, "drover.json")); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestTickRequestsAPreviewOnEverySecondFrame(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(m *Model)
+		frame int
+		want  bool
+	}{
+		{"every second frame", func(*Model) {}, 1, true},
+		{"the frame between", func(*Model) {}, 0, false},
+		{"with the preview hidden", func(m *Model) { m.prefs.HidePreview = true }, 1, false},
+		{"while typing into the agent", func(m *Model) { m.mode = modeLive }, 1, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := realModel(t, "a")
+			m.snapBusy = true
+			tt.setup(&m)
+			m.frame = tt.frame
+			_, cmd := update(m, tickMsg(time.Now()))
+			if got := hasMsg(msgTypes(cmd), "previewMsg"); got != tt.want {
+				t.Errorf("preview requested = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAttachEndingBecauseThePaneVanishedFollowsTheBusyCard(t *testing.T) {
+	for _, busy := range []bool{true, false} {
+		m := realModel(t, "a")
+		card := m.snap.Tasks[0]
+		m.snap.At = time.Now().Add(time.Hour)
+		m.snap.Busy = nil
+		if busy {
+			m.snap.Busy = map[string]string{card.ID: "creating worktree"}
+		}
+
+		m, _ = update(m, attachDoneMsg{id: card.ID, paneGone: true})
+		if followed := m.follow == card.ID; followed != busy || (busy && !m.followUntil.After(time.Now())) {
+			t.Errorf("busy %v: follow %q until %v", busy, m.follow, m.followUntil)
+		}
 	}
 }

@@ -148,3 +148,21 @@ func TestArchivingDoneIgnoresTheFilter(t *testing.T) {
 		t.Errorf("confirm %q: want every card ArchiveColumn will archive", m.confirmText)
 	}
 }
+
+func TestCollapseShowsTheOwnerWhenNothingIsSelected(t *testing.T) {
+	m := testModel(120, 40, 1, 0)
+	owner := &store.Task{ID: "owner", Number: 1, Title: "owner", ColumnID: "c0"}
+	m.snap.Tasks = []*store.Task{
+		{ID: "split", Number: 2, Title: "split", ColumnID: "c0", GroupID: "owner"},
+		owner,
+	}
+	m.prefs.CollapsedColumns = map[string]bool{"c0": true}
+
+	if got := ids(m.tasksForColumn(0)); got != "owner" {
+		t.Errorf("folded column = %q, want the owner to stand for its session although a split card comes first", got)
+	}
+	m.selected["c0"] = "split"
+	if got := ids(m.tasksForColumn(0)); got != "split" {
+		t.Errorf("folded column = %q, want the selected split card", got)
+	}
+}

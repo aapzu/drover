@@ -213,8 +213,6 @@ func Load(root string) (board *Board, found bool, err error) {
 	return board, found, nil
 }
 
-// dropTodo removes columns with the "todo" role, which no longer exists, and
-// remembers their ids in LegacyTodo, plus "todo", the id the default board used.
 // ClaudeEnv is the environment drover adds to every claude session it starts.
 func (b *Board) ClaudeEnv() map[string]string {
 	if b != nil && b.DisableMouse {
@@ -223,6 +221,8 @@ func (b *Board) ClaudeEnv() map[string]string {
 	return nil
 }
 
+// dropTodo removes columns with the "todo" role, which no longer exists, and
+// remembers their ids in LegacyTodo, plus "todo", the id the default board used.
 func (b *Board) dropTodo() {
 	b.Columns = slices.DeleteFunc(b.Columns, func(c Column) bool {
 		if c.Role != "todo" {
