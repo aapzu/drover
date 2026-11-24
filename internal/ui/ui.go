@@ -30,9 +30,11 @@ const (
 	modeBoard mode = iota
 	modeForm
 	modeSend
+	modeRename
 	modeMove
 	modeConfirm
 	modeDetail
+	modeUsage
 	modeHelp
 	modeImport
 	modeLive
@@ -41,6 +43,8 @@ const (
 	modeAssistant
 	modeConfig
 	modeColumns
+	modeSchedules
+	modeReviewLevel
 )
 
 type tickMsg time.Time
@@ -52,6 +56,10 @@ type previewMsg struct {
 	at              time.Time
 }
 type noticeMsg string
+
+// titleSuggestedMsg carries a title for the rename prompt of card id, which
+// opened showing original.
+type titleSuggestedMsg struct{ id, original, title string }
 type snapMsg engine.Snapshot
 type actionDoneMsg struct {
 	id          string
@@ -80,10 +88,12 @@ type externalAttachMsg struct {
 	number, pid int
 }
 type suspendAllMsg struct{}
+
 type sessionStartedMsg struct {
-	task *store.Task
-	err  error
-	snap engine.Snapshot
+	task   *store.Task
+	err    error
+	snap   engine.Snapshot
+	review bool
 }
 
 type Model struct {
@@ -93,6 +103,8 @@ type Model struct {
 	attached string
 	branch   string
 	snapBusy bool
+
+	startingReview bool
 
 	// busy holds the actions the board started and is waiting on, one per
 	// card, unlike snap.Busy, which holds the engine's own steps. The map is
@@ -118,6 +130,7 @@ type Model struct {
 	previewComplete            bool
 	previewBusy, previewWanted bool
 	sel                        selection
+	selClick                   selClick
 
 	prefs   prefs
 	drag    dragState
@@ -134,6 +147,7 @@ type Model struct {
 	formFocus   int
 
 	sendInput   textinput.Model
+	renameInput textinput.Model
 	filter      string
 	filterInput textinput.Model
 
@@ -146,11 +160,15 @@ type Model struct {
 	configInput   textinput.Model
 	configSrc     []string
 
+	configFilterInput textinput.Model
+
 	columnSel     int
 	columnOpen    bool
 	columnID      string
 	columnOptSel  int
 	columnEditing bool
+	columnsFrom   mode
+	columnPrompt  textarea.Model
 	columnSrc     []string
 
 	// modalTask is the task the move picker or send prompt was opened for.
@@ -160,9 +178,13 @@ type Model struct {
 	confirmText   string
 	confirmAction func() tea.Cmd
 
+	level reviewLevelState
+
 	suspendAll bool
 
 	detail viewport.Model
+
+	scheduleSel, scheduleWindow int
 
 	assist assistantPane
 
@@ -179,8 +201,14 @@ func New(eng *engine.Engine) Model {
 	ta.SetHeight(8)
 	si := textinput.New()
 	si.Placeholder = "Message for the agent"
+	si.Prompt = ""
+	ri := textinput.New()
+	ri.Placeholder = "Short title"
+	ri.CharLimit = 200
+	ri.Prompt = ""
 	fi := textinput.New()
 	fi.Placeholder = "Words to match"
+	fi.Prompt = ""
 	m := Model{
 		eng:         eng,
 		snap:        eng.Snapshot(),
@@ -192,13 +220,18 @@ func New(eng *engine.Engine) Model {
 		titleInput:  ti,
 		promptInput: ta,
 		sendInput:   si,
+		renameInput: ri,
 		filterInput: fi,
 		detail:      viewport.New(80, 20),
 		imp:         newImportState(),
 
 		paletteInput: newPaletteInput(),
 		configInput:  textinput.New(),
+
+		configFilterInput: textinput.New(),
+		columnPrompt:      newColumnPrompt(),
 	}
+	m.configFilterInput.Placeholder = "Words to match"
 	if !m.snap.BoardFound {
 		m.setFlash("No drover.json found, using the default board (press W to write it)")
 	}
@@ -206,7 +239,7 @@ func New(eng *engine.Engine) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tick(), m.waitNotice()}
+	cmds := []tea.Cmd{tick(), m.waitNotice(), enableExtendedKeys}
 	if !m.prefs.NoMouse {
 		cmds = append(cmds, tea.EnableMouseCellMotion)
 	}
@@ -240,47 +273,70 @@ func (m Model) hasReviewLane() bool {
 	return slices.ContainsFunc(m.columns(), config.Column.InReviewLane)
 }
 
-// reviewLaneCards counts the cards in the review lane's columns, not counting
-// archived or hidden ones.
-func (m Model) reviewLaneCards() int {
+// laneCards counts the cards in the columns of the review lane, or of the main
+// lane when review is false, not counting archived or hidden ones.
+func (m Model) laneCards(review bool) int {
 	n := 0
 	for _, t := range m.snap.Tasks {
-		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() && !m.offBoard(t, m.hidesArchived(col.ID)) {
+		if col, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && col.InReviewLane() == review && !m.offBoard(t, m.hidesArchived(col.ID)) {
 			n++
 		}
 	}
 	return n
 }
 
-// reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
-// pref, and with none set, while the lane holds cards.
+// mainLaneHidden reports whether only the review lane is drawn. A board with
+// no review lane always draws its main columns.
+func (m Model) mainLaneHidden() bool {
+	return m.prefs.HideMainLane && m.hasReviewLane()
+}
+
+// reviewLaneShown reports whether the review lane is drawn: always while the
+// main lane is hidden, else per the ReviewLane pref, and with none set, while
+// the lane holds cards. It is also drawn while ctrl+n starts a review, so the
+// new card shows even when the lane was hidden. A filter matching only the
+// lane's cards shows it too, for as long as the filter is set.
 func (m Model) reviewLaneShown() bool {
-	if shown := m.prefs.ReviewLane; shown != nil {
-		return *shown && m.hasReviewLane()
+	if m.startingReview {
+		return true
 	}
-	return m.reviewLaneCards() > 0
+	if m.mainLaneHidden() {
+		return true
+	}
+	if shown := m.prefs.ReviewLane; shown != nil {
+		return *shown && m.hasReviewLane() || m.filterMatchesOnlyReviewLane()
+	}
+	return m.laneCards(true) > 0 || m.filterMatchesOnlyReviewLane()
 }
 
 // lanes is the indexes of the columns on each row of the board: the main
-// columns, then the review lane's while it is shown.
+// columns, then the review lane's, each while it is shown.
 func (m Model) lanes() [][]int {
 	var main, review []int
 	for i, c := range m.columns() {
-		if c.InReviewLane() {
+		switch {
+		case !m.visibleColumn(i):
+		case c.InReviewLane():
 			review = append(review, i)
-		} else {
+		default:
 			main = append(main, i)
 		}
 	}
-	if len(review) == 0 || !m.reviewLaneShown() {
-		return [][]int{main}
+	var rows [][]int
+	for _, row := range [][]int{main, review} {
+		if len(row) > 0 {
+			rows = append(rows, row)
+		}
 	}
-	return [][]int{main, review}
+	return rows
 }
 
 // visibleColumn reports whether the board draws column i.
 func (m Model) visibleColumn(i int) bool {
-	return !m.columns()[i].InReviewLane() || m.reviewLaneShown()
+	if m.columns()[i].InReviewLane() {
+		return m.reviewLaneShown()
+	}
+	return !m.mainLaneHidden()
 }
 
 // stepColumn is the nearest column from i in direction dir (-1 or 1) that the
@@ -294,13 +350,17 @@ func (m Model) stepColumn(i, dir int) int {
 	return i
 }
 
-// shownColumn is col if the board draws it, else the nearest one before it.
+// shownColumn is col if the board draws it, else the nearest one before it, or
+// after it when none before it is drawn.
 func (m Model) shownColumn(col int) int {
 	col = clamp(col, 0, len(m.columns())-1)
-	for col > 0 && !m.visibleColumn(col) {
-		col--
+	if m.visibleColumn(col) {
+		return col
 	}
-	return col
+	if prev := m.stepColumn(col, -1); prev != col {
+		return prev
+	}
+	return m.stepColumn(col, 1)
 }
 
 func (m Model) tasksIn(colID string) []*store.Task {
@@ -311,7 +371,12 @@ func (m Model) tasksIn(colID string) []*store.Task {
 			out = append(out, t)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return m.updatedAt(out[i]).Before(m.updatedAt(out[j])) })
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pinned != out[j].Pinned {
+			return out[i].Pinned
+		}
+		return m.updatedAt(out[i]).After(m.updatedAt(out[j]))
+	})
 	return out
 }
 
@@ -366,7 +431,7 @@ func (m Model) columnOf(t *store.Task) string {
 	return t.ColumnID
 }
 
-// updatedAt puts a card being moved at the end of its new column, where the
+// updatedAt puts a card being moved at the top of its new column, where the
 // engine puts it.
 func (m Model) updatedAt(t *store.Task) time.Time {
 	if o := m.busy[t.ID]; o.column != "" {
@@ -403,16 +468,28 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	return tasks, nil
 }
 
-// collapseGroups keeps one card per session: the selected one, else the
-// owner, else the first in tasks. folded counts the cards dropped, by the kept
-// card's ID.
+// collapseGroups keeps one card per session: the selected one, else a pinned
+// one, else the owner, else the first in tasks. folded counts the cards
+// dropped, by the kept card's ID.
 func (m Model) collapseGroups(tasks []*store.Task, selectedID string) ([]*store.Task, map[string]int) {
 	owners := make([]*store.Task, len(tasks))
 	kept := map[string]*store.Task{}
+	rank := func(t, owner *store.Task) (r int) {
+		if t == owner {
+			r++
+		}
+		if t.Pinned {
+			r += 2
+		}
+		if t.ID == selectedID {
+			r += 4
+		}
+		return r
+	}
 	for i, t := range tasks {
 		owner := store.Owner(m.snap.Tasks, t)
 		owners[i] = owner
-		if k := kept[owner.ID]; k == nil || t.ID == selectedID || t == owner && k.ID != selectedID {
+		if k := kept[owner.ID]; k == nil || rank(t, owner) > rank(k, owner) {
 			kept[owner.ID] = t
 		}
 	}
@@ -511,11 +588,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.promptInput.SetWidth(min(100, m.width-8))
+		m.columnPrompt.SetWidth(min(72, m.width-10))
 		m.titleInput.Width = min(100, m.width-8)
 		m.sendInput.Width = max(20, m.width-14)
+		m.renameInput.Width = max(20, m.width-14)
 		m.filterInput.Width = max(20, m.width-14)
+		m.configFilterInput.Width = max(20, m.width-14)
 		m.paletteInput.Width = max(20, m.paletteWidth()-10)
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
+		if m.assist.full && m.assistantFits() == 0 {
+			m.assist.full = false
+		}
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
 			m.setFlash(tooSmallForAssistant)
@@ -579,8 +662,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.previewScroll > 0 {
 				m.previewScroll += d
 			}
-			m.sel.anchor.line += d
-			m.sel.head.line += d
+			m.sel.shift(d)
 		}
 		m.previewScroll = clamp(m.previewScroll, 0, msg.history)
 		m.previewFor, m.previewTxt, m.previewAt, m.previewHistory = msg.taskID, msg.content, msg.at, msg.history
@@ -603,7 +685,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case copiedMsg:
 		m.setFlash(msg.flash())
 		return m, nil
-	case sessionsLoadedMsg, issuesLoadedMsg:
+	case sessionsLoadedMsg, issuesLoadedMsg, reviewsLoadedMsg:
 		return m.updateImportLoaded(msg), nil
 	case assistantStartedMsg:
 		cmd := m.finishAssistantStart(msg)
@@ -620,6 +702,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, next
 		}
 		return m, tea.Batch(next, m.captureAssistantCmd())
+	case titleSuggestedMsg:
+		if m.mode == modeRename && m.modalTask == msg.id && m.renameInput.Value() == msg.original && msg.title != "" {
+			m.renameInput.SetValue(msg.title)
+			m.renameInput.CursorEnd()
+		}
+		return m, nil
 	case noticeMsg:
 		m.setFlash(string(msg))
 		return m, m.waitNotice()
@@ -671,10 +759,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.suspendAll = true
 		return m, tea.Quit
 	case sessionStartedMsg:
+		if msg.review {
+			m.startingReview = false
+		}
 		m.applySnap(msg.snap)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
 			return m, nil
+		}
+		if col, _, ok := m.snap.Board.Column(m.columnOf(msg.task)); ok && col.InReviewLane() && !m.reviewLaneShown() {
+			shown := true
+			m.prefs.ReviewLane = &shown
+			m.savePrefs()
 		}
 		m.selectTask(msg.task)
 		if cmd, ok := m.attach(msg.task.ID); ok {
@@ -695,6 +791,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		cmds = append(cmds, enableExtendedKeys)
 		// Bubbletea disables the mouse for ExecProcess and doesn't turn it back on.
 		if !m.prefs.NoMouse {
 			cmds = append(cmds, tea.EnableMouseCellMotion)
@@ -704,22 +801,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
-		m.sel = selection{}
+		m.sel, m.assist.sel = selection{}, selection{}
 		switch m.mode {
 		case modeForm:
 			return m.updateForm(msg)
 		case modeSend:
 			return m.updateSend(msg)
+		case modeRename:
+			return m.updateRename(msg)
 		case modeMove:
 			return m.updateMove(msg)
 		case modeConfirm:
 			return m.updateConfirm(msg)
-		case modeDetail:
+		case modeReviewLevel:
+			return m.updateReviewLevel(msg)
+		case modeDetail, modeUsage:
 			return m.updateDetail(msg)
 		case modeConfig:
 			return m.updateConfig(msg)
 		case modeColumns:
 			return m.updateColumns(msg)
+		case modeSchedules:
+			return m.updateSchedules(msg)
 		case modeHelp:
 			m.mode = modeBoard
 			return m, nil
@@ -761,7 +864,7 @@ func (m *Model) applySnap(snap engine.Snapshot) {
 	if t := m.task(curID); t != nil && m.columnOf(t) != curCol {
 		m.selectTask(t)
 	}
-	if (m.mode == modeMove || m.mode == modeSend) && m.task(m.modalTask) == nil {
+	if (m.mode == modeMove || m.mode == modeSend || m.mode == modeRename) && m.task(m.modalTask) == nil {
 		m.mode = modeBoard
 	}
 }
@@ -790,11 +893,11 @@ func (m Model) capturePreview() tea.Cmd {
 		if ok {
 			capture := tmux.Capture
 			if l.previewH > 0 {
-				capture = func(name string, scrollback int) (string, int, bool, error) {
+				capture = func(name string, scrollback int) (string, int, bool, tmux.Cursor, error) {
 					return tmux.CaptureSized(name, w, h, scrollback)
 				}
 			}
-			if out, history, mouse, err := capture(name, scrollback); err == nil {
+			if out, history, mouse, _, err := capture(name, scrollback); err == nil {
 				msg.content, msg.history, msg.mouse = out, history, mouse
 				msg.complete = scrollback >= history
 			}
@@ -851,6 +954,17 @@ func (m Model) wheelTarget() (string, bool) {
 		return "", false
 	}
 	return m.mouseSession()
+}
+
+// pagerTarget is the live session that should get PgUp/PgDn for the wheel:
+// tmux has no history and the agent doesn't read mouse reports, as when
+// claude runs full-screen with its mouse support disabled.
+func (m Model) pagerTarget() (string, bool) {
+	t := m.current()
+	if m.mode != modeLive || t == nil || m.previewFor != t.ID || m.previewHistory != 0 || m.previewMouse {
+		return "", false
+	}
+	return m.liveSession(t.ID)
 }
 
 // clickTarget is the session that should get clicks.
@@ -957,8 +1071,15 @@ func attachExternal(cmd *exec.Cmd) tea.Cmd {
 	return tea.ExecProcess(cmd, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 }
 
-func (m Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
-	return moveTo(m.eng, m.busy, t.ID, t.Number, target)
+// moveCmd moves t to target, first asking for the review level when the move
+// starts an imported review.
+func (m *Model) moveCmd(t *store.Task, target config.Column) tea.Cmd {
+	eng, busy, id, number := m.eng, m.busy, t.ID, t.Number
+	move := func() tea.Cmd { return moveTo(eng, busy, id, number, target) }
+	if target.IsAgent() && m.askReviewLevel(t, move) {
+		return nil
+	}
+	return move()
 }
 
 // moveTo shows the card in the target column straight away while the engine
@@ -1007,6 +1128,20 @@ func hideCard(eng *engine.Engine, busy map[string]op, id string, number int, hid
 	})
 }
 
+func pinCard(eng *engine.Engine, busy map[string]op, id string, number int, pin bool) tea.Cmd {
+	return runOp(eng, busy, id, op{label: "pinning"}, func() actionDoneMsg {
+		err := eng.PinTask(id, pin)
+		msg := actionDoneMsg{err: err}
+		switch {
+		case err == nil && pin:
+			msg.done = fmt.Sprintf("Pinned #%d to the top of its column", number)
+		case err == nil:
+			msg.done = fmt.Sprintf("Unpinned #%d", number)
+		}
+		return msg
+	})
+}
+
 func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cols := m.columns()
 	t := m.current()
@@ -1039,8 +1174,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case newAskKey:
 		cmd := m.openAssistant(true)
 		return m, cmd
+	case zoomKey:
+		cmd := m.zoomAssistant()
+		return m, cmd
 	case liveExitKey:
-		m.assist.open = false
+		m.assist.open, m.assist.full = false, false
 	case "left", "h":
 		m.col = m.stepColumn(m.col, -1)
 	case "right", "l":
@@ -1102,10 +1240,30 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			t, err := eng.NewSession()
 			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot()}
 		}
+	case newReviewKey:
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		if m.startingReview {
+			m.setFlash("Already starting a review")
+			break
+		}
+		m.startingReview = true
+		m.setFlash("Starting a new review…")
+		eng := m.eng
+		return m, func() tea.Msg {
+			t, err := eng.NewReviewSession()
+			return sessionStartedMsg{task: t, err: err, snap: eng.Snapshot(), review: true}
+		}
 	case "e":
 		if t != nil {
 			m.openForm(t)
 			return m, textinput.Blink
+		}
+	case "E":
+		if t != nil {
+			return m, m.openRename(t)
 		}
 	case "x", "D", "delete":
 		if t == nil {
@@ -1131,10 +1289,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if !ok {
-			id := t.ID
-			return m, runOp(m.eng, m.busy, id, op{label: "starting agent"}, func() actionDoneMsg {
-				return actionDoneMsg{err: m.eng.Start(id), attach: true}
-			})
+			id, eng, busy := t.ID, m.eng, m.busy
+			start := func() tea.Cmd {
+				return runOp(eng, busy, id, op{label: "starting agent"}, func() actionDoneMsg {
+					return actionDoneMsg{err: eng.Start(id), attach: true}
+				})
+			}
+			if m.startsAgent(t) && m.askReviewLevel(t, start) {
+				return m, nil
+			}
+			return m, start()
 		}
 		return m, cmd
 	case "s":
@@ -1153,7 +1317,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if t != nil {
 			id := t.ID
-			return m, m.action(id, "starting agent", func() error { return m.eng.Start(id) })
+			start := func() tea.Cmd { return m.action(id, "starting agent", func() error { return m.eng.Start(id) }) }
+			if m.startsAgent(t) && m.askReviewLevel(t, start) {
+				return m, nil
+			}
+			return m, start()
 		}
 	case "/":
 		m.mode = modeFilter
@@ -1163,6 +1331,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 	case "c":
 		if t != nil {
 			name, err := m.eng.Shell(t.ID)
@@ -1225,6 +1394,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "0":
 		m.prefs.PreviewHeight, m.prefs.AssistantWidth, m.prefs.ColumnWidths, m.prefs.Density = 0, 0, map[string]int{}, densityNormal
+		m.prefs.ReviewLaneHeight = 0
 		m.savePrefs()
 	case "z":
 		m.prefs.Density = (m.prefs.Density + 1) % 3
@@ -1244,6 +1414,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detail.SetContent(m.renderDetail(t))
 			m.detail.GotoTop()
 		}
+	case "$":
+		m.mode = modeUsage
+		m.detail.SetContent(m.renderUsage())
+		m.detail.GotoTop()
+	case scheduleKey:
+		m.openSchedules()
 	case "I":
 		cmd := m.openImport(sourceClaude)
 		return m, cmd
@@ -1281,6 +1457,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		return m, hideCard(m.eng, m.busy, t.ID, t.Number, !t.Hidden)
+	case "P":
+		if t == nil {
+			break
+		}
+		return m, pinCard(m.eng, m.busy, t.ID, t.Number, !t.Pinned)
 	case "B":
 		m.prefs.ShowHidden = !m.prefs.ShowHidden
 		m.savePrefs()
@@ -1303,17 +1484,26 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "R":
 		if !m.hasReviewLane() {
-			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			m.setFlash(noReviewLane)
 			break
 		}
 		shown := !m.reviewLaneShown()
 		m.prefs.ReviewLane = &shown
+		if !shown {
+			m.prefs.HideMainLane = false
+		}
+		m.col = m.shownColumn(m.col)
+		m.savePrefs()
+	case "X":
+		if !m.hasReviewLane() {
+			m.setFlash(noReviewLane)
+			break
+		}
+		m.prefs.HideMainLane = !m.prefs.HideMainLane
 		m.col = m.shownColumn(m.col)
 		m.savePrefs()
 	case "o":
-		m.mode = modeConfig
-		m.configSel = 0
-		m.configSrc = configSources(m.eng.Root)
+		m = m.openConfig()
 	case "O":
 		return m.openColumns(), nil
 	case "W":
@@ -1387,6 +1577,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateBoard(msg)
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 		m.mode = modeBoard
 		return m, nil
 	case "enter":
@@ -1396,6 +1587,75 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.filter = strings.TrimSpace(m.filterInput.Value())
+	if m.filterMatchesOnlyReviewLane() {
+		if cards, _ := m.columnCards(m.col); len(cards) == 0 {
+			for i := range m.columns() {
+				if cards, _ := m.columnCards(i); len(cards) > 0 {
+					m.col = i
+					break
+				}
+			}
+		}
+	}
+	m.col = m.shownColumn(m.col)
+	return m, cmd
+}
+
+// filterMatchesOnlyReviewLane reports whether the filter has matches, and all
+// of them are in the review lane's columns.
+func (m Model) filterMatchesOnlyReviewLane() bool {
+	if m.filter == "" {
+		return false
+	}
+	found := false
+	for i, c := range m.columns() {
+		if cards, _ := m.columnCards(i); len(cards) > 0 {
+			if !c.InReviewLane() {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+// openRename opens the rename prompt with the card's title and asks for a
+// suggested one to replace it, unless you've started typing by then.
+func (m *Model) openRename(t *store.Task) tea.Cmd {
+	m.mode = modeRename
+	m.modalTask = t.ID
+	m.renameInput.SetValue(t.Title)
+	m.renameInput.CursorEnd()
+	cmds := []tea.Cmd{m.renameInput.Focus(), textinput.Blink}
+	if t.Prompt != "" {
+		eng, id, original, prompt := m.eng, t.ID, t.Title, t.Prompt
+		cmds = append(cmds, func() tea.Msg {
+			return titleSuggestedMsg{id: id, original: original, title: eng.SuggestTitle(prompt)}
+		})
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m Model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeBoard
+		return m, nil
+	case "enter":
+		title := strings.TrimSpace(m.renameInput.Value())
+		if title == "" {
+			m.setFlash("A task needs a title")
+			return m, nil
+		}
+		m.mode = modeBoard
+		if t := m.task(m.modalTask); t != nil {
+			m.eng.RenameTask(t.ID, title)
+			m.snap = m.eng.Snapshot()
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
 	return m, cmd
 }
 
@@ -1472,7 +1732,7 @@ func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc", "q", "i":
+	case "esc", "q", "i", "$":
 		m.mode = modeBoard
 		return m, nil
 	}

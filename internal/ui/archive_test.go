@@ -2,8 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aapzu/drover/internal/engine"
 )
@@ -173,5 +175,38 @@ func TestHideKeys(t *testing.T) {
 	m.snap.Tasks = nil
 	if _, cmd := m.updateBoard(key("b")); cmd != nil {
 		t.Error("b with no card selected did something")
+	}
+}
+
+func TestPinnedCardsListFirst(t *testing.T) {
+	m := testModel(120, 40, 1, 4)
+	now := time.Now()
+	for i, task := range m.snap.Tasks {
+		task.UpdatedAt = now.Add(time.Duration(i) * time.Minute)
+	}
+	order := func() []int {
+		var nums []int
+		for _, task := range m.tasksIn("c0") {
+			nums = append(nums, task.Number)
+		}
+		return nums
+	}
+	if got := order(); !slices.Equal(got, []int{4, 3, 2, 1}) {
+		t.Fatalf("unpinned order = %v", got)
+	}
+	m.snap.Tasks[0].Pinned, m.snap.Tasks[1].Pinned = true, true
+	if got := order(); !slices.Equal(got, []int{2, 1, 4, 3}) {
+		t.Errorf("pinned order = %v, want the pinned cards first, newest first", got)
+	}
+}
+
+func TestPinKey(t *testing.T) {
+	m := archiveModel(t)
+	if _, cmd := m.updateBoard(key("P")); cmd == nil {
+		t.Error("P on a card didn't start pinning it")
+	}
+	m.snap.Tasks = nil
+	if _, cmd := m.updateBoard(key("P")); cmd != nil {
+		t.Error("P with no card selected did something")
 	}
 }
