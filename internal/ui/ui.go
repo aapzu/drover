@@ -253,12 +253,13 @@ func (m Model) reviewLaneCards() int {
 }
 
 // reviewLaneShown reports whether the review lane is drawn: per the ReviewLane
-// pref, and with none set, while the lane holds cards.
+// pref, and with none set, while the lane holds cards. A filter matching only
+// the lane's cards shows it too, for as long as the filter is set.
 func (m Model) reviewLaneShown() bool {
 	if shown := m.prefs.ReviewLane; shown != nil {
-		return *shown && m.hasReviewLane()
+		return *shown && m.hasReviewLane() || m.filterMatchesOnlyReviewLane()
 	}
-	return m.reviewLaneCards() > 0
+	return m.reviewLaneCards() > 0 || m.filterMatchesOnlyReviewLane()
 }
 
 // lanes is the indexes of the columns on each row of the board: the main
@@ -1157,6 +1158,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 	case "c":
 		if t != nil {
 			name, err := m.eng.Shell(t.ID)
@@ -1381,6 +1383,7 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateBoard(msg)
 	case "esc":
 		m.filter = ""
+		m.col = m.shownColumn(m.col)
 		m.mode = modeBoard
 		return m, nil
 	case "enter":
@@ -1390,7 +1393,36 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.filter = strings.TrimSpace(m.filterInput.Value())
+	if m.filterMatchesOnlyReviewLane() {
+		if cards, _ := m.columnCards(m.col); len(cards) == 0 {
+			for i := range m.columns() {
+				if cards, _ := m.columnCards(i); len(cards) > 0 {
+					m.col = i
+					break
+				}
+			}
+		}
+	}
+	m.col = m.shownColumn(m.col)
 	return m, cmd
+}
+
+// filterMatchesOnlyReviewLane reports whether the filter has matches, and all
+// of them are in the review lane's columns.
+func (m Model) filterMatchesOnlyReviewLane() bool {
+	if m.filter == "" {
+		return false
+	}
+	found := false
+	for i, c := range m.columns() {
+		if cards, _ := m.columnCards(i); len(cards) > 0 {
+			if !c.InReviewLane() {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 func (m Model) updateSend(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
