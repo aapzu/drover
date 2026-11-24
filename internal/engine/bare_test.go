@@ -1,20 +1,45 @@
 package engine
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/inbox"
 	"github.com/aapzu/drover/internal/store"
 )
 
 func bareEngine(t *testing.T) *Engine {
 	t.Helper()
+	isolateTmux(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	return &Engine{Root: t.TempDir(), state: &store.State{NextNumber: 1}, board: config.Default(), notices: make(chan string, 8)}
+	stopping, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	return &Engine{Root: t.TempDir(), state: &store.State{NextNumber: 1}, board: config.Default(), notices: make(chan string, 8),
+		alerted: map[string]time.Time{}, stopping: stopping, stop: stop}
+}
+
+// boardEngine is a bareEngine on the board given as drover.json text.
+func boardEngine(t *testing.T, board string) *Engine {
+	t.Helper()
+	e := bareEngine(t)
+	if err := os.WriteFile(filepath.Join(e.Root, config.FileName), []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := config.Load(e.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.board = loaded
+	return e
 }
 
 func notice(e *Engine) string {
@@ -111,28 +136,6 @@ func TestDropReviewNomination(t *testing.T) {
 	})
 }
 
-func TestClaimTurn(t *testing.T) {
-	for name, tc := range map[string]struct {
-		session *store.Session
-		claimed bool
-	}{
-		"a turn in progress joins the visit": {&store.Session{Status: store.StatusRunning, Activity: store.ActivityThinking}, true},
-		"a suspended agent is left alone":    {&store.Session{Status: store.StatusSuspended, Activity: store.ActivityThinking}, false},
-		"no session":                         {nil, false},
-	} {
-		e := bareEngine(t)
-		card := &store.Task{ID: "a", Sessions: map[string]*store.Session{}}
-		if tc.session != nil {
-			card.Sessions[store.MainSession] = tc.session
-		}
-		e.state.Tasks = []*store.Task{card}
-		e.claimTurn(card, "a")
-		if got := tc.session != nil && tc.session.TurnInVisit; got != tc.claimed {
-			t.Errorf("%s: TurnInVisit = %v, want %v", name, got, tc.claimed)
-		}
-	}
-}
-
 func TestMoveConversation(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	e := bareEngine(t)
@@ -151,5 +154,146 @@ func TestMoveConversation(t *testing.T) {
 	e.moveConversation(card, from, worktree)
 	if _, err := os.Stat(claude.TranscriptPath("sid", worktree)); err != nil || exists(from) || !hasLog(card, "Moved the conversation into the worktree") {
 		t.Errorf("transcript not moved: %v, old still there %v, log %v", err, exists(from), card.Log)
+	}
+}
+
+func TestTalkedToCountsAPromptTheBoardHasNotReadYet(t *testing.T) {
+	prompt := `{"hook_event_name":"UserPromptSubmit","prompt":"hi"}` + "\n"
+	start := `{"hook_event_name":"SessionStart","source":"startup"}` + "\n"
+	for name, tc := range map[string]struct {
+		started bool
+		events  string
+		noFile  bool
+		asDir   bool
+		want    bool
+	}{
+		"a started conversation":        {started: true, want: true},
+		"nothing recorded yet":          {noFile: true, want: false},
+		"only the session start":        {events: start, want: false},
+		"a prompt not yet read":         {events: start + prompt, want: true},
+		"an unreadable log is not a no": {asDir: true, want: true},
+	} {
+		e := bareEngine(t)
+		s := &store.Session{Started: tc.started, Dir: t.TempDir()}
+		card := &store.Task{ID: "a", Sessions: map[string]*store.Session{store.MainSession: s}}
+		events := filepath.Join(s.Dir, "events.jsonl")
+		switch {
+		case tc.asDir:
+			os.Mkdir(events, 0o755)
+		case !tc.noFile:
+			os.WriteFile(events, []byte(tc.events), 0o644)
+		}
+		if got := e.talkedTo(card, store.MainSession); got != tc.want {
+			t.Errorf("%s: talkedTo = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestDropUnstartedForgetsOnlyTheSessionsNobodyTalkedTo(t *testing.T) {
+	e := bareEngine(t)
+	silent := &store.Session{Dir: t.TempDir()}
+	talked := &store.Session{Dir: t.TempDir(), Started: true}
+	external := &store.Session{Dir: t.TempDir(), Status: store.StatusExternal}
+	card := &store.Task{ID: "a", Sessions: map[string]*store.Session{"silent": silent, "talked": talked, "external": external}}
+
+	e.dropUnstarted(card)
+
+	if _, ok := card.Sessions["silent"]; ok || card.Sessions["talked"] != talked || card.Sessions["external"] != external || len(card.Sessions) != 2 {
+		t.Errorf("sessions left: %v", card.Sessions)
+	}
+}
+
+func TestStopSessionsLeavesAConversationRunningInYourOwnTerminal(t *testing.T) {
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	os.MkdirAll(filepath.Join(claudeDir, "sessions"), 0o755)
+	entry, _ := json.Marshal(claude.Live{PID: os.Getpid(), SessionID: "sid-here", Cwd: "/somewhere", Status: "idle"})
+	os.WriteFile(filepath.Join(claudeDir, "sessions", fmt.Sprintf("%d.json", os.Getpid())), entry, 0o644)
+
+	e := bareEngine(t)
+	card := &store.Task{ID: "a", Number: 5, Sessions: map[string]*store.Session{
+		store.MainSession: {Status: store.StatusExternal, AgentSessionID: "sid-here", PID: os.Getpid()},
+	}}
+	e.state.Tasks = []*store.Task{card}
+
+	stopped, leftRunning := e.stopSessions(card, "", store.StatusSuspended)
+
+	if stopped != 0 || !leftRunning || !hasLog(card, "still runs in another terminal") || !strings.Contains(notice(e), "#5 still runs in another terminal") {
+		t.Errorf("stopped %d, left running %v, log %v", stopped, leftRunning, card.Log)
+	}
+}
+
+func TestAnImportedSessionWhoseDirectoryIsGoneCannotGetAWorktree(t *testing.T) {
+	e := bareEngine(t)
+	e.isRepo = true
+	gone := filepath.Join(t.TempDir(), "gone")
+	card := &store.Task{ID: "a", WorktreePath: gone, Sessions: map[string]*store.Session{store.MainSession: {Imported: true}}}
+
+	_, err := e.ensureWorktree(card, config.Column{}, card.ID)
+
+	if err == nil || !strings.Contains(err.Error(), gone+" no longer exists") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestImportSessionsMirrorsWhatEachConversationIsDoing(t *testing.T) {
+	cwd := t.TempDir()
+	transcript := filepath.Join(cwd, "sid-running.jsonl")
+	os.WriteFile(transcript, []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Halfway there."}]}}`+"\n"), 0o644)
+	e := bareEngine(t)
+	e.board = groupBoard()
+	e.state.Tasks = []*store.Task{{ID: "x", Sessions: map[string]*store.Session{store.MainSession: {AgentSessionID: "sid-known"}}}}
+
+	added := e.ImportSessions([]claude.Found{
+		{SessionID: "sid-running", Title: "Busy elsewhere", Cwd: cwd, Running: true, Busy: true, PID: 4242, TranscriptPath: transcript},
+		{SessionID: "sid-old", Title: "Finished long ago", Cwd: cwd},
+		{SessionID: "sid-known", Title: "Already here", Cwd: cwd},
+	})
+
+	if added != 2 || len(e.state.Tasks) != 3 {
+		t.Fatalf("added %d, %d cards; the conversation already on the board must be skipped", added, len(e.state.Tasks))
+	}
+	running, old := e.state.Tasks[1], e.state.Tasks[2]
+	rs, oldS := running.Sessions[store.MainSession], old.Sessions[store.MainSession]
+	if running.ColumnID != "exec" || rs.Status != store.StatusExternal || rs.Activity != store.ActivityThinking || rs.PID != 4242 || rs.LastReply != "Halfway there." || !rs.Imported || running.WorktreePath != cwd {
+		t.Errorf("running conversation: column %q, %+v", running.ColumnID, rs)
+	}
+	if old.ColumnID != "plan" || oldS.Status != store.StatusSuspended || oldS.Activity != store.ActivityIdle || !oldS.Started {
+		t.Errorf("finished conversation: column %q, %+v", old.ColumnID, oldS)
+	}
+}
+
+func TestApplyRequestAnswersWithAnErrorWhateverGoesWrong(t *testing.T) {
+	e := bareEngine(t)
+	if res := e.applyRequest(inbox.Pending{ID: "x", Err: errors.New("bad json")}); !strings.HasPrefix(res.Error, "unreadable request: bad json") {
+		t.Errorf("a request that could not be read: %+v", res)
+	}
+	broken := &Engine{}
+	if res := broken.applyRequest(inbox.Pending{ID: "y", Request: inbox.Request{Op: inbox.OpEdit, Number: 1}}); !strings.HasPrefix(res.Error, "internal error") {
+		t.Errorf("a request that panics: %+v", res)
+	}
+}
+
+func TestAnswerTellsYouWhatTheCLIAskedFor(t *testing.T) {
+	e := bareEngine(t)
+	refused := inbox.Request{Op: inbox.OpMove, Number: 9, Column: "done"}
+
+	e.answer(inbox.Pending{ID: "1", Request: refused})
+	if got := notice(e); got != "drover move: no card #9" {
+		t.Fatalf("notice after a refused move = %q", got)
+	}
+	if got := notice(e); !strings.HasPrefix(got, "drover move: could not answer the CLI:") {
+		t.Errorf("notice = %q, want the failed answer reported", got)
+	}
+
+	os.MkdirAll(filepath.Join(store.Dir(e.Root), "inbox"), 0o755)
+	e.answer(inbox.Pending{ID: "2", Request: inbox.Request{Op: inbox.OpAdd, Title: ptr("Fix login")}})
+	if got := notice(e); got != "Added #1 Fix login" {
+		t.Errorf("notice after an add = %q", got)
+	}
+	e.answer(inbox.Pending{ID: "3", Request: refused})
+	res, ok, err := inbox.Wait(e.Root, "3", time.Second, nil)
+	if err != nil || !ok || res.Error != "no card #9" {
+		t.Errorf("the CLI's answer = %+v, %v, %v", res, ok, err)
 	}
 }

@@ -91,6 +91,13 @@ func wheelJob(session string, up bool, x, y int) keyJob {
 	return sgrMouseJob(session, code, x, y, true)
 }
 
+func pageJob(session string, up bool) keyJob {
+	if up {
+		return keyJob{session: session, key: tmuxKeyNames["pgup"]}
+	}
+	return keyJob{session: session, key: tmuxKeyNames["pgdown"]}
+}
+
 // mouseJob reports a click, release or drag to the agent as an SGR mouse
 // sequence at pane cell (x, y), 1-based.
 func mouseJob(session string, msg tea.MouseMsg, x, y int) keyJob {
@@ -133,19 +140,37 @@ type keyJob struct {
 // keySender sends keystrokes to tmux one at a time, in order, merging runs
 // of typed text into one send-keys call.
 type keySender struct {
-	jobs chan keyJob
-	errs chan error
+	jobs    chan keyJob
+	errs    chan error
+	deliver func(keyJob) error
 }
 
 func newKeySender() *keySender {
-	s := &keySender{jobs: make(chan keyJob, 512), errs: make(chan error, 1)}
+	s := newKeySenderWith(deliverToTmux)
 	go s.loop()
 	return s
+}
+
+func newKeySenderWith(deliver func(keyJob) error) *keySender {
+	return &keySender{jobs: make(chan keyJob, 512), errs: make(chan error, 1), deliver: deliver}
+}
+
+func deliverToTmux(j keyJob) error {
+	switch {
+	case j.paste != "":
+		return tmux.Paste(j.session, j.paste)
+	case j.literal != "":
+		return tmux.SendLiteral(j.session, j.literal)
+	}
+	return tmux.SendKey(j.session, j.key)
 }
 
 func (s *keySender) send(j keyJob) { s.jobs <- j }
 
 func (s *keySender) loop() {
+	if s.deliver == nil {
+		s.deliver = deliverToTmux
+	}
 	var next *keyJob
 	for {
 		var j keyJob
@@ -168,16 +193,7 @@ func (s *keySender) loop() {
 				break merge
 			}
 		}
-		var err error
-		switch {
-		case j.paste != "":
-			err = tmux.Paste(j.session, j.paste)
-		case j.literal != "":
-			err = tmux.SendLiteral(j.session, j.literal)
-		default:
-			err = tmux.SendKey(j.session, j.key)
-		}
-		if err != nil {
+		if err := s.deliver(j); err != nil {
 			select {
 			case s.errs <- err:
 			default:

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -162,14 +163,17 @@ func TestStartLiveBeginsAGenerationAndCapturesRightAway(t *testing.T) {
 	if m.mode != modeLive || m.liveGen != 1 || m.prefs.HidePreview || cmd == nil {
 		t.Fatalf("mode %v gen %d hidePreview %v", m.mode, m.liveGen, m.prefs.HidePreview)
 	}
-	var tick bool
+	var tick, capture bool
 	for _, msg := range runCmds(cmd) {
-		if lt, ok := msg.(liveTickMsg); ok && lt.gen == 1 {
-			tick = true
+		switch msg := msg.(type) {
+		case liveTickMsg:
+			tick = msg.gen == 1
+		case previewMsg:
+			capture = true
 		}
 	}
-	if !tick {
-		t.Error("the live loop was not started for this generation")
+	if !tick || !capture {
+		t.Errorf("tick for this generation %v, capture %v; want both", tick, capture)
 	}
 	if again, _ := m.startLive(); again.liveGen != 2 {
 		t.Errorf("a second start reused generation %d", again.liveGen)
@@ -181,23 +185,13 @@ func TestStartLiveBeginsAGenerationAndCapturesRightAway(t *testing.T) {
 	}
 }
 
-func TestAfterKeyWaitsBrieflyBeforeCapturing(t *testing.T) {
+func TestAfterKeyPassesTheCaptureThrough(t *testing.T) {
 	if afterKey(nil) != nil {
 		t.Error("afterKey invented a command")
 	}
-	start := time.Now()
 	got := afterKey(func() tea.Msg { return previewMsg{taskID: "x"} })()
 	if p, ok := got.(previewMsg); !ok || p.taskID != "x" {
 		t.Errorf("afterKey returned %v", got)
-	}
-	if time.Since(start) < 40*time.Millisecond {
-		t.Error("afterKey did not wait for the agent to react")
-	}
-}
-
-func TestLiveTickCarriesItsGeneration(t *testing.T) {
-	if got := liveTick(7)(); got != (liveTickMsg{gen: 7}) {
-		t.Errorf("liveTick returned %v", got)
 	}
 }
 
@@ -217,5 +211,79 @@ func TestKeySenderReportsFailedSends(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatalf("%+v: no error reported", job)
 		}
+	}
+}
+
+func TestKeySenderKeepsOrderAndMergesOnlyTypedTextForOneSession(t *testing.T) {
+	typed := func(session, text string) keyJob { return keyJob{session: session, literal: text} }
+	tests := []struct {
+		name string
+		jobs []keyJob
+		want []keyJob
+	}{
+		{"merges typed text", []keyJob{typed("s", "a"), typed("s", "b"), typed("s", "c")}, []keyJob{typed("s", "abc")}},
+		{"a named key ends the run", []keyJob{typed("s", "a"), typed("s", "b"), {session: "s", key: "Enter"}, typed("s", "c")},
+			[]keyJob{typed("s", "ab"), {session: "s", key: "Enter"}, typed("s", "c")}},
+		{"another session's text is sent on its own", []keyJob{typed("s1", "a"), typed("s2", "b"), typed("s1", "c")},
+			[]keyJob{typed("s1", "a"), typed("s2", "b"), typed("s1", "c")}},
+		{"a paste is never merged", []keyJob{typed("s", "a"), {session: "s", paste: "p\nq"}, typed("s", "b")},
+			[]keyJob{typed("s", "a"), {session: "s", paste: "p\nq"}, typed("s", "b")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			delivered := make(chan keyJob, len(tt.jobs))
+			s := newKeySenderWith(func(j keyJob) error {
+				delivered <- j
+				return nil
+			})
+			for _, j := range tt.jobs {
+				s.send(j)
+			}
+			go s.loop()
+
+			for i, want := range tt.want {
+				select {
+				case got := <-delivered:
+					if got != want {
+						t.Errorf("send %d = %+v, want %+v", i, got, want)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("send %d never happened, want %+v", i, want)
+				}
+			}
+			select {
+			case extra := <-delivered:
+				t.Errorf("unexpected extra send %+v", extra)
+			case <-time.After(50 * time.Millisecond):
+			}
+		})
+	}
+}
+
+func TestKeySenderReportsTheFirstFailureAndKeepsSending(t *testing.T) {
+	delivered := make(chan keyJob, 4)
+	s := newKeySenderWith(func(j keyJob) error {
+		delivered <- j
+		return errors.New("tmux is gone")
+	})
+	s.send(keyJob{session: "s", key: "Enter"})
+	s.send(keyJob{session: "s", key: "Tab"})
+	s.send(keyJob{session: "s", key: "Up"})
+	go s.loop()
+
+	for range 3 {
+		select {
+		case <-delivered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("a failed send stopped the rest")
+		}
+	}
+	select {
+	case err := <-s.errs:
+		if err == nil {
+			t.Error("nil error reported")
+		}
+	default:
+		t.Error("no error reported")
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 func TestBoardFooter(t *testing.T) {
-	const hint = "ctrl+k commands · ? help"
+	const hint = "ctrl+k search · ? help"
 	running := func(m *Model) {
 		task := m.snap.Tasks[0]
 		task.Branch = "aapeli/dx-1-foo"
@@ -58,5 +58,15 @@ func TestBoardFooter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInputFootersHaveOneCaret(t *testing.T) {
+	for _, md := range []mode{modeSend, modeFilter, modeRename} {
+		m := realModel(t, "first")
+		m.mode = md
+		if plain := ansi.Strip(m.renderFooter()); strings.Contains(plain, "> ") {
+			t.Errorf("mode %v footer has a second prompt: %q", md, plain)
+		}
 	}
 }

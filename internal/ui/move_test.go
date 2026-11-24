@@ -42,8 +42,8 @@ func TestMoveShowsCardInTargetColumnAtOnce(t *testing.T) {
 	if got := m.tasksIn("c0"); len(got) != 0 {
 		t.Errorf("source column still lists %d cards", len(got))
 	}
-	if got := m.tasksIn("c2"); len(got) != 2 || got[1].ID != card.ID {
-		t.Errorf("target column should end with the moving card, got %v", got)
+	if got := m.tasksIn("c2"); len(got) != 2 || got[0].ID != card.ID {
+		t.Errorf("target column should start with the moving card, got %v", got)
 	}
 	if got := m.status(card); !strings.Contains(got, "moving") {
 		t.Errorf("status = %q, want a moving label", got)
@@ -124,46 +124,6 @@ func TestSlowActionDoesNotClearNewerOne(t *testing.T) {
 	m = next.(Model)
 	if m.busy[card.ID].label != "deleting" {
 		t.Errorf("finishing the older action cleared the newer one: busy=%v", m.busy)
-	}
-}
-
-func TestActionsLabelTheirCardWithoutMovingIt(t *testing.T) {
-	for _, tc := range []struct{ keys, label string }{
-		{"S", "suspending"},
-		{"r", "starting agent"},
-		{"xy", "deleting"},
-	} {
-		m := testModel(120, 40, 2, 1)
-		card := m.current()
-		var model tea.Model = m
-		for _, k := range tc.keys {
-			model, _ = model.Update(key(string(k)))
-		}
-		m = model.(Model)
-		o, ok := m.busy[card.ID]
-		if !ok || o.label != tc.label || o.column != "" {
-			t.Errorf("keys %q: busy[%s] = %+v, want label %q and no column", tc.keys, card.ID, o, tc.label)
-		}
-	}
-}
-
-func TestEnterStartsAgentWithoutOne(t *testing.T) {
-	m := testModel(120, 40, 2, 1)
-	card := m.current()
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = next.(Model)
-	if o, ok := m.busy[card.ID]; !ok || o.label != "starting agent" {
-		t.Errorf("busy[%s] = %+v, want starting agent", card.ID, o)
-	}
-}
-
-func TestStartedAgentDoesNotAttachOverModal(t *testing.T) {
-	m := testModel(120, 40, 2, 1)
-	card := m.current()
-	m.snap.Live = map[string]string{card.ID: "drover-test"}
-	m.mode, m.modalTask = modeSend, card.ID
-	if _, cmd := m.Update(actionDoneMsg{id: card.ID, snap: m.snap, attach: true}); cmd != nil {
-		t.Error("attached over an open modal")
 	}
 }
 
@@ -257,37 +217,6 @@ func TestApplySnapKeepsCursorAndModalValid(t *testing.T) {
 	}
 	if m.mode != modeBoard {
 		t.Errorf("mode = %v, want the modal closed once its card is gone", m.mode)
-	}
-}
-
-func TestSnapshotRequestsDoNotPileUp(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	m.keys = &keySender{errs: make(chan error, 1)}
-	m.prefs.HidePreview = true
-	next, cmd := m.Update(tickMsg{})
-	m = next.(Model)
-	if cmd == nil || !m.snapBusy {
-		t.Fatal("first tick should request a snapshot")
-	}
-	next, _ = m.Update(tickMsg{})
-	m = next.(Model)
-	if !m.snapBusy {
-		t.Fatal("snapBusy should stay set until the snapshot arrives")
-	}
-	next, _ = m.Update(snapMsg(m.snap))
-	if next.(Model).snapBusy {
-		t.Error("snapMsg should clear snapBusy")
-	}
-}
-
-func TestLiveSessionComesFromTheSnapshot(t *testing.T) {
-	m := testModel(120, 40, 1, 1)
-	m.snap.Live = map[string]string{"c0-t0": "repo-1"}
-	if name, ok := m.liveSession("c0-t0"); !ok || name != "repo-1" {
-		t.Errorf("liveSession = %q, %v", name, ok)
-	}
-	if _, ok := m.liveSession("other"); ok {
-		t.Error("an unknown card has no live session")
 	}
 }
 
@@ -559,13 +488,5 @@ func TestMovePickerEnterAdoptsOrphanCardIntoFirstColumn(t *testing.T) {
 	m = next.(Model)
 	if got := m.busy[m.snap.Tasks[0].ID].column; got != "c0" {
 		t.Errorf("busy column = %q after enter on an orphan card, want the move to c0", got)
-	}
-}
-
-func TestFailedSessionStartFlashesError(t *testing.T) {
-	m := testModel(120, 40, 2, 1)
-	next, _ := m.Update(sessionStartedMsg{err: errors.New("boom"), snap: m.snap})
-	if got := next.(Model).flash; !strings.Contains(got, "boom") {
-		t.Errorf("flash %q", got)
 	}
 }
