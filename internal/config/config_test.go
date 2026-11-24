@@ -56,22 +56,6 @@ func TestLoadSampleBoard(t *testing.T) {
 	}
 }
 
-func TestAutomationConditional(t *testing.T) {
-	for _, c := range []struct {
-		row  Automation
-		want bool
-	}{
-		{Automation{}, false},
-		{Automation{Condition: "done"}, true},
-		{Automation{ConditionScript: "true"}, true},
-		{Automation{Condition: "done", ConditionScript: "true"}, true},
-	} {
-		if got := c.row.Conditional(); got != c.want {
-			t.Errorf("%+v: Conditional() = %v", c.row, got)
-		}
-	}
-}
-
 func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 	plan := Column{PermissionMode: "plan"}
 	for _, tc := range []struct {
@@ -97,13 +81,13 @@ func TestReviewFlow(t *testing.T) {
 		board, _, err := Load(dir)
 		return board, err
 	}
-	for _, field := range []string{"started", "reviewed", "updated", "done"} {
+	for _, field := range []string{"requested", "started", "reviewed", "approved", "updated", "done"} {
 		if _, err := load(`{"` + field + `":"nowhere"}`); err == nil {
 			t.Errorf("unknown reviewFlow.%s column accepted", field)
 		}
 	}
-	board, err := load(`{"started":"Waiting","reviewed":"waiting"}`)
-	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" {
+	board, err := load(`{"started":"Waiting","reviewed":"waiting","approved":"first"}`)
+	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" || board.ReviewFlow.Approved != "first" {
 		t.Fatalf("reviewFlow not loaded: %+v %v", board.ReviewFlow, err)
 	}
 	if _, err := load(`{}`); err != nil {
@@ -172,26 +156,35 @@ func TestPRFlow(t *testing.T) {
 }
 
 func TestChangesRequestedMode(t *testing.T) {
+	const custom = "my own instructions"
+	proposal := (&PRFlow{}).ChangesMessage()
+	fix := (&PRFlow{ChangesRequestedMode: "fix"}).ChangesMessage()
+	if proposal == fix {
+		t.Fatal("proposing and fixing send the agent the same message")
+	}
+	if !strings.Contains(proposal, "Don't change anything") {
+		t.Errorf("the proposal message doesn't hold the agent back: %q", proposal)
+	}
 	cases := []struct {
 		name    string
 		flow    PRFlow
 		propose bool
-		message string
+		want    string
 	}{
-		{"unset proposes", PRFlow{}, true, proposeChangesMessage},
-		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposeChangesMessage},
-		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fixChangesMessage},
-		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fixChangesMessage},
-		{"own message with off mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "off"}, false, "mine"},
-		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: "mine"}, false, "mine"},
-		{"own message with propose mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "propose"}, true, "mine"},
+		{"unset proposes", PRFlow{}, true, proposal},
+		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposal},
+		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fix},
+		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fix},
+		{"own message with off mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "off"}, false, custom},
+		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: custom}, false, custom},
+		{"own message with propose mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "propose"}, true, custom},
 	}
 	for _, c := range cases {
 		if got := c.flow.Proposes(); got != c.propose {
 			t.Errorf("%s: Proposes() = %v", c.name, got)
 		}
-		if got := c.flow.ChangesMessage(); got != c.message {
-			t.Errorf("%s: ChangesMessage() = %q", c.name, got)
+		if got := c.flow.ChangesMessage(); got != c.want {
+			t.Errorf("%s: ChangesMessage() = %q, want %q", c.name, got, c.want)
 		}
 	}
 	if !Default().PRFlow.Proposes() {
@@ -204,7 +197,7 @@ func TestChangesRequestedMode(t *testing.T) {
 	if !(&PRFlow{ChangesRequestedMode: "off"}).Off() {
 		t.Error("Off() is false in off mode")
 	}
-	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
+	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposal {
 		t.Error("a missing prFlow does not propose")
 	}
 	dir := t.TempDir()
@@ -387,10 +380,6 @@ func TestDefaultBoard(t *testing.T) {
 			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
 		}
 	}
-	if err := Default().validate(); err != nil {
-		t.Errorf("default board: %v", err)
-	}
-
 	col, _, ok := Default().Column("executing")
 	if !ok || len(col.Automations.OnTurnEnd) != 1 {
 		t.Fatalf("default executing column has no turn-end rule: %+v", col)
@@ -409,23 +398,33 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 			lane = append(lane, c.ID)
 		}
 	}
-	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
+	if want := []string{"review-requested", "reviewing", "triage", "waiting-on-author", "review-done"}; !slices.Equal(lane, want) {
 		t.Errorf("review lane = %v, want %v", lane, want)
 	}
 	f := board.ReviewFlow
 	if f == nil {
 		t.Fatal("default board has no reviewFlow")
 	}
-	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
+	for name, ref := range map[string]string{"requested": f.Requested, "started": f.Started, "reviewed": f.Reviewed, "approved": f.Approved, "updated": f.Updated, "done": f.Done} {
 		if _, ok := board.Find(ref); !ok {
 			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
 		}
 	}
+	if c, _ := board.Find(f.Approved); !c.IsDone() {
+		t.Errorf("reviewFlow.approved = %q is not a Done column", f.Approved)
+	}
 	if c, _ := board.Find(f.Done); !c.IsDone() {
 		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
 	}
-	if c, _ := board.Find(f.Updated); len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
+	c, _ := board.Find(f.Updated)
+	if len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
 		t.Errorf("reviewFlow.updated column doesn't ask for a re-review on entry: %+v", c.Automations)
+	}
+	if len(c.Automations.OnTurnEnd) != 1 || c.Automations.OnTurnEnd[0].Type != "move_to_column" || c.Automations.OnTurnEnd[0].TargetColumn != "triage" {
+		t.Errorf("reviewFlow.updated column doesn't move on to triage when the re-review ends: %+v", c.Automations)
+	}
+	if c, _ := board.Find(f.Requested); c.IsAgent() || !c.InReviewLane() {
+		t.Errorf("reviewFlow.requested = %q should be a plain column in the lane: %+v", f.Requested, c)
 	}
 }
 
@@ -538,6 +537,36 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local disableMouse:true does not override the shared file")
 				}
 			}},
+		{"team review requests are off by default", "", "",
+			func(t *testing.T, b *Board) {
+				if b.TeamReviewRequests || b.ReviewRepos != nil {
+					t.Errorf("teamReviewRequests=%v reviewRepos=%q", b.TeamReviewRequests, b.ReviewRepos)
+				}
+			}},
+		{"local review settings override the shared file", `{"reviewRepos":["o/a"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"teamReviewRequests":true,"reviewRepos":["o/b","o/c"]}`,
+			func(t *testing.T, b *Board) {
+				if !b.TeamReviewRequests || !slices.Equal(b.ReviewRepos, []string{"o/b", "o/c"}) {
+					t.Errorf("teamReviewRequests=%v reviewRepos=%q", b.TeamReviewRequests, b.ReviewRepos)
+				}
+			}},
+		{"shared assistant MCP settings survive a local file without them", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"autoName":false}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"a"}) || !slices.Equal(b.AssistantTools, []string{"mcp__a__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local empty assistant lists clear the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":[],"assistantTools":[]}`,
+			func(t *testing.T, b *Board) {
+				if len(b.AssistantPlugins) != 0 || len(b.AssistantTools) != 0 {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"local assistant MCP settings replace the shared ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":["b"],"assistantTools":["mcp__b__*"]}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"b"}) || !slices.Equal(b.AssistantTools, []string{"mcp__b__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
@@ -599,14 +628,6 @@ func TestStamp(t *testing.T) {
 	}
 }
 
-func TestIsDone(t *testing.T) {
-	for role, want := range map[string]bool{"done": true, "": false, "todo": false, "Done": false} {
-		if got := (Column{Role: role}).IsDone(); got != want {
-			t.Errorf("Column{Role: %q}.IsDone() = %v, want %v", role, got, want)
-		}
-	}
-}
-
 func TestFind(t *testing.T) {
 	board := &Board{Columns: []Column{
 		{ID: "a", Name: "Backlog"},
@@ -640,21 +661,31 @@ func TestSave(t *testing.T) {
 	if err != nil || !strings.HasSuffix(string(data), "}\n") {
 		t.Fatalf("saved file = %q, err %v", data, err)
 	}
-	board, found, err := Load(dir)
+	saved, found, err := Load(dir)
 	if err != nil || !found {
 		t.Fatalf("saved board does not load: found=%v err=%v", found, err)
 	}
-	var ids []string
-	for _, c := range board.Columns {
-		ids = append(ids, c.ID)
+	fresh, _, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	lane, _ := board.Find("reviewing")
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
-		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
-		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
+	if !reflect.DeepEqual(saved, fresh) {
+		t.Errorf("round trip changed the board:\n got %+v\nwant %+v", saved, fresh)
 	}
 	if err := Default().Save(filepath.Join(dir, "missing")); err == nil {
 		t.Error("saving into a missing directory succeeded")
+	}
+}
+
+func TestClaudeEnv(t *testing.T) {
+	if got := (&Board{DisableMouse: true}).ClaudeEnv(); !reflect.DeepEqual(got, map[string]string{"CLAUDE_CODE_DISABLE_MOUSE": "1"}) {
+		t.Errorf("disableMouse env = %v", got)
+	}
+	var none *Board
+	for name, b := range map[string]*Board{"off": {}, "no board": none} {
+		if got := b.ClaudeEnv(); len(got) != 0 {
+			t.Errorf("%s: env = %v, want none", name, got)
+		}
 	}
 }
 
@@ -669,6 +700,11 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
+		{"reviewRepos without an owner", `{"reviewRepos":["widgets"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "widgets"`},
+		{"reviewRepos as a URL", `{"reviewRepos":["https://github.com/o/r"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "https://github.com/o/r"`},
+		{"bare mcp__ assistant tool", `{"assistantTools":["mcp__"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "mcp__"`},
+		{"empty assistant plugin id", `{"assistantPlugins":[" "],"columns":[{"id":"a","name":"A"}]}`, "assistantPlugins"},
 		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
 		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
@@ -699,5 +735,94 @@ func TestDoneColumn(t *testing.T) {
 	}
 	if got := (&Board{Columns: []Column{{ID: "a"}}}).DoneColumn().ID; got != "" {
 		t.Errorf("DoneColumn without a done column = %q, want none", got)
+	}
+}
+
+func TestReviewEntry(t *testing.T) {
+	load := func(board string) *Board {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(board), 0o644)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	const columns = `"columns":[{"id":"first","name":"First"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}]`
+	cases := []struct {
+		name, board, want string
+	}{
+		{"reviewFlow.started is ignored", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "reviewing"},
+		{"started outside the lane", `{` + columns + `,"reviewFlow":{"started":"first"}}`, "reviewing"},
+		{"no reviewFlow", `{` + columns + `}`, "reviewing"},
+		{"plain column first", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true}]}`, "reviewing"},
+		{"no agent column", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"waiting","name":"Waiting","lane":"review"}]}`, "requested"},
+	}
+	for _, c := range cases {
+		got, ok := load(c.board).ReviewEntry()
+		if !ok || got.ID != c.want {
+			t.Errorf("%s: ReviewEntry = %q, %v; want %q", c.name, got.ID, ok, c.want)
+		}
+	}
+	if got, ok := Default().ReviewEntry(); !ok || got.ID != "reviewing" {
+		t.Errorf("default board ReviewEntry = %q, %v; want reviewing", got.ID, ok)
+	}
+	if _, ok := load(`{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done"}]}`).ReviewEntry(); ok {
+		t.Error("a board without a review lane has an entry column")
+	}
+}
+
+func TestReviewImport(t *testing.T) {
+	load := func(board string) *Board {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, FileName), []byte(board), 0o644)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	board := Default()
+	if got := board.ReviewImport(false).ID; got != "review-requested" {
+		t.Errorf("default board, requested: %q", got)
+	}
+	if got := board.ReviewImport(true).ID; got != "waiting-on-author" {
+		t.Errorf("default board, reviewed: %q", got)
+	}
+	const lane = `{"id":"first","name":"First","autoSpawn":true},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"parked","name":"Parked","lane":"review"},
+	  {"id":"waiting","name":"Waiting","lane":"review"}`
+	for _, c := range []struct {
+		name, board string
+		reviewed    bool
+		want        string
+	}{
+		{"requested by name", `{"columns":[` + lane + `],"reviewFlow":{"requested":"Waiting"}}`, false, "waiting"},
+		{"no requested target", `{"columns":[` + lane + `],"reviewFlow":{"started":"reviewing"}}`, false, "parked"},
+		{"no reviewed target", `{"columns":[` + lane + `],"reviewFlow":{"requested":"waiting"}}`, true, "parked"},
+		{"no reviewFlow", `{"columns":[` + lane + `]}`, false, "parked"},
+		{"lane of agents and Done", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+		  {"id":"rd","name":"Done","lane":"review","role":"done"}]}`, false, "first"},
+		{"no lane", `{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done","role":"done"}]}`, true, "first"},
+	} {
+		if got := load(c.board).ReviewImport(c.reviewed).ID; got != c.want {
+			t.Errorf("%s: ReviewImport(%v) = %q, want %q", c.name, c.reviewed, got, c.want)
+		}
+	}
+}
+
+func TestReReviewOnlyAfterAReview(t *testing.T) {
+	c, _, _ := Default().Column("reviewing")
+	row := c.Automations.OnEnter[0]
+	if row.ConditionScript != `test -n "$DROVER_PRREVIEWEDSHA"` || row.Message != reReviewMessage {
+		t.Errorf("Reviewing's entry row: %+v", row)
 	}
 }

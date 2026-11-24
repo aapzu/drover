@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/config"
 )
@@ -48,14 +49,19 @@ func openColumn(t *testing.T, m Model, id, option string) Model {
 		t.Fatalf("no column %q", id)
 	}
 	m = pressColumns(t, m, keyPress("enter"))
+	m.columnOptSel = columnOptionIndex(t, option)
+	return m
+}
+
+func columnOptionIndex(t *testing.T, name string) int {
+	t.Helper()
 	for i, opt := range columnOptions {
-		if opt.name == option {
-			m.columnOptSel = i
-			return m
+		if opt.name == name {
+			return i
 		}
 	}
-	t.Fatalf("no option %q", option)
-	return m
+	t.Fatalf("no column option %q", name)
+	return 0
 }
 
 func typeColumn(t *testing.T, m Model, value string) Model {
@@ -371,5 +377,248 @@ func TestColumnsDoNotOpenWithoutColumns(t *testing.T) {
 	next, _ := m.updateBoard(key("O"))
 	if got := next.(Model); got.mode == modeColumns || got.flash == "" {
 		t.Errorf("mode=%v flash=%q", got.mode, got.flash)
+	}
+}
+
+func TestColumnsListKeysNavigateAndClose(t *testing.T) {
+	m, _ := columnsModel(t)
+	m = m.openColumns()
+	last := len(m.snap.Board.Columns) - 1
+
+	m = pressColumns(t, m, key("k"))
+	if m.columnSel != 0 {
+		t.Errorf("selection %d after going up from the first column", m.columnSel)
+	}
+	for range last + 3 {
+		m = pressColumns(t, m, key("j"))
+	}
+	if m.columnSel != last {
+		t.Fatalf("selection %d after going down past the end, want %d", m.columnSel, last)
+	}
+
+	for _, open := range []tea.KeyMsg{keyPress("enter"), key("l"), special(tea.KeyRight)} {
+		m = pressColumns(t, m, open)
+		if !m.columnOpen || m.columnID != m.snap.Board.Columns[last].ID {
+			t.Errorf("%q: open %v on %q, want the last column opened", open.String(), m.columnOpen, m.columnID)
+		}
+		m.columnOpen = false
+	}
+	for _, closing := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("O")} {
+		m.mode = modeBoard
+		m = m.openColumns()
+		if m = pressColumns(t, m, closing); m.mode != modeBoard {
+			t.Errorf("%q left mode %v, want the board", closing.String(), m.mode)
+		}
+	}
+}
+
+func TestColumnsOptionKeysNavigateAndStepBack(t *testing.T) {
+	m, _ := columnsModel(t)
+	m = openColumn(t, m, "run", "Name")
+	for range len(columnOptions) + 3 {
+		m = pressColumns(t, m, key("j"))
+	}
+	if m.columnOptSel != len(columnOptions)-1 {
+		t.Errorf("option %d after going down past the end", m.columnOptSel)
+	}
+	for range len(columnOptions) + 3 {
+		m = pressColumns(t, m, key("k"))
+	}
+	if m.columnOptSel != 0 {
+		t.Errorf("option %d after going up past the start", m.columnOptSel)
+	}
+	for _, back := range []tea.KeyMsg{special(tea.KeyEsc), key("q"), key("h"), special(tea.KeyLeft)} {
+		open := openColumn(t, m, "run", "Name")
+		if open = pressColumns(t, open, back); open.columnOpen || open.mode != modeColumns {
+			t.Errorf("%q: open %v mode %v, want the list again inside the columns view", back.String(), open.columnOpen, open.mode)
+		}
+	}
+}
+
+func TestColumnsFooterHintFollowsWhatYouAreDoing(t *testing.T) {
+	m, _ := columnsModel(t)
+	m.mode = modeColumns
+	tests := []struct {
+		name  string
+		setup func(m *Model)
+		want  string
+	}{
+		{"the list", func(*Model) {}, "enter open"},
+		{"a column's options", func(m *Model) { m.columnOpen = true }, "x reset"},
+		{"editing a setting that has two files", func(m *Model) {
+			m.columnOpen, m.columnEditing = true, true
+			m.columnOptSel = columnOptionIndex(t, "Color")
+		}, "tab drover.json / drover.local.json"},
+		{"editing a shared-only setting", func(m *Model) {
+			m.columnOpen, m.columnEditing = true, true
+			m.columnOptSel = columnOptionIndex(t, "Run an agent")
+		}, "enter save  esc cancel"},
+	}
+	for _, tt := range tests {
+		next := m
+		tt.setup(&next)
+		if got := ansi.Strip(next.renderFooter()); !strings.Contains(got, tt.want) {
+			t.Errorf("%s: footer %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+const promptBoard = `{
+  "columns": [
+    {"id": "review", "name": "Review", "autoSpawn": true, "automations": {"onEnter": [
+      {"name": "Review", "type": "send_message", "message": "/code-review\nbe strict"},
+      {"type": "notify"}
+    ]}},
+    {"id": "cond", "name": "Cond", "autoSpawn": true, "automations": {"onEnter": [
+      {"type": "send_message", "message": "later", "conditionScript": "true"}
+    ]}},
+    {"id": "plain", "name": "Plain", "autoSpawn": true}
+  ]
+}
+`
+
+func promptModel(t *testing.T) (Model, string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(promptBoard), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return configModel(t, root), root
+}
+
+func savePrompt(t *testing.T, m Model, text string) Model {
+	t.Helper()
+	m = pressColumns(t, m, keyPress("enter"))
+	if !m.columnEditing {
+		t.Fatal("enter didn't start editing")
+	}
+	m.columnPrompt.SetValue(text)
+	return pressColumns(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
+}
+
+func onEnter(t *testing.T, m Model, id string) []config.Automation {
+	t.Helper()
+	c, _, ok := m.snap.Board.Column(id)
+	if !ok {
+		t.Fatalf("no column %q", id)
+	}
+	return c.Automations.OnEnter
+}
+
+func TestColumnsShowAndEditTheOpeningPrompt(t *testing.T) {
+	m, root := promptModel(t)
+	m = openColumn(t, m, "review", "Opening prompt")
+	if row := rowOf(m.renderColumns(), "Opening prompt"); !strings.Contains(row, "/code-review …") || !strings.Contains(row, "shared") {
+		t.Errorf("row = %q", row)
+	}
+	m = pressColumns(t, m, keyPress("enter"))
+	if got := m.columnPrompt.Value(); got != "/code-review\nbe strict" {
+		t.Errorf("editor starts with %q", got)
+	}
+	m.columnPrompt.SetValue("/review\nlook at {{prUrl}}\n")
+	m = pressColumns(t, m, tea.KeyMsg{Type: tea.KeyCtrlS})
+
+	if m.columnEditing {
+		t.Fatalf("still editing; flash=%q", m.flash)
+	}
+	rows := onEnter(t, m, "review")
+	if len(rows) != 2 || rows[0].Message != "/review\nlook at {{prUrl}}" || rows[0].Name != "Review" || rows[1].Type != "notify" {
+		t.Errorf("rows = %+v", rows)
+	}
+	board, _, err := config.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := board.Column("review"); c.Automations.OnEnter[0].Message != "/review\nlook at {{prUrl}}" {
+		t.Errorf("not on disk: %+v", c.Automations)
+	}
+}
+
+func TestColumnsEscCancelsPromptEdit(t *testing.T) {
+	m, root := promptModel(t)
+	m = openColumn(t, m, "review", "Opening prompt")
+	m = pressColumns(t, m, keyPress("enter"))
+	m.columnPrompt.SetValue("changed")
+	m = pressColumns(t, m, keyPress("esc"))
+	if m.columnEditing {
+		t.Error("esc kept editing")
+	}
+	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); string(data) != promptBoard {
+		t.Errorf("drover.json changed:\n%s", data)
+	}
+}
+
+func TestColumnsAddOpeningPromptBeforeOtherRows(t *testing.T) {
+	m, _ := promptModel(t)
+	m = openColumn(t, m, "cond", "Opening prompt")
+	if row := rowOf(m.renderColumns(), "Opening prompt"); !strings.Contains(row, "—") {
+		t.Errorf("a conditional row was shown as the prompt: %q", row)
+	}
+	m = savePrompt(t, m, "start here")
+	rows := onEnter(t, m, "cond")
+	if len(rows) != 2 || rows[0].Message != "start here" || rows[0].Type != "send_message" || rows[1].Message != "later" {
+		t.Errorf("rows = %+v", rows)
+	}
+
+	m = openColumn(t, m, "plain", "Opening prompt")
+	m = savePrompt(t, m, "hello")
+	if rows := onEnter(t, m, "plain"); len(rows) != 1 || rows[0].Message != "hello" {
+		t.Errorf("rows = %+v", rows)
+	}
+}
+
+func TestColumnsEmptyOpeningPromptRemovesTheRow(t *testing.T) {
+	m, root := promptModel(t)
+	m = openColumn(t, m, "review", "Opening prompt")
+	m = savePrompt(t, m, "  ")
+	if rows := onEnter(t, m, "review"); len(rows) != 1 || rows[0].Type != "notify" {
+		t.Errorf("rows = %+v", rows)
+	}
+
+	m = openColumn(t, m, "cond", "Opening prompt")
+	m = savePrompt(t, m, "x")
+	m = pressColumns(t, m, keyPress("x"))
+	if rows := onEnter(t, m, "cond"); len(rows) != 1 || rows[0].Message != "later" {
+		t.Errorf("reset removed the wrong row: %+v", rows)
+	}
+
+	m = openColumn(t, m, "plain", "Opening prompt")
+	m = savePrompt(t, m, "x")
+	m = pressColumns(t, m, keyPress("x"))
+	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); strings.Contains(string(data), `"message": "x"`) {
+		t.Errorf("row left behind:\n%s", data)
+	}
+	c, _, _ := m.snap.Board.Column("plain")
+	if len(c.Automations.OnEnter) != 0 {
+		t.Errorf("rows = %+v", c.Automations)
+	}
+}
+
+func TestColumnsEmptyOpeningPromptWhenUnsetSaysSo(t *testing.T) {
+	m, _ := promptModel(t)
+	m = openColumn(t, m, "plain", "Opening prompt")
+	m = savePrompt(t, m, "")
+	if !m.columnEditing || !strings.Contains(m.flash, "not set") {
+		t.Errorf("editing=%v flash=%q", m.columnEditing, m.flash)
+	}
+}
+
+func TestColumnsMissingSharedFileBlocksOpeningPrompt(t *testing.T) {
+	m := configModel(t, t.TempDir())
+	m = openColumn(t, m, m.snap.Board.Columns[0].ID, "Opening prompt")
+	m = savePrompt(t, m, "hi")
+	if !strings.Contains(m.flash, "press W") {
+		t.Errorf("flash=%q", m.flash)
+	}
+}
+
+func TestColumnsEscReturnsToWhereTheViewWasOpened(t *testing.T) {
+	m, _ := columnsModel(t)
+	if got := pressColumns(t, m.openColumns(), keyPress("esc")).mode; got != modeBoard {
+		t.Errorf("from the board, esc went to mode %v", got)
+	}
+	m.mode = modeConfig
+	if got := pressColumns(t, m.openColumns(), keyPress("esc")).mode; got != modeConfig {
+		t.Errorf("from settings, esc went to mode %v", got)
 	}
 }

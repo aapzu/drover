@@ -89,9 +89,10 @@ func (e *Engine) startRef(review bool) string {
 // with splitByPR off it is only logged on the owner and counts as seen.
 // With review set the PRs are ones you asked the agent to review. They are
 // marked as such and use the reviewFlow's started column instead. The owner's
-// card takes the first only while it is still in the first column, and a
-// further card starts in that column straight away, before gh has confirmed
-// the PR isn't yours; if it is yours, the card is removed again.
+// card takes the first only while it is still in the first column or the
+// review lane, and a further card starts in that column straight away, before
+// gh has confirmed the PR isn't yours; if it is yours, the card is removed
+// again.
 // Called with mu held.
 func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 	members := store.Members(e.state.Tasks, owner)
@@ -104,7 +105,7 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 	if review {
 		logText, verb = "Reviewing PR #%d", "is reviewing"
 	}
-	if owner.PR == nil && len(members) == 1 && len(urls) > 0 && (!review || owner.ColumnID == e.board.FirstColumn().ID) {
+	if owner.PR == nil && len(members) == 1 && len(urls) > 0 && (!review || e.startsReviews(owner)) {
 		n := gh.Number(urls[0])
 		owner.PR = &store.PR{URL: urls[0], Number: n, Review: review}
 		owner.PRMovePending = hasTarget
@@ -145,6 +146,13 @@ func (e *Engine) addPRs(owner *store.Task, urls []string, review bool) {
 		members = append(members, card)
 	}
 	e.lastPRPoll = time.Time{}
+}
+
+// startsReviews reports whether t is still where a card begins reviewing: in
+// the first column or in the review lane.
+func (e *Engine) startsReviews(t *store.Task) bool {
+	col, _, ok := e.board.Column(t.ColumnID)
+	return t.ColumnID == e.board.FirstColumn().ID || ok && col.InReviewLane()
 }
 
 // handOver makes heir the owner of old's group before old is deleted: it

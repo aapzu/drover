@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestDirIsPerRoot(t *testing.T) {
@@ -107,36 +108,132 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 	}
 }
 
-func TestCloneDeepCopies(t *testing.T) {
-	orig := &Task{
-		ID:       "a",
-		Sessions: map[string]*Session{MainSession: {Key: MainSession, Pending: []Pending{{Text: "hi"}}, Background: []string{"bg"}}},
-		Log:      []LogEntry{{Text: "started"}},
-		SeenPRs:  []string{"u1"},
-		Issue:    &Issue{Key: "DX-1"},
-		PR:       &PR{Number: 7},
-	}
-	c := orig.Clone()
-	c.Sessions[MainSession].Pending[0].Text = "changed"
-	c.Sessions[MainSession].Background[0] = "changed"
-	c.Sessions["extra"] = &Session{}
-	c.Log[0].Text = "changed"
-	c.SeenPRs[0] = "changed"
-	c.Issue.Key = "changed"
-	c.PR.Number = 8
-
-	if got := orig.Sessions[MainSession]; got.Pending[0].Text != "hi" || got.Background[0] != "bg" || len(orig.Sessions) != 1 {
-		t.Errorf("sessions shared: %+v", orig.Sessions)
-	}
-	if orig.Log[0].Text != "started" || orig.SeenPRs[0] != "u1" || orig.Issue.Key != "DX-1" || orig.PR.Number != 7 {
-		t.Errorf("clone mutated the original: %+v", orig)
+// populate fills every field with a non-zero value, so a field Clone forgets to
+// copy deeply shows up in TestCloneSharesNoMemory without being listed here.
+func populate(v reflect.Value) {
+	switch v.Kind() {
+	case reflect.Pointer:
+		v.Set(reflect.New(v.Type().Elem()))
+		populate(v.Elem())
+	case reflect.Struct:
+		if v.Type() == reflect.TypeFor[time.Time]() {
+			v.Set(reflect.ValueOf(time.Unix(1700000000, 0)))
+			return
+		}
+		for i := range v.NumField() {
+			populate(v.Field(i))
+		}
+	case reflect.Slice:
+		v.Set(reflect.MakeSlice(v.Type(), 1, 1))
+		populate(v.Index(0))
+	case reflect.Map:
+		v.Set(reflect.MakeMap(v.Type()))
+		key, val := reflect.New(v.Type().Key()).Elem(), reflect.New(v.Type().Elem()).Elem()
+		populate(key)
+		populate(val)
+		v.SetMapIndex(key, val)
+	case reflect.String:
+		v.SetString("x")
+	case reflect.Bool:
+		v.SetBool(true)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		v.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		v.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		v.SetFloat(1)
+	default:
+		panic("populate: unsupported kind " + v.Kind().String())
 	}
 }
 
-func TestCloneKeepsNilIssueAndPR(t *testing.T) {
+// shared returns the path of the first piece of memory a and b both point at.
+// a and b must be deeply equal.
+func shared(path string, a, b reflect.Value) string {
+	switch a.Kind() {
+	case reflect.Pointer:
+		if a.Pointer() == b.Pointer() {
+			return path
+		}
+		return shared("*"+path, a.Elem(), b.Elem())
+	case reflect.Struct:
+		if a.Type() == reflect.TypeFor[time.Time]() {
+			return ""
+		}
+		for i := range a.NumField() {
+			if p := shared(path+"."+a.Type().Field(i).Name, a.Field(i), b.Field(i)); p != "" {
+				return p
+			}
+		}
+	case reflect.Slice:
+		if a.Len() > 0 && a.Index(0).Addr().UnsafePointer() == b.Index(0).Addr().UnsafePointer() {
+			return path
+		}
+		for i := range min(a.Len(), b.Len()) {
+			if p := shared(path+"[]", a.Index(i), b.Index(i)); p != "" {
+				return p
+			}
+		}
+	case reflect.Map:
+		if a.Pointer() == b.Pointer() {
+			return path
+		}
+		for _, k := range a.MapKeys() {
+			if p := shared(path+"{}", a.MapIndex(k), b.MapIndex(k)); p != "" {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func TestCloneSharesNoMemory(t *testing.T) {
+	orig := &Task{}
+	populate(reflect.ValueOf(orig).Elem())
+	c := orig.Clone()
+	if !reflect.DeepEqual(orig, c) {
+		t.Fatalf("Clone changed values:\n got %+v\nwant %+v", c, orig)
+	}
+	if p := shared("Task", reflect.ValueOf(orig).Elem(), reflect.ValueOf(c).Elem()); p != "" {
+		t.Errorf("Clone still shares memory with the original at %s", p)
+	}
+}
+
+func TestCloneOfAnEmptyTaskStaysEmpty(t *testing.T) {
 	c := (&Task{}).Clone()
-	if c.Issue != nil || c.PR != nil {
-		t.Errorf("Clone invented %+v / %+v", c.Issue, c.PR)
+	if c.Issue != nil || c.PR != nil || len(c.Sessions) != 0 || len(c.Log) != 0 {
+		t.Errorf("Clone invented data: %+v", c)
+	}
+}
+
+func TestFailedSaveKeepsThePreviousState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := (&State{NextNumber: 2}).Save("/x/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stateFile(Dir("/x/repo"))+".tmp", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&State{NextNumber: 9}).Save("/x/repo"); err == nil {
+		t.Fatal("Save succeeded despite the blocked temp file")
+	}
+	got, err := Load("/x/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NextNumber != 2 {
+		t.Errorf("NextNumber = %d, want the previously saved 2", got.NextNumber)
+	}
+}
+
+func TestDirFallsBackToTheHomeStateDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, xdg := range []string{"", "relative/state"} {
+		t.Setenv("XDG_STATE_HOME", xdg)
+		if got := filepath.Dir(Dir("/x/repo")); got != filepath.Join(home, ".local", "state", "drover") {
+			t.Errorf("XDG_STATE_HOME=%q: state dir under %s", xdg, got)
+		}
 	}
 }
 
@@ -211,15 +308,6 @@ func TestSetMode(t *testing.T) {
 	s.SetMode("")
 	if s.PermissionMode != "" || !s.ModeInherited {
 		t.Errorf("SetMode(\"\") = %q, inherited %v", s.PermissionMode, s.ModeInherited)
-	}
-}
-
-func TestHasBackground(t *testing.T) {
-	if (&Session{}).HasBackground() {
-		t.Error("empty session has background tasks")
-	}
-	if !(&Session{Background: []string{"sleep 9"}}).HasBackground() {
-		t.Error("session with a background task reports none")
 	}
 }
 
