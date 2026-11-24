@@ -142,7 +142,7 @@ func TestPreviewShowsWhatTheSelectedAgentIsDoing(t *testing.T) {
 		{"typing into it", func(m *Model, card *store.Task) {
 			m.snap.Live = map[string]string{card.ID: "sess"}
 			m.previewFor, m.previewTxt, m.mode = card.ID, "agent output", modeLive
-		}, []string{"LIVE", "ctrl+q back to board"}, []string{"tab to type here"}},
+		}, []string{"LIVE", "ctrl+q or esc back to board"}, []string{"tab to type here"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

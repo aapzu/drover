@@ -48,12 +48,11 @@ func TestLiveModeWithoutARunningAgentSaysSoAndLeaves(t *testing.T) {
 	}
 }
 
-func TestLiveModeSendsNamedKeysAndForwardsEsc(t *testing.T) {
+func TestLiveModeSendsNamedKeys(t *testing.T) {
 	for _, tt := range []struct {
 		msg tea.KeyMsg
 		key string
 	}{
-		{tea.KeyMsg{Type: tea.KeyEsc}, "Escape"},
 		{tea.KeyMsg{Type: tea.KeyEnter}, "Enter"},
 		{tea.KeyMsg{Type: tea.KeyCtrlC}, "C-c"},
 	} {
@@ -105,6 +104,46 @@ func TestCtrlQLeavesLiveModeAndDiscardsAnUntouchedCard(t *testing.T) {
 	empty, cmd = update(empty, tea.KeyMsg{Type: tea.KeyCtrlQ})
 	if empty.mode != modeBoard || cmd != nil {
 		t.Errorf("no card: mode %v cmd nil %v", empty.mode, cmd == nil)
+	}
+}
+
+func TestEscLeavesLiveModeLikeCtrlQ(t *testing.T) {
+	m := liveCard(t, "")
+	m.mode = modeLive
+	m.keys = &keySender{jobs: make(chan keyJob, 4)}
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeBoard || cmd == nil || m.busy[m.current().ID].label != "discarding" {
+		t.Errorf("mode %v cmd nil %v busy %v", m.mode, cmd == nil, m.busy)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("esc was sent to the agent")
+	}
+}
+
+func TestCtrlKInLiveModeOpensThePaletteWithoutReachingTheAgent(t *testing.T) {
+	m := liveModel()
+	m.paletteInput = newPaletteInput()
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	if m.mode != modePalette || cmd == nil {
+		t.Errorf("mode %v cmd nil %v", m.mode, cmd == nil)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("ctrl+k was sent to the agent")
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeBoard {
+		t.Errorf("esc in the palette: mode %v", m.mode)
+	}
+}
+
+func TestCtrlKInLiveModeDiscardsAnUntouchedCard(t *testing.T) {
+	m := liveCard(t, "")
+	m.mode = modeLive
+	m.keys = &keySender{jobs: make(chan keyJob, 4)}
+	m.paletteInput = newPaletteInput()
+	m, cmd := update(m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	if m.mode != modePalette || cmd == nil || m.busy[m.current().ID].label != "discarding" {
+		t.Errorf("mode %v cmd nil %v busy %v", m.mode, cmd == nil, m.busy)
 	}
 }
 
