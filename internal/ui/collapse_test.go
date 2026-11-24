@@ -166,3 +166,22 @@ func TestCollapseShowsTheOwnerWhenNothingIsSelected(t *testing.T) {
 		t.Errorf("folded column = %q, want the selected split card", got)
 	}
 }
+
+func TestCollapseKeepsThePinnedCard(t *testing.T) {
+	m := collapseModel(t)
+	m.prefs.CollapsedColumns = map[string]bool{"c1": true}
+	m.task("b2").Pinned = true
+	if got := ids(m.tasksForColumn(1)); got != "b2 a2 solo" {
+		t.Errorf("collapsed column = %q, want the pinned card to stand for its session", got)
+	}
+
+	card := ansi.Strip(m.renderCard(m.task("b2"), 60, false, false, 1))
+	if !strings.Contains(card, "⚑ ⧉") {
+		t.Errorf("pinned card shows no marker:\n%s", card)
+	}
+	m.prefs.Density = densityCompact
+	card = ansi.Strip(m.renderCard(m.task("b2"), 60, false, false, 1))
+	if !strings.Contains(card, "⚑ ⧉") {
+		t.Errorf("compact pinned card shows no marker:\n%s", card)
+	}
+}

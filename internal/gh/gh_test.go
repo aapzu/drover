@@ -123,12 +123,12 @@ func TestNumber(t *testing.T) {
 }
 
 func TestViewParsesThePullRequest(t *testing.T) {
-	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
+	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeable":"CONFLICTING","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
 	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.Mergeable != "CONFLICTING" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
 		t.Errorf("View = %+v", pr)
 	}
 }
@@ -180,5 +180,63 @@ func TestRunWithoutGhInstalled(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := Me(t.TempDir()); err == nil {
 		t.Error("Me succeeded without gh on PATH")
+	}
+}
+
+func TestSearchScopesToTheReposAndParses(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	t.Setenv("FAKE_ARGS", args)
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+echo '[{"number":12,"title":"Fix it","url":"https://github.com/o/r/pull/12","author":{"login":"them","is_bot":false},"isDraft":true}]'`)
+	found, err := Search(dir, []string{"o/r", "o/foundation"}, "user-review-requested:@me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Number != 12 || found[0].Title != "Fix it" || found[0].URL != "https://github.com/o/r/pull/12" || found[0].Author.Login != "them" || !found[0].IsDraft {
+		t.Errorf("Search = %+v", found)
+	}
+	argv, _ := os.ReadFile(args)
+	if want := "search prs user-review-requested:@me --repo o/r --repo o/foundation --state open --limit 100 --json number,title,url,author,isDraft\n"; string(argv) != want {
+		t.Errorf("gh was run with %q, want %q", argv, want)
+	}
+	if _, err := Search(dir, nil, "--reviewed-by=@me"); err == nil {
+		t.Error("a search without a repository should be an error")
+	}
+}
+
+func TestRepo(t *testing.T) {
+	fakeGh(t, `echo ' o/r '`)
+	if got, err := Repo(t.TempDir()); err != nil || got != "o/r" {
+		t.Errorf("Repo = %q, %v", got, err)
+	}
+	fakeGh(t, `echo 'no git remotes found' >&2; exit 1`)
+	if _, err := Repo(t.TempDir()); err == nil || !strings.Contains(err.Error(), "gh repo view: no git remotes found") {
+		t.Errorf("Repo outside a GitHub repo: %v", err)
+	}
+}
+
+func TestIsURL(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/o/r/pull/12":       true,
+		"https://ghe.example.com/o/r/pull/7":   true,
+		"https://github.com/o/r/pull/12/files": false,
+		"https://github.com/o/r/issues/12":     false,
+		"o/r#12":                               false,
+	} {
+		if got := IsURL(url); got != want {
+			t.Errorf("IsURL(%q) = %v", url, got)
+		}
+	}
+}
+
+func TestRequestedFrom(t *testing.T) {
+	fakeGh(t, `echo '{"state":"OPEN","reviewRequests":[{"__typename":"Team","name":"Infra","slug":"infra"},{"__typename":"User","login":"Me"}]}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pr.RequestedFrom("me") || pr.RequestedFrom("them") || pr.RequestedFrom("") {
+		t.Errorf("RequestedFrom with requests %+v", pr.ReviewRequests)
 	}
 }

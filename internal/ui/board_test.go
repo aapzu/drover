@@ -30,15 +30,15 @@ func TestBoardKeysMoveTheSelection(t *testing.T) {
 	}{
 		{"j", []tea.KeyMsg{key("j")}, 0, "b"},
 		{"down", []tea.KeyMsg{special(tea.KeyDown)}, 0, "b"},
-		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "c"},
+		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "a"},
 		{"k", []tea.KeyMsg{key("j"), key("j"), key("k")}, 0, "b"},
-		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "a"},
-		{"G", []tea.KeyMsg{key("G")}, 0, "c"},
-		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "a"},
+		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "c"},
+		{"G", []tea.KeyMsg{key("G")}, 0, "a"},
+		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "c"},
 		{"l", []tea.KeyMsg{key("l")}, 1, ""},
 		{"right", []tea.KeyMsg{special(tea.KeyRight)}, 1, ""},
-		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "a"},
-		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "a"},
+		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "c"},
+		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "c"},
 		{"l stops at the last column", []tea.KeyMsg{key("l"), key("l"), key("l"), key("l"), key("l"), key("l")}, 4, ""},
 		{"j in an empty column", []tea.KeyMsg{key("l"), key("j"), key("G"), key("g")}, 1, ""},
 	}
@@ -187,13 +187,41 @@ func TestBoardKeysResizeAndResetTheLayout(t *testing.T) {
 		}
 	}
 
-	m.prefs = prefs{PreviewHeight: 10, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
+	m.prefs = prefs{PreviewHeight: 10, ReviewLaneHeight: 12, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
 	m, _ = update(m, key("0"))
-	if m.prefs.PreviewHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
+	if m.prefs.PreviewHeight != 0 || m.prefs.ReviewLaneHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
 		t.Errorf("0 left %+v", m.prefs)
 	}
-	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.Density != densityNormal {
+	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.ReviewLaneHeight != 0 || got.Density != densityNormal {
 		t.Errorf("saved %+v", got)
+	}
+}
+
+func TestNarrowingTheLastColumnWorksWhenEveryColumnIsResized(t *testing.T) {
+	m := realModel(t, "a")
+	m.prefs.ColumnWidths = map[string]int{}
+	for _, c := range m.columns() {
+		m.prefs.ColumnWidths[c.ID] = minResizedWidth
+	}
+	last := m.layout().rows[0]
+	m.col = last[len(last)-1].index
+	width := func(m Model) int {
+		for _, c := range m.layout().cols {
+			if c.index == m.col {
+				return c.width
+			}
+		}
+		return 0
+	}
+	before := width(m)
+	m, _ = update(m, key(">"))
+	m, _ = update(m, key(">"))
+	if got := width(m); got != before+8 {
+		t.Errorf("> widened the last column to %d, want %d", got, before+8)
+	}
+	m, _ = update(m, key("<"))
+	if got := width(m); got != before+4 {
+		t.Errorf("< left the last column at %d, want %d", got, before+4)
 	}
 }
 
@@ -246,6 +274,7 @@ func TestBoardKeysOpenTheirModes(t *testing.T) {
 	}{
 		{"?", modeHelp},
 		{"i", modeDetail},
+		{"$", modeUsage},
 		{"e", modeForm},
 		{"m", modeMove},
 		{"x", modeConfirm},
@@ -437,11 +466,11 @@ func TestHideKeyHidesTheCardUntilShown(t *testing.T) {
 	for _, msg := range runCmds(cmd) {
 		m, _ = update(m, msg)
 	}
-	if m.flash != "Hid #1. B shows hidden cards." || titles(m.tasksForColumn(0)) != "b" {
+	if m.flash != "Hid #2. B shows hidden cards." || titles(m.tasksForColumn(0)) != "a" {
 		t.Errorf("flash %q cards %q", m.flash, titles(m.tasksForColumn(0)))
 	}
 	m, _ = update(m, key("B"))
-	if titles(m.tasksForColumn(0)) != "a,b" {
+	if titles(m.tasksForColumn(0)) != "b,a" {
 		t.Errorf("cards %q with hidden cards shown", titles(m.tasksForColumn(0)))
 	}
 }

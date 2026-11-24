@@ -352,6 +352,8 @@ func TestAsksForPR(t *testing.T) {
 		"Don’t open a PR yet":                        false,
 		"Do not, under any circumstances, open a PR": false,
 		"Wait before you open a PR":                  false,
+		"<task-notification>\n<result>OPEN PRs are polled</result>\n</task-notification>": false,
+		"<task-notification>\n<result>Now open a PR</result>\n</task-notification>":       false,
 	} {
 		if got := AsksForPR(prompt); got != want {
 			t.Errorf("AsksForPR(%q) = %v, want %v", prompt, got, want)
@@ -590,7 +592,7 @@ func TestCreatedPRsOnlyCountsWhatABashCommandCreated(t *testing.T) {
 	const url = "https://github.com/o/r/pull/12"
 	event := func(name, tool, command string) Event {
 		ev := Event{Name: name, ToolName: tool, ToolResponse: json.RawMessage(`{"stdout":"` + url + `"}`)}
-		ev.ToolInput.Command = command
+		ev.ToolInput = json.RawMessage(fmt.Sprintf(`{"command":%q}`, command))
 		return ev
 	}
 	for name, c := range map[string]struct {

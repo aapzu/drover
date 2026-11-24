@@ -39,6 +39,12 @@
         ],
         "onTurnEnd": [
           {
+            "name": "Fix conflicts",
+            "type": "send_message",
+            "message": "PR #{{prNumber}} has merge conflicts with its base branch. Fetch the base branch, merge it into this branch, resolve the conflicts, run go build ./... and go test ./..., then push (no force push).",
+            "conditionScript": "test -n \"$DROVER_PRNUMBER\" && test \"$(gh pr view \"$DROVER_PRNUMBER\" --json mergeable --jq .mergeable)\" = CONFLICTING"
+          },
+          {
             "name": "Apply fixes",
             "type": "send_message",
             "message": "Apply the fixes the review found, then run go test ./...",
@@ -61,6 +67,12 @@
       "color": "#10b981"
     },
     {
+      "id": "review-requested",
+      "name": "Review requested",
+      "lane": "review",
+      "color": "#a855f7"
+    },
+    {
       "id": "reviewing",
       "name": "Reviewing",
       "lane": "review",
@@ -73,7 +85,15 @@
             "name": "Re-review",
             "type": "send_message",
             "message": "Review PR #{{prNumber}} ({{prUrl}}) again. Look only at what changed since your last review, and list what is still open.",
-            "conditionScript": "test -n \"$DROVER_PRNUMBER\""
+            "conditionScript": "test -n \"$DROVER_PRREVIEWEDSHA\""
+          }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Triage",
+            "type": "move_to_column",
+            "targetColumn": "triage",
+            "conditionScript": "test -n \"$DROVER_PRREVIEWEDSHA\""
           }
         ]
       }
@@ -90,6 +110,13 @@
       "name": "Waiting on author",
       "lane": "review",
       "color": "#64748b"
+    },
+    {
+      "id": "review-done",
+      "name": "Done",
+      "role": "done",
+      "lane": "review",
+      "color": "#10b981"
     }
   ],
   "prFlow": {
@@ -100,9 +127,11 @@
     "merged": "done"
   },
   "reviewFlow": {
+    "requested": "review-requested",
     "started": "triage",
     "reviewed": "waiting-on-author",
+    "approved": "review-done",
     "updated": "reviewing",
-    "done": "done"
+    "done": "review-done"
   }
 }

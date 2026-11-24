@@ -233,7 +233,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 	for _, k := range []string{"y", "Y"} {
 		m := realModel(t, "a", "b")
 		m, _ = update(m, key("x"))
-		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #1 "a"`) {
+		if m.mode != modeConfirm || !strings.Contains(m.confirmText, `Delete #2 "b"`) {
 			t.Fatalf("mode %v text %q", m.mode, m.confirmText)
 		}
 		m, cmd := update(m, key(k))
@@ -243,7 +243,7 @@ func TestConfirmRunsTheActionOnlyForY(t *testing.T) {
 		for _, msg := range runCmds(cmd) {
 			m, _ = update(m, msg)
 		}
-		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "b" {
+		if got := m.tasksForColumn(0); len(got) != 1 || got[0].Title != "a" {
 			t.Errorf("%s: cards left %v", k, got)
 		}
 	}
@@ -271,7 +271,7 @@ func TestHelpClosesOnAnyKey(t *testing.T) {
 	for _, k := range []tea.KeyMsg{key("x"), special(tea.KeyEnter), special(tea.KeyEsc), key("?")} {
 		m := realModel(t, "a")
 		m, _ = update(m, key("?"))
-		if m.mode != modeHelp || !strings.Contains(m.View(), "search and run a command") {
+		if m.mode != modeHelp || !strings.Contains(m.View(), "search cards and run a command") {
 			t.Fatalf("? did not open the help")
 		}
 		m, cmd := update(m, k)
@@ -302,14 +302,16 @@ func TestEveryModeRendersWithinTheTerminal(t *testing.T) {
 		{"board", modeBoard, nil, "Planning"},
 		{"form", modeForm, func(m Model) Model { m.openForm(m.current()); return m }, "Edit task"},
 		{"send", modeSend, func(m Model) Model { m.modalTask = m.current().ID; m.sendInput.Focus(); return m }, "Send ›"},
+		{"rename", modeRename, func(m Model) Model { m.modalTask = m.current().ID; m.renameInput.Focus(); return m }, "Rename ›"},
 		{"confirm", modeConfirm, func(m Model) Model { m.confirmText = "Really? (y/N)"; return m }, "Really?"},
-		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #1 to…"},
-		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Commands"},
+		{"move", modeMove, func(m Model) Model { m.modalTask = m.current().ID; return m }, "Move #2 to…"},
+		{"palette", modePalette, func(m Model) Model { m.openPalette(); return m }, "Search"},
 		{"filter", modeFilter, func(m Model) Model { m.filterInput.Focus(); return m }, "Filter ›"},
 		{"import", modeImport, func(m Model) Model { m.imp.items = nil; return m }, "Claude sessions"},
 		{"config", modeConfig, func(m Model) Model { m.configSrc = configSources(m.eng.Root); return m }, "Settings"},
-		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#1 first"},
+		{"detail", modeDetail, func(m Model) Model { m.detail.SetContent(m.renderDetail(m.current())); return m }, "#2 second"},
 		{"columns", modeColumns, func(m Model) Model { m = m.openColumns(); return m }, "Columns"},
+		{"usage", modeUsage, func(m Model) Model { m.detail.SetContent(m.renderUsage()); return m }, "Usage and cost"},
 		{"live", modeLive, func(m Model) Model { return withLive(m, m.current().ID) }, "LIVE"},
 	}
 	for _, size := range [][2]int{{120, 40}, {80, 24}} {
@@ -369,10 +371,13 @@ func TestHeaderCountsAgentsByState(t *testing.T) {
 	m.filter = "zz"
 
 	got := ansi.Strip(m.renderHeader())
-	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz", "$2.00"} {
+	for _, want := range []string{"1 working", "1 idle", "1 need you", "1 queued · 3/4 slots", "filter: zz"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("header misses %q: %q", want, got)
 		}
+	}
+	if strings.Contains(got, "$") {
+		t.Errorf("header shows a cost: %q", got)
 	}
 	m.branch = "main"
 	if got := ansi.Strip(m.renderHeader()); !strings.Contains(got, "on main") {
@@ -445,15 +450,20 @@ func TestAttachDoneReturnsToTheBoard(t *testing.T) {
 	}
 
 	m = realModel(t, "named")
+	term := captureTerminal(t)
 	m, cmd = update(m, attachDoneMsg{id: m.snap.Tasks[0].ID, agent: true})
 	if types := msgTypes(cmd); !hasMsg(types, "enableMouse") || hasMsg(types, "actionDoneMsg") || len(m.busy) != 0 {
 		t.Errorf("a titled card is kept: sent %v busy %v", types, m.busy)
+	}
+	if term.String() != extendedKeysOn {
+		t.Errorf("attach done wrote %q, want extended keys back on", term.String())
 	}
 }
 
 func TestAttachDoneLeavesTheMouseAloneWhenItIsOff(t *testing.T) {
 	m := realModel(t, "named")
 	m.prefs.NoMouse = true
+	captureTerminal(t)
 	if _, cmd := update(m, attachDoneMsg{id: m.snap.Tasks[0].ID}); hasMsg(msgTypes(cmd), "enableMouse") {
 		t.Error("attach done enabled the mouse that is off")
 	}

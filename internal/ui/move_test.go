@@ -42,8 +42,8 @@ func TestMoveShowsCardInTargetColumnAtOnce(t *testing.T) {
 	if got := m.tasksIn("c0"); len(got) != 0 {
 		t.Errorf("source column still lists %d cards", len(got))
 	}
-	if got := m.tasksIn("c2"); len(got) != 2 || got[1].ID != card.ID {
-		t.Errorf("target column should end with the moving card, got %v", got)
+	if got := m.tasksIn("c2"); len(got) != 2 || got[0].ID != card.ID {
+		t.Errorf("target column should start with the moving card, got %v", got)
 	}
 	if got := m.status(card); !strings.Contains(got, "moving") {
 		t.Errorf("status = %q, want a moving label", got)

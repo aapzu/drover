@@ -357,7 +357,7 @@ func openBoard(t *testing.T, root string, reply func(inbox.Request) inbox.Result
 }
 
 func TestCommandsSendTheRequestAndConfirm(t *testing.T) {
-	title, prompt := "Fix it", "now"
+	title, prompt, reviewTitle := "Fix it", "now", "Review it"
 	for name, tc := range map[string]struct {
 		cmd   func(root string, args []string) error
 		args  []string
@@ -369,6 +369,7 @@ func TestCommandsSendTheRequestAndConfirm(t *testing.T) {
 		"add":              {cmdAdd, []string{"Fix it", "-p", "now", "-c", "executing"}, "", inbox.Result{Number: 3, Title: "Fix it", Column: "Executing"}, inbox.Request{Op: inbox.OpAdd, Title: &title, Prompt: &prompt, Column: "executing"}, "Added #3 Fix it (Executing)\n"},
 		"add from stdin":   {cmdAdd, []string{"Fix it", "--prompt", "-"}, "now", inbox.Result{Number: 3, Title: "Fix it", Column: "Planning"}, inbox.Request{Op: inbox.OpAdd, Title: &title, Prompt: &prompt}, "Added #3 Fix it (Planning)\n"},
 		"add linear":       {cmdAdd, []string{"--linear", "DX-9", "-c", "planning"}, "", inbox.Result{Number: 3, Title: "From Linear", Column: "Planning"}, inbox.Request{Op: inbox.OpAdd, Linear: "DX-9", Column: "planning"}, "Added #3 From Linear (Planning)\n"},
+		"add to review":    {cmdAdd, []string{"Review it", "--review"}, "", inbox.Result{Number: 3, Title: "Review it", Column: "Reviewing"}, inbox.Request{Op: inbox.OpAdd, Title: &reviewTitle, Column: "reviewing"}, "Added #3 Review it (Reviewing)\n"},
 		"move":             {cmdMove, []string{"#1", "In review"}, "", inbox.Result{Number: 1, Column: "In review"}, inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, "Moved #1 to In review\n"},
 		"edit title":       {cmdEdit, []string{"1", "--title", "Fix it"}, "", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Title: &title}, "Updated #1\n"},
 		"edit from stdin":  {cmdEdit, []string{"1", "--prompt", "-"}, "now", inbox.Result{Number: 1}, inbox.Request{Op: inbox.OpEdit, Number: 1, Prompt: &prompt}, "Updated #1\n"},
@@ -408,6 +409,7 @@ func TestCommandsRejectBadInputBeforeSending(t *testing.T) {
 		"add with an unknown flag":   {cmdAdd, []string{"Fix", "--nope"}, "", "flag provided but not defined"},
 		"add to an unknown column":   {cmdAdd, []string{"Fix", "-c", "nowhere"}, "", `unknown column "nowhere"`},
 		"add linear to a bad column": {cmdAdd, []string{"--linear", "DX-1", "-c", "nowhere"}, "", `unknown column "nowhere"`},
+		"add to review and a column": {cmdAdd, []string{"Fix", "--review", "-c", "done"}, "", "both pick the column"},
 		"move with one argument":     {cmdMove, []string{"1"}, "", "usage: drover move"},
 		"move a bad number":          {cmdMove, []string{"x", "done"}, "", `"x" is not a card number`},
 		"move an unknown card":       {cmdMove, []string{"9", "done"}, "", "no card #9"},
@@ -585,5 +587,20 @@ func TestErrorLine(t *testing.T) {
 		if got := errorLine(tc.in); got != tc.want {
 			t.Errorf("%s: errorLine = %q, want %q", name, got, tc.want)
 		}
+	}
+}
+
+func TestAddReviewNeedsAReviewLane(t *testing.T) {
+	root := project(t)
+	board := `{"columns":[{"id":"inbox","name":"Inbox"},{"id":"done","name":"Done","role":"done"}]}`
+	if err := os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := cmdAdd(root, []string{"Fix", "--review"})
+	if err == nil || !strings.Contains(err.Error(), "no review lane") {
+		t.Errorf("err = %v, want no review lane", err)
+	}
+	if _, ok, _ := inbox.Next(root); ok {
+		t.Error("a rejected command should not queue a request")
 	}
 }

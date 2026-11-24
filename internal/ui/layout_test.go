@@ -63,6 +63,17 @@ func TestColumnWindowKeepsResizedWidth(t *testing.T) {
 	}
 }
 
+func TestColumnWindowLeavesRoomEmptyWhenEveryColumnIsResized(t *testing.T) {
+	m := testModel(120, 40, 4, 0)
+	for _, id := range []string{"c0", "c1", "c2", "c3"} {
+		m.prefs.ColumnWidths[id] = 20
+	}
+	_, widths := m.columnWindow(m.lanes()[0])
+	if !slices.Equal(widths, []int{20, 20, 20, 20}) {
+		t.Fatalf("got widths %v", widths)
+	}
+}
+
 func TestColumnWindowScrollsToSelection(t *testing.T) {
 	m := testModel(60, 40, 6, 0)
 	m.col = 5
@@ -476,17 +487,17 @@ func TestGroupsGetDistinctColors(t *testing.T) {
 	}
 }
 
-func TestUsageLabel(t *testing.T) {
+func TestContextLabel(t *testing.T) {
 	for _, c := range []struct {
 		usage claude.Usage
 		want  string
 	}{
 		{claude.Usage{}, ""},
-		{claude.Usage{Model: "claude-opus-5-5", Context: 420_000, Cost: 1.2}, "42% · $1.20"},
+		{claude.Usage{Model: "claude-opus-5-5", Context: 420_000, Cost: 1.2}, "42%"},
 		{claude.Usage{Model: "claude-mystery", Context: 5000, Cost: 0.001}, ""},
 	} {
-		if got := usageLabel(&store.Session{Usage: c.usage}); got != c.want {
-			t.Errorf("usageLabel(%+v) = %q, want %q", c.usage, got, c.want)
+		if got := contextLabel(&store.Session{Usage: c.usage}); got != c.want {
+			t.Errorf("contextLabel(%+v) = %q, want %q", c.usage, got, c.want)
 		}
 	}
 }
@@ -645,22 +656,18 @@ func TestPreviewNeedsRoomBesideTheBoard(t *testing.T) {
 	}
 }
 
-func TestColumnsThatDoNotFitScrollAndStayWithinTheBoard(t *testing.T) {
+func TestColumnsThatDoNotFitStayWithinTheBoard(t *testing.T) {
 	tests := []struct {
-		name          string
-		width, cols   int
-		hiddenColumns bool
+		name        string
+		width, cols int
 	}{
-		{"all fit", 120, 4, false},
-		{"too many for the width", 60, 6, true},
+		{"all fit", 120, 4},
+		{"too many for the width", 60, 6},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := testModel(tt.width, 40, tt.cols, 1)
 			l := m.layout()
-			if l.hiddenColumns != tt.hiddenColumns {
-				t.Errorf("hiddenColumns = %v, want %v", l.hiddenColumns, tt.hiddenColumns)
-			}
 			if w := lipgloss.Width(m.renderBoard(l)); w > l.boardW {
 				t.Errorf("board is %d wide, only %d fit", w, l.boardW)
 			}

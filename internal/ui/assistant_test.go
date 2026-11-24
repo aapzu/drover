@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -11,10 +12,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 type fakeAssistantPanel struct {
@@ -28,6 +31,7 @@ type fakeAssistantPanel struct {
 	capturedW        int
 	capturedH        int
 	capturedBack     int
+	cursor           tmux.Cursor
 }
 
 func fakePanel(t *testing.T) *fakeAssistantPanel {
@@ -40,13 +44,13 @@ func fakePanel(t *testing.T) *fakeAssistantPanel {
 		return !f.attaches && f.err == nil, f.err
 	}
 	restartAssistant = func(string, string, *config.Board) error { f.restarts++; return f.err }
-	captureAssistant = func(name string, w, h, scrollback int) (string, int, bool, error) {
+	captureAssistant = func(name string, w, h, scrollback int) (string, int, bool, tmux.Cursor, error) {
 		f.captures++
 		f.capturedName, f.capturedW, f.capturedH, f.capturedBack = name, w, h, scrollback
 		if !f.running {
-			return "", 0, false, errSessionEnded
+			return "", 0, false, tmux.Cursor{}, errSessionEnded
 		}
-		return f.screen, 0, false, nil
+		return f.screen, 0, false, f.cursor, nil
 	}
 	return f
 }
@@ -58,6 +62,7 @@ func assistantModel(t *testing.T) Model {
 	m.eng = &engine.Engine{Root: t.TempDir()}
 	m.keys = &keySender{jobs: make(chan keyJob, 16)}
 	m.promptInput = textarea.New()
+	m.columnPrompt = newColumnPrompt()
 	return m
 }
 
@@ -893,8 +898,24 @@ func TestColumnsStayLeftOfThePanelWhenResized(t *testing.T) {
 	}
 }
 
+func TestPanelStaysAtTheBoardEdgeWhenResizedColumnsLeaveRoom(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m.prefs.HidePreview = true
+	m.prefs.ColumnWidths = map[string]int{}
+	for _, c := range m.columns() {
+		m.prefs.ColumnWidths[c.ID] = minResizedWidth
+	}
+	for i, line := range strings.Split(m.renderMain(m.layout()), "\n") {
+		if w := lipgloss.Width(line); w != m.width {
+			t.Fatalf("line %d is %d wide, want %d", i, w, m.width)
+		}
+	}
+}
+
 func TestVanishedSessionIsReportedWithItsCauseAndNotOwned(t *testing.T) {
-	_, _, _, err := captureAssistant("drover-test-no-such-session", 10, 5, 0)
+	_, _, _, _, err := captureAssistant("drover-test-no-such-session", 10, 5, 0)
 	if !errors.Is(err, errSessionEnded) {
 		t.Fatalf("capturing a missing session = %v", err)
 	}
@@ -1062,5 +1083,243 @@ func TestPanelEdgeStillResizesWhenClaudeTracksMouse(t *testing.T) {
 	next, _ := update(m, tea.MouseMsg{X: l.boardW, Y: l.bodyY + 4, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 	if job, ok := sentJob(next); ok || next.drag.kind != dragAssistant {
 		t.Errorf("sent %+v, drag %v: the edge should start a resize", job, next.drag.kind)
+	}
+}
+
+func TestZoomKeyFillsTheBodyWithThePanel(t *testing.T) {
+	f := fakePanel(t)
+	m := assistantModel(t)
+	m, cmd := update(m, key(zoomKey))
+	if !m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	runCmds(cmd)
+	if f.starts != 1 {
+		t.Errorf("starts = %d", f.starts)
+	}
+	m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+	l := m.layout()
+	if l.assistantW != m.width || l.boardW != 0 || l.previewH != 0 {
+		t.Errorf("assistant %d, board %d, preview %d", l.assistantW, l.boardW, l.previewH)
+	}
+	runCmds(m.captureAssistantCmd())
+	if f.capturedW != m.width-2 || f.capturedH != l.bodyH-2 {
+		t.Errorf("captured %dx%d", f.capturedW, f.capturedH)
+	}
+}
+
+func TestCtrlQLeavesFullscreenBeforeHiding(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	if l := m.layout(); l.boardW == 0 || l.assistantW == m.width {
+		t.Errorf("board %d, assistant %d", l.boardW, l.assistantW)
+	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.open || m.mode != modeBoard {
+		t.Errorf("open %v, mode %v", m.assist.open, m.mode)
+	}
+}
+
+func TestZoomFromTheBoardAndTheTitleRowToggle(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	if !m.assist.full || m.mode != modeAssistant {
+		t.Fatalf("full %v, mode %v", m.assist.full, m.mode)
+	}
+	l := m.layout()
+	if got := l.hitTest(m, 0, l.bodyY+1).kind; got != hitAssistant {
+		t.Errorf("left column hit %v", got)
+	}
+	m, _ = update(m, tea.MouseMsg{X: 10, Y: l.bodyY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if m.assist.full || !m.assist.open || m.mode != modeAssistant {
+		t.Fatalf("title click: full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+	l = m.layout()
+	m.mode = modeBoard
+	m, _ = update(m, tea.MouseMsg{X: l.boardW + 10, Y: l.bodyY, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if !m.assist.full {
+		t.Error("clicking the panel's top border didn't zoom it")
+	}
+}
+
+func TestZoomNeedsOnlyTheMinimumSize(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	m.width = minAssistantWidth
+	m, _ = update(m, key(zoomKey))
+	if !m.assist.full || !m.assist.open {
+		t.Errorf("full %v, open %v", m.assist.full, m.assist.open)
+	}
+
+	m = assistantModel(t)
+	m.width = minAssistantWidth - 1
+	m, _ = update(m, key(zoomKey))
+	if m.assist.full || m.assist.open || m.flash != tooSmallForAssistant {
+		t.Errorf("full %v, open %v, flash %q", m.assist.full, m.assist.open, m.flash)
+	}
+}
+
+func TestLeavingFullscreenOnANarrowTerminalHidesThePanel(t *testing.T) {
+	fakePanel(t)
+	m := assistantModel(t)
+	m.width = 80
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
+	if m.assist.full || m.assist.open || m.mode != modeBoard {
+		t.Errorf("full %v, open %v, mode %v", m.assist.full, m.assist.open, m.mode)
+	}
+}
+
+func TestViewFitsTheTerminalWhenTheFullscreenPanelIsOpen(t *testing.T) {
+	fakePanel(t)
+	for _, size := range [][2]int{{40, 8}, {80, 24}, {200, 30}} {
+		m := assistantModel(t)
+		m.width, m.height = size[0], size[1]
+		m, _ = update(m, key(zoomKey))
+		m, _ = update(m, assistantStartedMsg{epoch: m.assist.epoch, created: true})
+		if !m.assist.full {
+			t.Fatalf("%dx%d: the panel didn't go fullscreen", size[0], size[1])
+		}
+		view := m.View()
+		fits(t, "fullscreen", view, size[0], size[1])
+		if !strings.Contains(view, "ASSISTANT") || strings.Contains(view, "Planning") {
+			t.Errorf("%dx%d: not just the panel:\n%s", size[0], size[1], view)
+		}
+	}
+}
+
+func TestShrinkingBelowTheMinimumLeavesFullscreen(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	m, _ = update(m, tea.WindowSizeMsg{Width: minAssistantWidth - 1, Height: 30})
+	if m.assist.full || m.mode != modeBoard || m.flash != tooSmallForAssistant {
+		t.Fatalf("full %v, mode %v, flash %q", m.assist.full, m.mode, m.flash)
+	}
+	m, _ = update(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+	if l := m.layout(); l.assistantFull || l.boardW == 0 {
+		t.Errorf("the panel came back fullscreen: board %d", l.boardW)
+	}
+}
+
+func TestFullscreenHintsNameTheWayOut(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+	m.mode = modeBoard
+	if view := m.View(); !strings.Contains(view, zoomKey+" fullscreen") {
+		t.Errorf("the panel doesn't advertise %s:\n%s", zoomKey, view)
+	}
+	m.mode = modeBoard
+	m, _ = update(m, key(zoomKey))
+	if view := m.View(); strings.Count(view, "ctrl+q exit fullscreen") != 2 {
+		t.Errorf("title and footer should both name ctrl+q:\n%s", view)
+	}
+}
+
+func forceColor(t *testing.T) {
+	t.Helper()
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+}
+
+func TestPaintCursorReversesTheCellUnderIt(t *testing.T) {
+	forceColor(t)
+
+	for _, c := range []struct {
+		name, txt, text, cell string
+		cur                   tmux.Cursor
+	}{
+		{"on a character", "ab\ncd", "ab\ncd", "d", tmux.Cursor{X: 1, Line: 1, Visible: true}},
+		{"past the end of a trimmed line", "ab\n", "ab  \n", " ", tmux.Cursor{X: 3, Line: 0, Visible: true}},
+		{"in a colored line", "\x1b[31mab\x1b[0m", "ab", "a", tmux.Cursor{X: 0, Line: 0, Visible: true}},
+		{"hidden", "ab", "ab", "", tmux.Cursor{X: 0, Line: 0}},
+		{"below the capture", "ab", "ab", "", tmux.Cursor{X: 0, Line: 5, Visible: true}},
+	} {
+		got := paintCursor(c.txt, c.cur)
+		if ansi.Strip(got) != c.text {
+			t.Errorf("%s: text is %q, want %q", c.name, ansi.Strip(got), c.text)
+		}
+		if c.cell == "" {
+			if got != c.txt {
+				t.Errorf("%s: changed %q to %q", c.name, c.txt, got)
+			}
+		} else if !strings.Contains(got, selStyle.Render(c.cell)) {
+			t.Errorf("%s: %q has no reversed %q", c.name, got, c.cell)
+		}
+	}
+}
+
+func TestPanelShowsTheCursorOnlyWhileFocused(t *testing.T) {
+	forceColor(t)
+
+	f := fakePanel(t)
+	f.screen = "❯ hi\n"
+	f.cursor = tmux.Cursor{X: 2, Line: 0, Visible: true}
+	m := open(t, assistantModel(t))
+	m, _ = update(m, m.captureAssistantCmd()())
+
+	if view := m.View(); !strings.Contains(view, selStyle.Render("h")) {
+		t.Errorf("focused panel has no cursor on the 'h':\n%s", view)
+	}
+	m.mode = modeBoard
+	if view := m.View(); strings.Contains(view, selStyle.Render("h")) {
+		t.Errorf("unfocused panel still shows a cursor:\n%s", view)
+	}
+}
+
+func TestPanelCursorFollowsTheScrolledWindowAndFrameState(t *testing.T) {
+	forceColor(t)
+	fakePanel(t)
+	m := open(t, assistantModel(t))
+
+	var lines []string
+	for i := range 60 {
+		lines = append(lines, fmt.Sprintf("l%02d", i))
+	}
+	frame := func(cur tmux.Cursor) {
+		m, _ = update(m, m.stamped(assistantFrameMsg{txt: strings.Join(lines, "\n"), history: 100, cursor: cur, at: time.Now().Add(time.Second)}))
+	}
+	painted := selStyle.Render("l")
+
+	frame(tmux.Cursor{X: 0, Line: 5, Visible: true})
+	m.assist.scroll = 0
+	if strings.Contains(m.View(), painted) {
+		t.Error("the cursor is painted although its line is above the window")
+	}
+	frame(tmux.Cursor{X: 0, Line: 45, Visible: true})
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor isn't painted on a line inside the window")
+	}
+	m.assist.scroll = 10
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor isn't painted after scrolling while its line stays in the window")
+	}
+	m.assist.scroll = 40
+	if strings.Contains(m.View(), painted) {
+		t.Error("the cursor is painted although scrolling moved its line out of the window")
+	}
+
+	m.assist.scroll = 0
+	frame(tmux.Cursor{X: 0, Line: 59})
+	if strings.Contains(m.View(), painted) {
+		t.Error("a hidden cursor is painted")
+	}
+	frame(tmux.Cursor{X: 0, Line: 59, Visible: true})
+	if !strings.Contains(m.View(), painted) {
+		t.Error("the cursor on the last line isn't painted")
+	}
+	m.assist.fail(errSessionEnded)
+	if m.assist.cursor != (tmux.Cursor{}) {
+		t.Errorf("cursor %+v survives a failed session", m.assist.cursor)
 	}
 }
