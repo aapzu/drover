@@ -330,6 +330,37 @@ func TestFilterKeysNarrowThenClear(t *testing.T) {
 	}
 }
 
+func TestMatchesSearchesCardIssueAndPRFields(t *testing.T) {
+	card := &store.Task{
+		Number: 103, Title: "Dark mode", Branch: "aapeli/dx-1-dark", BaseBranch: "develop",
+		Issue: &store.Issue{Key: "DX-1", URL: "https://linear.app/x/issue/DX-1", State: "In Progress"},
+		PR: &store.PR{Number: 42, URL: "https://github.com/acme/app/pull/42", Title: "Add theme",
+			Author: "octocat", State: "OPEN", ReviewDecision: "APPROVED"},
+	}
+	for filter, want := range map[string]bool{
+		"#103":                                true,
+		"103":                                 true,
+		"42":                                  true,
+		"github.com/acme/app/pull/42":         true,
+		"https://github.com/acme/app/pull/42": true,
+		"OCTOCAT":                             true,
+		"octocat open approved":               true,
+		"linear.app dx-1":                     true,
+		"in progress":                         true,
+		"develop":                             true,
+		"octocat closed":                      false,
+		"someone-else":                        false,
+		"https://github.com/acme/app/pull/43": false,
+	} {
+		if got := matches(card, filter); got != want {
+			t.Errorf("matches(%q) = %v, want %v", filter, got, want)
+		}
+	}
+	if matches(&store.Task{Number: 1, Title: "x"}, "octocat") {
+		t.Error("a card without a PR matched a PR author")
+	}
+}
+
 func TestQuitKeys(t *testing.T) {
 	for _, k := range []tea.KeyMsg{key("q"), special(tea.KeyCtrlC)} {
 		_, cmd := update(realModel(t, "a"), k)

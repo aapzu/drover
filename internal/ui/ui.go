@@ -429,16 +429,17 @@ func (m Model) collapseGroups(tasks []*store.Task, selectedID string) ([]*store.
 }
 
 // matches reports whether the card's number, title, branch, issue or PR
-// contains every word of filter, ignoring case.
+// (link, author, state) contains every word of filter, ignoring case.
 func matches(t *store.Task, filter string) bool {
-	text := fmt.Sprintf("#%d %s %s", t.Number, t.Title, t.Branch)
+	fields := []string{fmt.Sprintf("#%d %d", t.Number, t.Number), t.Title, t.Branch, t.BaseBranch}
 	if t.Issue != nil {
-		text += " " + t.Issue.Key
+		fields = append(fields, t.Issue.Key, t.Issue.URL, t.Issue.State)
 	}
 	if t.PR != nil {
-		text += fmt.Sprintf(" #%d %s %s", t.PR.Number, t.PR.Title, t.PR.Branch)
+		fields = append(fields, fmt.Sprintf("#%d %d", t.PR.Number, t.PR.Number),
+			t.PR.URL, t.PR.Title, t.PR.Branch, t.PR.Author, t.PR.State, t.PR.ReviewDecision)
 	}
-	return containsAllWords(text, filter)
+	return containsAllWords(strings.Join(fields, " "), filter)
 }
 
 // containsAllWords reports whether text contains every word of words, ignoring case.

@@ -732,7 +732,7 @@ func (m Model) renderHelp() string {
 		{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
 		{":", "open and type into the assistant panel (Ctrl-q returns to the board and hides it)"},
 		{"N", "start a new assistant conversation"},
-		{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
+		{"/", "filter cards by number, title, branch, issue, PR link, author or state (esc clears)"},
 		{"u", "update the worktree from its base branch"},
 		{"p", "toggle live preview"},
 		{"+ / -", "taller / shorter preview"},
