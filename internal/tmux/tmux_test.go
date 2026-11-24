@@ -58,6 +58,15 @@ func useSocket(t *testing.T) {
 		noServer(t, "cannot start a tmux server here (%v)", err)
 	}
 	Kill("probe")
+	// Killing the last session shuts the server down asynchronously, and a
+	// new-session sent meanwhile fails with "server exited unexpectedly".
+	for range 100 {
+		if _, err := run("list-sessions"); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	noServer(t, "tmux server did not shut down after the probe")
 }
 
 func TestTypingIntoDetachedSession(t *testing.T) {
