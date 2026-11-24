@@ -68,9 +68,11 @@ dragging. Layout is saved in `ui.json` in the project's state
 directory.
 
 In live mode (`tab` or a click on the preview) every key goes to the agent,
-`esc` and `ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop
-the agent. `ctrl+q` returns to the board. `shift+enter` inserts a newline in
-terminals that report it (iTerm2, xterm); elsewhere use `alt+enter`.
+`ctrl+c` included, except `ctrl+z`, which is ignored so it can't stop the agent.
+`ctrl+q` and `esc` return to the board, and `ctrl+k` opens the command palette.
+Interrupt the agent with `ctrl+c`, or attach with `enter` when it needs `esc`.
+`shift+enter` inserts a newline in terminals that report it (iTerm2, xterm);
+elsewhere use `alt+enter`.
 
 The mouse wheel over the preview scrolls the agent's history, as do `pgup` /
 `pgdown` on the board. When the agent has no history and doesn't read mouse
@@ -719,12 +721,13 @@ It takes no agent slot and isn't a card, so `idleTimeoutMinutes` and slot
 evictions never suspend it.
 
 - The panel needs a terminal at least 100 columns wide and 8 rows tall. `:`
-  focuses it, so every key, `esc` and `ctrl+c` included, goes to Claude.
-  `ctrl+q` returns to the board and hides the panel. You can also click the
+  focuses it, so every key, `ctrl+c` included, goes to Claude except `ctrl+q`
+  and `esc`, which return to the board and hide the panel, and `ctrl+k`, which
+  opens the command palette over it. You can also click the
   panel to focus it, and use the mouse wheel to scroll it.
 - From the board, `Z` (or a click on the panel's top border) makes the panel
-  fill the whole screen. Click the border again or press `ctrl+q` to put it
-  back beside the board; `ctrl+q` once more hides it. Fullscreen needs only
+  fill the whole screen. Click the border again or press `ctrl+q` or `esc` to put it
+  back beside the board; `ctrl+q` or `esc` once more hides it. Fullscreen needs only
   40 columns and the same 8 rows.
 - It is the `claude --model sonnet` TUI in a session on the private tmux server
   (`tmux -L drover ls`), started in the repo. It stops when the board that

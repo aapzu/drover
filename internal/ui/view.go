@@ -169,8 +169,8 @@ func (m Model) renderFooter() string {
 	}
 	hints := map[mode]string{
 		modePalette:     "↑↓ select  enter run  esc cancel",
-		modeLive:        "LIVE: ctrl+q back to board",
-		modeAssistant:   "ASSISTANT: ctrl+q hide panel",
+		modeLive:        "LIVE: ctrl+q or esc back to board  ctrl+k commands",
+		modeAssistant:   "ASSISTANT: ctrl+q or esc hide panel  ctrl+k commands",
 		modeForm:        "tab switch field  ctrl+s save  esc cancel",
 		modeMove:        "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:     "y confirm  any other key cancels",
@@ -189,7 +189,7 @@ func (m Model) renderFooter() string {
 	}
 	hints[modeColumns] = m.columnsHint()
 	if m.assist.full {
-		hints[modeAssistant] = "ASSISTANT: ctrl+q exit fullscreen"
+		hints[modeAssistant] = "ASSISTANT: ctrl+q or esc exit fullscreen  ctrl+k commands"
 	}
 	return " " + dim.Render(ansi.Truncate(hints[m.mode], m.width-2, "…"))
 }
@@ -655,7 +655,7 @@ func (m Model) renderPreview(height int) string {
 	style := panelStyle
 	if m.mode == modeLive {
 		style = style.BorderForeground(accent)
-		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● LIVE") + title + dim.Render("· ctrl+q back to board ")
+		title = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● LIVE") + title + dim.Render("· ctrl+q or esc back to board ")
 	} else if m.drag.kind == dragPreview {
 		style = style.BorderForeground(accent)
 	}
@@ -792,14 +792,14 @@ var helpKeys = [][2]string{
 	{"E", "rename card; suggests a title unless you type"},
 	{"x / D", "delete task (branch is kept)"},
 	{"enter / a", "attach to the agent's terminal, starting it if needed (Ctrl-q returns)"},
-	{"tab", "type into the agent from the preview (Ctrl-q returns)"},
+	{"tab", "type into the agent from the preview (Ctrl-q or esc returns)"},
 	{"s", "send a message to the agent"},
 	{"r", "start or resume the agent in place"},
 	{"S", "suspend the agent (resume later with r)"},
 	{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
-	{":", "open and type into the assistant panel (Ctrl-q returns to the board and hides it)"},
+	{":", "open and type into the assistant panel (Ctrl-q or esc returns to the board and hides it)"},
 	{"N", "start a new assistant conversation"},
-	{"Z", "show the assistant panel fullscreen (Ctrl-q or a click on its top border leaves it)"},
+	{"Z", "show the assistant panel fullscreen (Ctrl-q, esc or a click on its top border leaves it)"},
 	{"/", "filter cards by number, title, branch, issue, PR link, author or state (esc clears)"},
 	{"u", "update the worktree from its base branch"},
 	{"p", "toggle live preview"},
@@ -843,7 +843,8 @@ var helpMouse = [][2]string{
 }
 
 var helpLive = [][2]string{
-	{"ctrl+q", "back to board"},
+	{"ctrl+q, esc", "back to board"},
+	{"ctrl+k", "search and run a command"},
 	{"mouse wheel", "scroll the agent's history, or page it"},
 	{"click", "goes to agents that track the mouse"},
 	{"typing", "jumps back to the bottom"},

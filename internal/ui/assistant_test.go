@@ -138,9 +138,31 @@ func TestTypingInThePanelReachesClaudeNotTheBoard(t *testing.T) {
 	if m.col != col {
 		t.Error("the key also moved the board")
 	}
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if job, _ := sentJob(m); job.key != "C-c" || m.mode != modeAssistant {
+		t.Errorf("ctrl+c should go to claude: %+v, mode %v", job, m.mode)
+	}
+}
+
+func TestEscHidesThePanelAndCtrlKOpensThePaletteOverIt(t *testing.T) {
+	fakePanel(t)
+	m := open(t, assistantModel(t))
 	m, _ = update(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if job, _ := sentJob(m); job.key != "Escape" || m.mode != modeAssistant {
-		t.Errorf("esc should go to claude: %+v, mode %v", job, m.mode)
+	if m.mode != modeBoard || m.assist.open {
+		t.Fatalf("esc: mode %v, open %v", m.mode, m.assist.open)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("esc was sent to claude")
+	}
+
+	m = open(t, assistantModel(t))
+	m.paletteInput = newPaletteInput()
+	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlK})
+	if m.mode != modePalette || !m.assist.open {
+		t.Errorf("ctrl+k: mode %v, open %v; the panel should stay behind the palette", m.mode, m.assist.open)
+	}
+	if _, ok := sentJob(m); ok {
+		t.Error("ctrl+k was sent to claude")
 	}
 }
 
@@ -1220,7 +1242,7 @@ func TestFullscreenHintsNameTheWayOut(t *testing.T) {
 	}
 	m.mode = modeBoard
 	m, _ = update(m, key(zoomKey))
-	if view := m.View(); strings.Count(view, "ctrl+q exit fullscreen") != 2 {
+	if view := m.View(); strings.Count(view, "ctrl+q or esc exit fullscreen") != 2 {
 		t.Errorf("title and footer should both name ctrl+q:\n%s", view)
 	}
 }

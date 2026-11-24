@@ -273,7 +273,8 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 }
 
 func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == liveExitKey {
+	switch msg.String() {
+	case liveExitKey, "esc":
 		if m.assist.full {
 			cmd := m.unzoomAssistant()
 			return m, cmd
@@ -281,6 +282,8 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeBoard
 		m.assist.open = false
 		return m, nil
+	case paletteKey:
+		return m, m.openPalette()
 	}
 	switch {
 	case m.assist.running():
@@ -290,7 +293,7 @@ func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.startAssistantSession(false)
 		return m, cmd
 	default:
-		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q to hide it.")
+		m.setFlash("The assistant isn't running. Press enter to start it, ctrl+q or esc to hide it.")
 		return m, nil
 	}
 	job, ok := keyJobFor(assistant.SessionName(m.eng.Root), msg)
@@ -362,9 +365,9 @@ func (m Model) renderAssistant(width, height int) string {
 	}
 	if focused {
 		style = style.BorderForeground(accent)
-		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q hide "
+		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q or esc hide "
 		if m.assist.full {
-			hint = "· ctrl+q exit fullscreen "
+			hint = "· ctrl+q or esc exit fullscreen "
 		}
 	}
 	if m.assist.scroll > 0 {
