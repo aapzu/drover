@@ -3,10 +3,12 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/tmux"
@@ -15,22 +17,25 @@ import (
 const (
 	askKey            = ":"
 	newAskKey         = "N"
+	zoomKey           = "Z"
+	newReviewKey      = "ctrl+n"
 	minBoardWidth     = 60
 	minAssistantWidth = 40
 
 	tooSmallForAssistant = "The terminal is too small for the assistant panel"
+	noReviewLane         = `No review lane: give columns "lane": "review" in drover.json, or W writes the default board`
 )
 
 var (
 	stopAssistant    = assistant.Stop
 	startAssistant   = assistant.Start
 	restartAssistant = assistant.Restart
-	captureAssistant = func(name string, width, height, scrollback int) (out string, history int, mouse bool, err error) {
-		out, history, mouse, err = tmux.CaptureSized(name, width, height, scrollback)
+	captureAssistant = func(name string, width, height, scrollback int) (out string, history int, mouse bool, cur tmux.Cursor, err error) {
+		out, history, mouse, cur, err = tmux.CaptureSized(name, width, height, scrollback)
 		if err != nil && !tmux.Has(name) {
 			err = fmt.Errorf("%w (%w)", errSessionEnded, err)
 		}
-		return out, history, mouse, err
+		return out, history, mouse, cur, err
 	}
 )
 
@@ -46,7 +51,10 @@ type assistantPane struct {
 	at              time.Time
 	history, scroll int
 	mouse           bool
+	sel             selection
+	cursor          tmux.Cursor
 	tickGen         int
+	full            bool
 }
 
 type sessionState uint8
@@ -60,7 +68,9 @@ const (
 func (p assistantPane) starting() bool { return p.session == sessionStarting }
 func (p assistantPane) running() bool  { return p.session == sessionRunning }
 
-func (p *assistantPane) clearFrame() { p.txt, p.history, p.scroll, p.mouse = "", 0, 0, false }
+func (p *assistantPane) clearFrame() {
+	p.txt, p.history, p.scroll, p.mouse, p.cursor, p.sel = "", 0, 0, false, tmux.Cursor{}, selection{}
+}
 
 func (p *assistantPane) fail(err error) {
 	p.session, p.lastErr = sessionStopped, err
@@ -78,6 +88,7 @@ type assistantFrameMsg struct {
 	txt     string
 	history int
 	mouse   bool
+	cursor  tmux.Cursor
 	err     error
 	at      time.Time
 }
@@ -96,11 +107,14 @@ func (m Model) StopAssistant() error {
 }
 
 func (m Model) assistantFits() int {
-	w := max(minAssistantWidth, m.width*2/5)
-	if m.prefs.AssistantWidth > 0 {
-		w = m.clampAssistantWidth(m.prefs.AssistantWidth)
+	w, minBoard := m.width, 0
+	if !m.assist.full {
+		w, minBoard = max(minAssistantWidth, m.width*2/5), minBoardWidth
+		if m.prefs.AssistantWidth > 0 {
+			w = m.clampAssistantWidth(m.prefs.AssistantWidth)
+		}
 	}
-	if m.width-w < minBoardWidth || m.bodyHeight() < minPreviewHeight {
+	if m.width-w < minBoard || m.width < minAssistantWidth || m.bodyHeight() < minPreviewHeight {
 		return 0
 	}
 	return w
@@ -134,6 +148,37 @@ func (m *Model) openAssistant(fresh bool) tea.Cmd {
 	case fresh || !m.assist.running():
 		cmds = append(cmds, m.startAssistantSession(fresh))
 	default:
+		cmds = append(cmds, m.captureAssistantCmd())
+	}
+	return tea.Batch(cmds...)
+}
+
+// zoomAssistant toggles the panel between its place beside the board and the
+// whole body, opening it first if need be.
+func (m *Model) zoomAssistant() tea.Cmd {
+	if m.assist.full {
+		return m.unzoomAssistant()
+	}
+	m.assist.full = true
+	if m.assistantFits() == 0 {
+		m.assist.full = false
+		m.setFlash(tooSmallForAssistant)
+		return nil
+	}
+	return m.openAssistant(false)
+}
+
+// unzoomAssistant puts the panel back beside the board, or hides it when the
+// terminal is too small for both.
+func (m *Model) unzoomAssistant() tea.Cmd {
+	m.assist.full = false
+	if m.assistantFits() == 0 {
+		m.mode, m.assist.open = modeBoard, false
+		m.setFlash(tooSmallForAssistant)
+		return nil
+	}
+	cmds := []tea.Cmd{m.focusAssistant()}
+	if m.assist.running() {
 		cmds = append(cmds, m.captureAssistantCmd())
 	}
 	return tea.Batch(cmds...)
@@ -199,8 +244,8 @@ func (m Model) captureAssistantCmd() tea.Cmd {
 	scrollback := scrollbackFor(m.assist.scroll, h)
 	return func() tea.Msg {
 		at := time.Now()
-		out, history, mouse, err := captureAssistant(name, w, h, scrollback)
-		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, err: err, at: at}
+		out, history, mouse, cur, err := captureAssistant(name, w, h, scrollback)
+		return assistantFrameMsg{epoch: epoch, txt: out, history: history, mouse: mouse, cursor: cur, err: err, at: at}
 	}
 }
 
@@ -218,15 +263,21 @@ func (m *Model) applyAssistantFrame(msg assistantFrameMsg) {
 		}
 		return
 	}
+	d := msg.history - m.assist.history
 	if m.assist.scroll > 0 {
-		m.assist.scroll += msg.history - m.assist.history
+		m.assist.scroll += d
 	}
+	m.assist.sel.shift(d)
 	m.assist.scroll = clamp(m.assist.scroll, 0, msg.history)
-	m.assist.txt, m.assist.history, m.assist.mouse = msg.txt, msg.history, msg.mouse
+	m.assist.txt, m.assist.history, m.assist.mouse, m.assist.cursor = msg.txt, msg.history, msg.mouse, msg.cursor
 }
 
 func (m Model) updateAssistant(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == liveExitKey {
+		if m.assist.full {
+			cmd := m.unzoomAssistant()
+			return m, cmd
+		}
 		m.mode = modeBoard
 		m.assist.open = false
 		return m, nil
@@ -265,6 +316,10 @@ func (m Model) wheelAssistant(msg tea.MouseMsg, l layout) (tea.Model, tea.Cmd) {
 	if up {
 		lines = 3
 	}
+	return m.scrollAssistant(lines)
+}
+
+func (m Model) scrollAssistant(lines int) (tea.Model, tea.Cmd) {
 	scroll := clamp(m.assist.scroll+lines, 0, m.assist.history)
 	if scroll == m.assist.scroll {
 		return m, nil
@@ -293,10 +348,14 @@ func (m Model) renderAssistant(width, height int) string {
 		}
 		body = dim.Render(what + reason + ".\n" + hint)
 	default:
-		body = previewWindow(m.assist.txt, height-2, m.assist.scroll)
+		txt := m.assist.txt
+		if focused {
+			txt = paintCursor(txt, m.assist.cursor)
+		}
+		body = selPane{txt: txt, scroll: m.assist.scroll, sel: m.assist.sel}.body(height - 2)
 	}
 
-	title, hint := " assistant ", "· "+askKey+" to type here "
+	title, hint := " assistant ", "· "+askKey+" to type here · "+zoomKey+" fullscreen "
 	style := panelStyle
 	if m.drag.kind == dragAssistant {
 		style = style.BorderForeground(accent)
@@ -304,6 +363,9 @@ func (m Model) renderAssistant(width, height int) string {
 	if focused {
 		style = style.BorderForeground(accent)
 		title, hint = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(" ● ASSISTANT "), "· ctrl+q hide "
+		if m.assist.full {
+			hint = "· ctrl+q exit fullscreen "
+		}
 	}
 	if m.assist.scroll > 0 {
 		title += thinking.Render(fmt.Sprintf("· ↑ %d lines up ", m.assist.scroll))
@@ -312,4 +374,21 @@ func (m Model) renderAssistant(width, height int) string {
 	}
 
 	return titledBox(style, title, body, width, height)
+}
+
+// paintCursor reverses the cell under the pane's cursor, which a capture of
+// its text doesn't carry.
+func paintCursor(txt string, c tmux.Cursor) string {
+	lines := strings.Split(txt, "\n")
+	if !c.Visible || c.Line < 0 || c.Line >= len(lines) {
+		return txt
+	}
+	line := lines[c.Line]
+	w := ansi.StringWidth(line)
+	if w < c.X+1 {
+		line += strings.Repeat(" ", c.X+1-w)
+		w = c.X + 1
+	}
+	lines[c.Line] = reverseSpan(line, c.X, c.X+1, w)
+	return strings.Join(lines, "\n")
 }

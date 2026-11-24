@@ -63,6 +63,17 @@ func TestColumnWindowKeepsResizedWidth(t *testing.T) {
 	}
 }
 
+func TestColumnWindowLeavesRoomEmptyWhenEveryColumnIsResized(t *testing.T) {
+	m := testModel(120, 40, 4, 0)
+	for _, id := range []string{"c0", "c1", "c2", "c3"} {
+		m.prefs.ColumnWidths[id] = 20
+	}
+	_, widths := m.columnWindow(m.lanes()[0])
+	if !slices.Equal(widths, []int{20, 20, 20, 20}) {
+		t.Fatalf("got widths %v", widths)
+	}
+}
+
 func TestColumnWindowScrollsToSelection(t *testing.T) {
 	m := testModel(60, 40, 6, 0)
 	m.col = 5
@@ -479,17 +490,17 @@ func TestGroupsGetDistinctColors(t *testing.T) {
 	}
 }
 
-func TestUsageLabel(t *testing.T) {
+func TestContextLabel(t *testing.T) {
 	for _, c := range []struct {
 		usage claude.Usage
 		want  string
 	}{
 		{claude.Usage{}, ""},
-		{claude.Usage{Model: "claude-opus-5-5", Context: 420_000, Cost: 1.2}, "42% · $1.20"},
+		{claude.Usage{Model: "claude-opus-5-5", Context: 420_000, Cost: 1.2}, "42%"},
 		{claude.Usage{Model: "claude-mystery", Context: 5000, Cost: 0.001}, ""},
 	} {
-		if got := usageLabel(&store.Session{Usage: c.usage}); got != c.want {
-			t.Errorf("usageLabel(%+v) = %q, want %q", c.usage, got, c.want)
+		if got := contextLabel(&store.Session{Usage: c.usage}); got != c.want {
+			t.Errorf("contextLabel(%+v) = %q, want %q", c.usage, got, c.want)
 		}
 	}
 }
