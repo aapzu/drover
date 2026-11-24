@@ -289,8 +289,8 @@ func (e *Engine) refreshPR(id string) {
 		pr.Title, pr.Branch, pr.State = info.Title, info.Branch, info.State
 		pr.ReviewDecision, pr.MergeCommit, pr.HeadSHA = info.ReviewDecision, info.MergeOID(), info.HeadSHA
 		pr.InMergeQueue = queued
+		pr.Author = info.Author.Login
 		if pr.Review {
-			pr.Author = info.Author.Login
 			confirmed = info.State == "OPEN"
 			if card.Title == "" && info.Title != "" {
 				card.Title = "Review: " + info.Title

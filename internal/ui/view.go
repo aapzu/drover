@@ -800,7 +800,7 @@ var helpKeys = [][2]string{
 	{":", "open and type into the assistant panel (Ctrl-q or esc returns to the board and hides it)"},
 	{"N", "start a new assistant conversation"},
 	{"Z", "show the assistant panel fullscreen (Ctrl-q, esc or a click on its top border leaves it)"},
-	{"/", "filter cards by number, title, branch, issue or PR (esc clears)"},
+	{"/", "filter cards by number, title, branch, issue, PR link, author or state (esc clears)"},
 	{"u", "update the worktree from its base branch"},
 	{"p", "toggle live preview"},
 	{"+ / -", "taller / shorter preview"},
