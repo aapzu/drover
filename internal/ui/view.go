@@ -174,7 +174,7 @@ func (m Model) renderFooter() string {
 // boardFooter describes the selected card and its agent's settings, with the
 // two keys that lead to every other command.
 func (m Model) boardFooter() string {
-	right := dim.Render("ctrl+k commands · ? help") + " "
+	right := dim.Render("ctrl+k search · ? help") + " "
 	var parts []string
 	if t := m.current(); t != nil {
 		parts = append(parts, bold.Render(fmt.Sprintf("#%d", t.Number)))
@@ -716,7 +716,7 @@ func (m Model) renderMovePicker() string {
 
 func (m Model) renderHelp() string {
 	rows := [][2]string{
-		{"ctrl+k", "search and run a command"},
+		{"ctrl+k", "search cards and run a command"},
 		{"←→ / h l", "select column"},
 		{"↑↓ / j k, g G", "select card"},
 		{"H / L, shift+←→", "move card to previous / next column"},

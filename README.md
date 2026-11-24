@@ -50,7 +50,7 @@ Then bring in the Claude Code work you already have:
    [Importing Claude Code agents](#importing-claude-code-agents).
 2. Or press `n` to start a new card with an agent.
 
-Press `?` for every shortcut, or `ctrl+k` to search and run a command.
+Press `?` for every shortcut, or `ctrl+k` to search cards (enter opens one full screen) or run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge or the preview's top border to

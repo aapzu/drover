@@ -395,7 +395,7 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 		}
 	}
 	if m.filter != "" {
-		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, m.filter) })
+		tasks = filterCards(tasks, m.filter)
 	}
 	if m.prefs.CollapsedColumns[col.ID] {
 		return m.collapseGroups(tasks, m.selected[col.ID])
@@ -426,6 +426,12 @@ func (m Model) collapseGroups(tasks []*store.Task, selectedID string) ([]*store.
 		}
 	}
 	return shown, folded
+}
+
+// filterCards is the cards that match the search, the one the / filter and the
+// palette share.
+func filterCards(tasks []*store.Task, search string) []*store.Task {
+	return slices.DeleteFunc(slices.Clone(tasks), func(t *store.Task) bool { return !matches(t, search) })
 }
 
 // matches reports whether the card's number, title, branch, issue or PR
