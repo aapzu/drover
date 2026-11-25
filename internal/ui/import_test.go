@@ -674,3 +674,58 @@ func TestRenderReviews(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
+	var sessions []claude.Found
+	for i := range 60 {
+		sessions = append(sessions, claude.Found{SessionID: fmt.Sprint(i), Cwd: fmt.Sprintf("/repo/d%d", i/7), Title: fmt.Sprint("title ", i)})
+	}
+	issues := func(m *Model) {
+		m.imp.source = sourceIssues
+		m.imp.items = nil
+		for i := range 100 {
+			is := issue(fmt.Sprintf("DX-%d", i))
+			m.imp.items = append(m.imp.items, importItem{issue: &is})
+		}
+	}
+	setups := map[string]func(*Model){
+		"sessions":  func(*Model) {},
+		"issues":    issues,
+		"key entry": func(m *Model) { issues(m); m.imp.keyEntry = true },
+		"error":     func(m *Model) { issues(m); m.imp.err = strings.Repeat("it broke ", 30) },
+	}
+	for name, setup := range setups {
+		for _, height := range []int{15, 25, 40} {
+			m := importModel(true, sessions...)
+			setup(&m)
+			for _, cursor := range []int{0, 1, len(m.imp.items) / 2, len(m.imp.items) - 1} {
+				m.imp.cursor = cursor
+				got := ansi.Strip(m.renderImport(height))
+				if h := lipgloss.Height(got); h > height {
+					t.Errorf("%s, height %d, cursor %d: view is %d lines tall:\n%s", name, height, cursor, h, got)
+				}
+				if !strings.Contains(got, "▸") {
+					t.Errorf("%s, height %d, cursor %d: the cursor is out of view:\n%s", name, height, cursor, got)
+				}
+			}
+		}
+	}
+}
+
+func TestRenderImportShowsHowMuchIsOffScreen(t *testing.T) {
+	m := importModel(false)
+	m.imp.source = sourceIssues
+	for i := range 50 {
+		is := issue(fmt.Sprintf("DX-%d", i))
+		m.imp.items = append(m.imp.items, importItem{issue: &is})
+	}
+	m.imp.cursor = 25
+	got := ansi.Strip(m.renderImport(30))
+	if !strings.Contains(got, "↑") || !strings.Contains(got, "↓") || !strings.Contains(got, "DX-26") {
+		t.Errorf("the list should show context on both sides of the cursor:\n%s", got)
+	}
+	m.imp.items = m.imp.items[:2]
+	if got := ansi.Strip(m.renderImport(30)); strings.Contains(got, "above") || strings.Contains(got, "below") {
+		t.Errorf("a list that fits needs no scroll indicator:\n%s", got)
+	}
+}

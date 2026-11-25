@@ -419,6 +419,102 @@ func ago(t time.Time) string {
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
+// height is the lines an item takes: a header one, anything else a label over
+// a detail.
+func (it importItem) height() int {
+	if it.isHeader() {
+		return 1
+	}
+	return 2
+}
+
+// itemLines renders the item at index i, with the cursor marker if it is there.
+func (s importState) itemLines(i, inner int) []string {
+	it := s.items[i]
+	check := "[ ]"
+	if it.selected {
+		check = idle.Render("[x]")
+	}
+	pointer := "  "
+	if i == s.cursor {
+		pointer = "▸ "
+	}
+	if it.isHeader() {
+		group := s.group(i)
+		picked := 0
+		for _, g := range group {
+			if g.selected {
+				picked++
+			}
+		}
+		switch {
+		case picked == len(group):
+			check = idle.Render("[x]")
+		case picked > 0:
+			check = idle.Render("[-]")
+		}
+		line := pointer + check + " " + bold.Render(it.header) + dim.Render(fmt.Sprintf("  %d", len(group)))
+		return []string{ansi.Truncate(line, inner, "…")}
+	}
+	var label, detail string
+	if s := it.session; s != nil {
+		state := dim.Render(ago(s.Updated))
+		if s.Running {
+			state = thinking.Render("● running")
+			if !s.Busy {
+				state = idle.Render("● running · idle")
+			}
+		}
+		label = s.Title
+		detail = state + dim.Render("  "+s.Branch)
+	} else if is := it.issue; is != nil {
+		label = bold.Render(is.Key) + " " + is.Title
+		detail = dim.Render(strings.TrimSpace(is.State + "  " + is.Branch))
+	} else if r := it.review; r != nil {
+		label = bold.Render(fmt.Sprintf("#%d", r.Number)) + " " + r.Title
+		detail = "@" + r.Author.Login
+		if r.IsDraft {
+			detail += " · draft"
+		}
+		detail = dim.Render(detail + "  " + r.URL)
+	}
+	line := pointer + check + " " + label
+	if i == s.cursor {
+		line = bold.Render(pointer+check+" ") + label
+	}
+	indent := ""
+	if it.session != nil || it.review != nil {
+		indent = "  "
+	}
+	return []string{ansi.Truncate(indent+line, inner, "…"), indent + "      " + ansi.Truncate(detail, inner-6-len(indent), "…")}
+}
+
+// window picks the items [start, end) that fit in budget lines with the cursor
+// in view, keeping about half of them above it and filling any slack at the
+// ends of the list.
+func (s importState) window(budget int) (start, end int) {
+	n := len(s.items)
+	if n == 0 {
+		return 0, 0
+	}
+	cursor := clamp(s.cursor, 0, n-1)
+	budget = max(budget, s.items[cursor].height())
+	start, end, used := cursor, cursor+1, s.items[cursor].height()
+	for start > 0 && used+s.items[start-1].height() <= budget/2 {
+		start--
+		used += s.items[start].height()
+	}
+	for end < n && used+s.items[end].height() <= budget {
+		used += s.items[end].height()
+		end++
+	}
+	for start > 0 && used+s.items[start-1].height() <= budget {
+		start--
+		used += s.items[start].height()
+	}
+	return start, end
+}
+
 func (m Model) renderImport(height int) string {
 	imp := m.imp
 	width := min(120, m.width-4)
@@ -429,91 +525,30 @@ func (m Model) renderImport(height int) string {
 		}
 		return dim.Render(" " + name + " ")
 	}
-	lines := []string{
+	head := []string{
 		tab("Claude sessions", imp.source == sourceClaude) + "  " + tab(m.eng.TrackerName(), imp.source == sourceIssues) + "  " + tab("Reviews", imp.source == sourceReviews),
 		"",
 	}
 	switch {
 	case imp.loading:
-		lines = append(lines, thinking.Render(spinner[m.frame%len(spinner)]+" loading…"))
+		head = append(head, thinking.Render(spinner[m.frame%len(spinner)]+" loading…"))
 	case imp.err != "":
-		lines = append(lines, needsYou.Render(ansi.Wordwrap(imp.err, inner, " ")))
+		head = append(head, needsYou.Render(ansi.Wordwrap(imp.err, inner, " ")))
 	case len(imp.items) == 0 && imp.source == sourceClaude:
-		lines = append(lines, dim.Render("No running agents or `claude agents` sessions for this repository that aren't on the board yet."))
+		head = append(head, dim.Render("No running agents or `claude agents` sessions for this repository that aren't on the board yet."))
 	case len(imp.items) == 0 && imp.source == sourceReviews:
-		lines = append(lines, dim.Render("No open PRs to review that aren't on the board yet. Press / to fetch one by URL."))
+		head = append(head, dim.Render("No open PRs to review that aren't on the board yet. Press / to fetch one by URL."))
 	case len(imp.items) == 0:
-		lines = append(lines, dim.Render("No open issues assigned to you. Press / to fetch one by key."))
+		head = append(head, dim.Render("No open issues assigned to you. Press / to fetch one by key."))
 	}
 
-	rows := max(3, height-12)
-	first := max(0, imp.cursor-rows+1)
-	for i := first; i < len(imp.items) && i < first+rows; i++ {
-		it := imp.items[i]
-		check := "[ ]"
-		if it.selected {
-			check = idle.Render("[x]")
-		}
-		pointer := "  "
-		if i == imp.cursor {
-			pointer = "▸ "
-		}
-		if it.isHeader() {
-			group := imp.group(i)
-			picked := 0
-			for _, s := range group {
-				if s.selected {
-					picked++
-				}
-			}
-			switch {
-			case picked == len(group):
-				check = idle.Render("[x]")
-			case picked > 0:
-				check = idle.Render("[-]")
-			}
-			line := pointer + check + " " + bold.Render(it.header) + dim.Render(fmt.Sprintf("  %d", len(group)))
-			lines = append(lines, ansi.Truncate(line, inner, "…"))
-			continue
-		}
-		var label, detail string
-		if s := it.session; s != nil {
-			state := dim.Render(ago(s.Updated))
-			if s.Running {
-				state = thinking.Render("● running")
-				if !s.Busy {
-					state = idle.Render("● running · idle")
-				}
-			}
-			label = s.Title
-			detail = state + dim.Render("  "+s.Branch)
-		} else if is := it.issue; is != nil {
-			label = bold.Render(is.Key) + " " + is.Title
-			detail = dim.Render(strings.TrimSpace(is.State + "  " + is.Branch))
-		} else if r := it.review; r != nil {
-			label = bold.Render(fmt.Sprintf("#%d", r.Number)) + " " + r.Title
-			detail = "@" + r.Author.Login
-			if r.IsDraft {
-				detail += " · draft"
-			}
-			detail = dim.Render(detail + "  " + r.URL)
-		}
-		line := pointer + check + " " + label
-		if i == imp.cursor {
-			line = bold.Render(pointer+check+" ") + label
-		}
-		indent := ""
-		if it.session != nil || it.review != nil {
-			indent = "  "
-		}
-		lines = append(lines, ansi.Truncate(indent+line, inner, "…"), indent+"      "+ansi.Truncate(detail, inner-6-len(indent), "…"))
-	}
+	var tail []string
 	if imp.keyEntry {
 		prompt := "Issue › "
 		if imp.source == sourceReviews {
 			prompt = "PR › "
 		}
-		lines = append(lines, "", prompt+imp.keyInput.View())
+		tail = append(tail, "", prompt+imp.keyInput.View())
 	}
 	hint := "space select · a all · enter import · tab switch source · esc close"
 	if imp.more {
@@ -529,12 +564,37 @@ func (m Model) renderImport(height int) string {
 	if imp.source == sourceReviews {
 		hint = "space select · a all · / fetch by URL · enter import · tab switch · esc close"
 	}
-	lines = append(lines, "", dim.Render(hint))
+	tail = append(tail, "", dim.Render(hint))
 	if imp.source == sourceClaude {
-		lines = append(lines, dim.Render("Running agents keep running where they are; the card mirrors them until they exit."))
+		tail = append(tail, dim.Render("Running agents keep running where they are; the card mirrors them until they exit."))
 	}
 	if imp.source == sourceReviews {
-		lines = append(lines, dim.Render("No agent starts; enter on a card, or moving it to an agent column, reviews the PR."))
+		tail = append(tail, dim.Render("No agent starts; enter on a card, or moving it to an agent column, reviews the PR."))
 	}
+
+	// The modal's border and padding take 4 lines.
+	budget := height - 4 - lipgloss.Height(strings.Join(head, "\n")) - lipgloss.Height(strings.Join(tail, "\n"))
+	start, end := imp.window(budget)
+	var more string
+	if start > 0 || end < len(imp.items) {
+		start, end = imp.window(budget - 1)
+		var parts []string
+		if start > 0 {
+			parts = append(parts, fmt.Sprintf("↑ %d above", start))
+		}
+		if end < len(imp.items) {
+			parts = append(parts, fmt.Sprintf("↓ %d below", len(imp.items)-end))
+		}
+		more = dim.Render(strings.Join(parts, " · "))
+	}
+
+	lines := head
+	for i := start; i < end; i++ {
+		lines = append(lines, imp.itemLines(i, inner)...)
+	}
+	if more != "" {
+		lines = append(lines, more)
+	}
+	lines = append(lines, tail...)
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }
