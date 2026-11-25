@@ -2,8 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/aapzu/drover/internal/engine"
 )
@@ -154,24 +158,141 @@ func TestArchiveAllIgnoresHiddenCards(t *testing.T) {
 	}
 }
 
-func TestHideKeys(t *testing.T) {
+type fakeArchiver struct {
+	fakeEngine
+	err   error
+	calls []archiveCall
+}
+
+type archiveCall struct{ archive, force bool }
+
+func (f *fakeArchiver) ArchiveTask(id string, archive, force bool) error {
+	f.calls = append(f.calls, archiveCall{archive, force})
+	if f.err != nil && !force {
+		return f.err
+	}
+	return nil
+}
+
+// archived runs the command and feeds its result back to the model.
+func archived(t *testing.T, m Model, cmd tea.Cmd) (Model, actionDoneMsg) {
+	t.Helper()
+	done, ok := cmd().(actionDoneMsg)
+	if !ok {
+		t.Fatalf("archive returned %T", cmd())
+	}
+	m, _ = update(m, done)
+	return m, done
+}
+
+func TestArchiveKeyArchivesAndRestoresADoneCard(t *testing.T) {
+	m := realModel(t, "a")
+	card := m.snap.Tasks[0]
+	if err := m.eng.Move(card.ID, "done", engine.MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	m.snap = m.eng.Snapshot()
+	m.col = 4
+
+	m, cmd := update(m, key("A"))
+	m, done := archived(t, m, cmd)
+	if done.err != nil || m.flash != "Archived #1. v shows archived cards." || len(m.tasksForColumn(4)) != 0 {
+		t.Fatalf("archive: err %v flash %q cards left %d", done.err, m.flash, len(m.tasksForColumn(4)))
+	}
+
+	m, _ = update(m, key("v"))
+	m, cmd = update(m, key("A"))
+	m, done = archived(t, m, cmd)
+	if done.err != nil || m.flash != "Restored #1" {
+		t.Fatalf("restore: err %v flash %q", done.err, m.flash)
+	}
+	m, _ = update(m, key("v"))
+	if got := m.tasksForColumn(4); len(got) != 1 || got[0].Archived {
+		t.Errorf("the restored card is not back on the board: %v", titles(got))
+	}
+}
+
+func TestArchivingAWorktreeWithUncommittedChangesAsksBeforeDeletingIt(t *testing.T) {
+	press := func(t *testing.T, k string) (calls []archiveCall, cardBusy bool) {
+		t.Helper()
+		m := testModel(120, 40, 1, 1)
+		eng := &fakeArchiver{err: engine.ErrDirty}
+		cmd := archiveCard(eng, m.busy, "c0-t0", 1, true, false)
+		m, _ = archived(t, m, cmd)
+		if m.mode != modeConfirm || !strings.Contains(m.confirmText, "uncommitted changes") {
+			t.Fatalf("mode %v text %q, want the confirmation", m.mode, m.confirmText)
+		}
+		m, cmd = update(m, key(k))
+		if cmd != nil {
+			m, _ = archived(t, m, cmd)
+		}
+		return eng.calls, m.mode != modeBoard
+	}
+
+	calls, stillOpen := press(t, "y")
+	if want := []archiveCall{{true, false}, {true, true}}; !slices.Equal(calls, want) || stillOpen {
+		t.Errorf("y: engine calls %v, want a forced retry %v", calls, want)
+	}
+	calls, _ = press(t, "n")
+	if want := []archiveCall{{true, false}}; !slices.Equal(calls, want) {
+		t.Errorf("n: engine calls %v, want only the first, unforced one", calls)
+	}
+}
+
+func TestArchiveAllInDoneAsksThenArchivesEveryCard(t *testing.T) {
+	m := realModel(t, "a", "b")
+	for _, c := range m.snap.Tasks {
+		if err := m.eng.Move(c.ID, "done", engine.MoveOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.snap = m.eng.Snapshot()
+	m.col = 4
+
+	m, _ = update(m, key("C"))
+	if m.mode != modeConfirm || !strings.Contains(m.confirmText, "all 2 cards") {
+		t.Fatalf("mode %v text %q", m.mode, m.confirmText)
+	}
+	m, cmd := update(m, key("y"))
+	snap, ok := cmd().(snapMsg)
+	if !ok {
+		t.Fatalf("y returned %T, want the new snapshot", cmd())
+	}
+	m, _ = update(m, snap)
+	if got := m.tasksForColumn(4); len(got) != 0 {
+		t.Errorf("%d cards still on the board after archiving the column", len(got))
+	}
+}
+
+func TestPinnedCardsListFirst(t *testing.T) {
+	m := testModel(120, 40, 1, 4)
+	now := time.Now()
+	for i, task := range m.snap.Tasks {
+		task.UpdatedAt = now.Add(time.Duration(i) * time.Minute)
+	}
+	order := func() []int {
+		var nums []int
+		for _, task := range m.tasksIn("c0") {
+			nums = append(nums, task.Number)
+		}
+		return nums
+	}
+	if got := order(); !slices.Equal(got, []int{4, 3, 2, 1}) {
+		t.Fatalf("unpinned order = %v", got)
+	}
+	m.snap.Tasks[0].Pinned, m.snap.Tasks[1].Pinned = true, true
+	if got := order(); !slices.Equal(got, []int{2, 1, 4, 3}) {
+		t.Errorf("pinned order = %v, want the pinned cards first, newest first", got)
+	}
+}
+
+func TestPinKey(t *testing.T) {
 	m := archiveModel(t)
-
-	if _, cmd := m.updateBoard(key("b")); cmd == nil {
-		t.Error("b on a card didn't start hiding it")
+	if _, cmd := m.updateBoard(key("P")); cmd == nil {
+		t.Error("P on a card didn't start pinning it")
 	}
-
-	next, _ := m.updateBoard(key("B"))
-	if !next.(Model).prefs.ShowHidden {
-		t.Error("B didn't show hidden cards")
-	}
-	next, _ = next.(Model).updateBoard(key("B"))
-	if next.(Model).prefs.ShowHidden {
-		t.Error("second B didn't hide them again")
-	}
-
 	m.snap.Tasks = nil
-	if _, cmd := m.updateBoard(key("b")); cmd != nil {
-		t.Error("b with no card selected did something")
+	if _, cmd := m.updateBoard(key("P")); cmd != nil {
+		t.Error("P with no card selected did something")
 	}
 }

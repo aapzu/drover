@@ -1,8 +1,11 @@
 package inbox
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -137,6 +140,70 @@ func TestNextDropsOnlyStaleResultsAndTempFiles(t *testing.T) {
 	}
 	if !exists(path(root, "new", resultExt)) {
 		t.Error("fresh result dropped")
+	}
+}
+
+func TestNextHandsEachRequestToOnlyOneBoard(t *testing.T) {
+	root := project(t)
+	const requests = 20
+	for range requests {
+		if _, err := Send(root, titled("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var (
+		mu      sync.Mutex
+		claimed []string
+		wg      sync.WaitGroup
+	)
+	for range 4 {
+		wg.Go(func() {
+			for range 10 * requests {
+				p, ok, err := Next(root)
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if !ok {
+					return
+				}
+				mu.Lock()
+				claimed = append(claimed, p.ID)
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	slices.Sort(claimed)
+	total, distinct := len(claimed), len(slices.Compact(claimed))
+	if total != requests || distinct != requests {
+		t.Errorf("claimed %d requests (%d distinct), want %d each handed out once", total, distinct, requests)
+	}
+}
+
+func TestWaitReportsAnUnreadableAnswerAndDropsIt(t *testing.T) {
+	root := project(t)
+	os.MkdirAll(dir(root), 0o755)
+	os.WriteFile(path(root, "1", resultExt), []byte("{nope"), 0o644)
+	if _, ok, err := Wait(root, "1", time.Second, nil); ok || err == nil {
+		t.Errorf("Wait = %v, %v, want an error", ok, err)
+	}
+	if exists(path(root, "1", resultExt)) {
+		t.Error("the unreadable answer was kept")
+	}
+}
+
+func TestFailedReplyLeavesNoTempFile(t *testing.T) {
+	root := project(t)
+	os.MkdirAll(path(root, "1", resultExt), 0o755)
+	if err := Reply(root, "1", Result{}); err == nil {
+		t.Fatal("Reply succeeded over a directory")
+	}
+	if exists(path(root, "1", resultExt) + tmpExt) {
+		t.Error("temp file left behind")
 	}
 }
 

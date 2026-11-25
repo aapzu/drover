@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -408,6 +411,168 @@ func (e *Engine) ImportIssues(issues []Issue) []*store.Task {
 		})
 	}
 	return added
+}
+
+// ReviewPR is an open pull request by someone else that you could import to
+// review. Reviewed is set when you have reviewed it and it doesn't await
+// your review again.
+type ReviewPR struct {
+	gh.Found
+	Reviewed bool
+}
+
+// ReviewPRs lists the open pull requests in this repo and reviewRepos that
+// await your review, then the ones you have reviewed, leaving out your own
+// and those on the board. With teamReviewRequests on, requests to your teams
+// count too.
+func (e *Engine) ReviewPRs() ([]ReviewPR, error) {
+	e.mu.Lock()
+	extra, teams := slices.Clone(e.board.ReviewRepos), e.board.TeamReviewRequests
+	e.mu.Unlock()
+	me, err := e.login()
+	if err != nil {
+		return nil, err
+	}
+	repo, err := gh.Repo(e.Root)
+	if err != nil {
+		return nil, err
+	}
+	repos := []string{repo}
+	for _, r := range extra {
+		if !slices.ContainsFunc(repos, func(have string) bool { return strings.EqualFold(have, r) }) {
+			repos = append(repos, r)
+		}
+	}
+	requested := []string{"user-review-requested:@me"}
+	if teams {
+		requested = []string{"--review-requested=@me"}
+	}
+	var asked, reviewed []gh.Found
+	var askErr, reviewErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { asked, askErr = gh.Search(e.Root, repos, requested...) })
+	wg.Go(func() { reviewed, reviewErr = gh.Search(e.Root, repos, "--reviewed-by=@me") })
+	wg.Wait()
+	if err := errors.Join(askErr, reviewErr); err != nil {
+		return nil, err
+	}
+	return e.withoutReviewing(me, asked, reviewed), nil
+}
+
+// withoutReviewing lists requested and then reviewed as ReviewPRs, once each
+// and without your own or those already on the board.
+func (e *Engine) withoutReviewing(me string, requested, reviewed []gh.Found) []ReviewPR {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	skip := map[string]bool{}
+	for _, t := range e.state.Tasks {
+		if t.PR != nil {
+			skip[t.PR.URL] = true
+		}
+	}
+	var out []ReviewPR
+	add := func(found []gh.Found, done bool) {
+		for _, f := range found {
+			if skip[f.URL] || strings.EqualFold(f.Author.Login, me) {
+				continue
+			}
+			skip[f.URL] = true
+			out = append(out, ReviewPR{Found: f, Reviewed: done})
+		}
+	}
+	add(requested, false)
+	add(reviewed, true)
+	return out
+}
+
+// ReviewPRByURL fetches one open pull request by someone else by its URL.
+func (e *Engine) ReviewPRByURL(ref string) (ReviewPR, error) {
+	url := strings.TrimSpace(ref)
+	if !gh.IsURL(url) {
+		return ReviewPR{}, fmt.Errorf("%q is not a pull request URL", ref)
+	}
+	me, err := e.login()
+	if err != nil {
+		return ReviewPR{}, err
+	}
+	info, err := gh.View(e.Root, url)
+	switch {
+	case err != nil:
+		return ReviewPR{}, err
+	case strings.EqualFold(info.Author.Login, me):
+		return ReviewPR{}, fmt.Errorf("PR #%d is yours", gh.Number(url))
+	case info.State != "OPEN":
+		return ReviewPR{}, fmt.Errorf("PR #%d is %s", gh.Number(url), strings.ToLower(info.State))
+	}
+	found := gh.Found{Number: gh.Number(url), Title: info.Title, URL: url, Author: info.Author}
+	return ReviewPR{Found: found, Reviewed: !info.ReviewedBy(me).SubmittedAt.IsZero()}, nil
+}
+
+// ImportReviews adds a review card per pull request not already on the board
+// and returns the cards it added. A PR awaiting your review lands in the
+// reviewFlow's requested column, one you have reviewed in its reviewed column.
+// No agent starts; the prompt reviews the PR once you start one. The PR's
+// state stays empty, so its first refresh only records a review already
+// there and moves nothing.
+func (e *Engine) ImportReviews(prs []ReviewPR) []*store.Task {
+	var added []*store.Task
+	for _, p := range prs {
+		e.with(func() {
+			for _, t := range e.state.Tasks {
+				if t.PR != nil && t.PR.URL == p.URL {
+					return
+				}
+			}
+			now := time.Now()
+			t := &store.Task{
+				ID:        uuid.NewString(),
+				Number:    e.state.NextNumber,
+				Title:     "Review: " + p.Title,
+				Prompt:    "/code-review " + p.URL,
+				ColumnID:  e.board.ReviewImport(p.Reviewed).ID,
+				PR:        &store.PR{URL: p.URL, Number: p.Number, Title: p.Title, Author: p.Author.Login, Review: true},
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			e.state.NextNumber++
+			t.AddLog(fmt.Sprintf("Imported PR #%d to review", p.Number))
+			e.state.Tasks = append(e.state.Tasks, t)
+			added = append(added, t)
+		})
+	}
+	return added
+}
+
+// ReviewLevels are the levels /code-review takes before its target.
+var ReviewLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+var unleveledReview = regexp.MustCompile(`^/code-review (https?://\S+)$`)
+
+// UnleveledReview reports whether t is a review card whose agent never started
+// and whose prompt runs /code-review without a level, so starting it should
+// ask for one.
+func UnleveledReview(t *store.Task) bool {
+	return t.PR.IsReview() && t.GroupID == "" && len(t.Sessions) == 0 && unleveledReview.MatchString(t.Prompt)
+}
+
+// SetReviewLevel puts level into the /code-review prompt of an imported
+// review card that hasn't started.
+func (e *Engine) SetReviewLevel(id, level string) error {
+	if !slices.Contains(ReviewLevels, level) {
+		return fmt.Errorf("%q is not a review level", level)
+	}
+	var err error
+	e.with(func() {
+		t := e.find(id)
+		if t == nil || !UnleveledReview(t) {
+			err = errors.New("the review has started already")
+			return
+		}
+		url := unleveledReview.FindStringSubmatch(t.Prompt)[1]
+		t.Prompt = fmt.Sprintf("/code-review %s %s", level, url)
+		t.AddLog(fmt.Sprintf("Review level: %s", level))
+	})
+	return err
 }
 
 // syncIssueStarted moves the task's Linear issue to a started state when an

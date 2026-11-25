@@ -29,9 +29,9 @@ const sample = `{
 }`
 
 func TestLoadSampleBoard(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	os.WriteFile(filepath.Join(dir, "drover.local.json"), []byte(`{"defaultBaseBranch":"develop"}`), 0o644)
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	writeLayer(t, dir, Project, `{"defaultBaseBranch":"develop"}`)
 
 	board, found, err := Load(dir)
 	if err != nil || !found {
@@ -44,7 +44,7 @@ func TestLoadSampleBoard(t *testing.T) {
 		t.Errorf("LegacyTodo = %v, want the dropped To Do column", board.LegacyTodo)
 	}
 	if board.DefaultBaseBranch != "develop" {
-		t.Errorf("local override not applied: %q", board.DefaultBaseBranch)
+		t.Errorf("project override not applied: %q", board.DefaultBaseBranch)
 	}
 	review, ok := board.Find("code review")
 	if !ok || len(review.Automations.OnEnter) != 1 {
@@ -53,22 +53,6 @@ func TestLoadSampleBoard(t *testing.T) {
 	exec, _ := board.Find("Executing")
 	if rows := exec.Automations.OnTurnEnd; len(rows) != 2 || rows[0].Condition != "The findings are applied" {
 		t.Errorf("turn-end automations wrong: %+v", rows)
-	}
-}
-
-func TestAutomationConditional(t *testing.T) {
-	for _, c := range []struct {
-		row  Automation
-		want bool
-	}{
-		{Automation{}, false},
-		{Automation{Condition: "done"}, true},
-		{Automation{ConditionScript: "true"}, true},
-		{Automation{Condition: "done", ConditionScript: "true"}, true},
-	} {
-		if got := c.row.Conditional(); got != c.want {
-			t.Errorf("%+v: Conditional() = %v", c.row, got)
-		}
 	}
 }
 
@@ -91,19 +75,19 @@ func TestPermissionModeFallsBackToBoardDefault(t *testing.T) {
 
 func TestReviewFlow(t *testing.T) {
 	load := func(flow string) (*Board, error) {
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
-		  {"id":"waiting","name":"Waiting"}],"reviewFlow":`+flow+`}`), 0o644)
+		dir := testRoot(t)
+		writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"},
+		  {"id":"waiting","name":"Waiting"}],"reviewFlow":`+flow+`}`)
 		board, _, err := Load(dir)
 		return board, err
 	}
-	for _, field := range []string{"started", "reviewed", "updated", "done"} {
+	for _, field := range []string{"requested", "started", "reviewed", "approved", "updated", "done"} {
 		if _, err := load(`{"` + field + `":"nowhere"}`); err == nil {
 			t.Errorf("unknown reviewFlow.%s column accepted", field)
 		}
 	}
-	board, err := load(`{"started":"Waiting","reviewed":"waiting"}`)
-	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" {
+	board, err := load(`{"started":"Waiting","reviewed":"waiting","approved":"first"}`)
+	if err != nil || board.ReviewFlow == nil || board.ReviewFlow.Started != "Waiting" || board.ReviewFlow.Reviewed != "waiting" || board.ReviewFlow.Approved != "first" {
 		t.Fatalf("reviewFlow not loaded: %+v %v", board.ReviewFlow, err)
 	}
 	if _, err := load(`{}`); err != nil {
@@ -112,21 +96,21 @@ func TestReviewFlow(t *testing.T) {
 }
 
 func TestWorktreesPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	board := `{"columns":[{"id":"first","name":"First"}]`
 	for _, tc := range []struct {
-		name, main, local, want string
+		name, main, project, want string
 	}{
 		{"default", ``, ``, filepath.Join(dir, ".drover", "worktrees")},
 		{"relative", `,"worktreesDir":".claude/worktrees"`, ``, filepath.Join(dir, ".claude", "worktrees")},
 		{"absolute", `,"worktreesDir":"/var/wt/"`, ``, "/var/wt"},
-		{"local wins", `,"worktreesDir":"a"`, `{"worktreesDir":"b"}`, filepath.Join(dir, "b")},
-		{"empty local keeps main", `,"worktreesDir":"a"`, `{"worktreesDir":""}`, filepath.Join(dir, "a")},
+		{"project wins", `,"worktreesDir":"a"`, `{"worktreesDir":"b"}`, filepath.Join(dir, "b")},
+		{"absent project key keeps global", `,"worktreesDir":"a"`, `{"maxConcurrent":2}`, filepath.Join(dir, "a")},
 	} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(board+tc.main+"}"), 0o644)
-		os.Remove(filepath.Join(dir, "drover.local.json"))
-		if tc.local != "" {
-			os.WriteFile(filepath.Join(dir, "drover.local.json"), []byte(tc.local), 0o644)
+		writeLayer(t, dir, Global, board+tc.main+"}")
+		os.Remove(Project.Path(dir))
+		if tc.project != "" {
+			writeLayer(t, dir, Project, tc.project)
 		}
 		b, _, err := Load(dir)
 		if err != nil {
@@ -139,9 +123,9 @@ func TestWorktreesPath(t *testing.T) {
 }
 
 func TestWorktreesDirMustNotContainRoot(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	for _, bad := range []string{".", "..", "./", dir, filepath.Dir(dir), "/"} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"worktreesDir":`+strconv.Quote(bad)+`,"columns":[{"id":"first","name":"First"}]}`), 0o644)
+		writeLayer(t, dir, Global, `{"worktreesDir":`+strconv.Quote(bad)+`,"columns":[{"id":"first","name":"First"}]}`)
 		if _, _, err := Load(dir); err == nil {
 			t.Errorf("worktreesDir %q accepted", bad)
 		}
@@ -152,46 +136,55 @@ func TestPRFlow(t *testing.T) {
 	if err := Default().validate(); err != nil {
 		t.Fatalf("default board: %v", err)
 	}
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"}],
-	  "prFlow":{"opened":"In Review"}}`), 0o644)
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"}],
+	  "prFlow":{"opened":"In Review"}}`)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("unknown prFlow column accepted")
 	}
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
-	  {"id":"in-review","name":"In Review"}],"prFlow":{"opened":"in review"}}`), 0o644)
+	writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"},
+	  {"id":"in-review","name":"In Review"}],"prFlow":{"opened":"in review"}}`)
 	board, _, err := Load(dir)
 	if err != nil || board.PRFlow == nil || board.PRFlow.Opened != "in review" {
 		t.Fatalf("prFlow not loaded: %+v %v", board.PRFlow, err)
 	}
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},
-	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`), 0o644)
+	writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"},
+	  {"id":"in-review","name":"In Review"}],"prFlow":{"requested":"in-review"}}`)
 	if _, _, err := Load(dir); err == nil {
 		t.Fatal("prFlow.requested without autoSpawn accepted")
 	}
 }
 
 func TestChangesRequestedMode(t *testing.T) {
+	const custom = "my own instructions"
+	proposal := (&PRFlow{}).ChangesMessage()
+	fix := (&PRFlow{ChangesRequestedMode: "fix"}).ChangesMessage()
+	if proposal == fix {
+		t.Fatal("proposing and fixing send the agent the same message")
+	}
+	if !strings.Contains(proposal, "Don't change anything") {
+		t.Errorf("the proposal message doesn't hold the agent back: %q", proposal)
+	}
 	cases := []struct {
 		name    string
 		flow    PRFlow
 		propose bool
-		message string
+		want    string
 	}{
-		{"unset proposes", PRFlow{}, true, proposeChangesMessage},
-		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposeChangesMessage},
-		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fixChangesMessage},
-		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fixChangesMessage},
-		{"own message with off mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "off"}, false, "mine"},
-		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: "mine"}, false, "mine"},
-		{"own message with propose mode", PRFlow{ChangesRequestedMessage: "mine", ChangesRequestedMode: "propose"}, true, "mine"},
+		{"unset proposes", PRFlow{}, true, proposal},
+		{"propose", PRFlow{ChangesRequestedMode: "propose"}, true, proposal},
+		{"fix", PRFlow{ChangesRequestedMode: "fix"}, false, fix},
+		{"off", PRFlow{ChangesRequestedMode: "off"}, false, fix},
+		{"own message with off mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "off"}, false, custom},
+		{"own message with unset mode keeps fixing", PRFlow{ChangesRequestedMessage: custom}, false, custom},
+		{"own message with propose mode", PRFlow{ChangesRequestedMessage: custom, ChangesRequestedMode: "propose"}, true, custom},
 	}
 	for _, c := range cases {
 		if got := c.flow.Proposes(); got != c.propose {
 			t.Errorf("%s: Proposes() = %v", c.name, got)
 		}
-		if got := c.flow.ChangesMessage(); got != c.message {
-			t.Errorf("%s: ChangesMessage() = %q", c.name, got)
+		if got := c.flow.ChangesMessage(); got != c.want {
+			t.Errorf("%s: ChangesMessage() = %q, want %q", c.name, got, c.want)
 		}
 	}
 	if !Default().PRFlow.Proposes() {
@@ -204,13 +197,13 @@ func TestChangesRequestedMode(t *testing.T) {
 	if !(&PRFlow{ChangesRequestedMode: "off"}).Off() {
 		t.Error("Off() is false in off mode")
 	}
-	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposeChangesMessage {
+	if !nilFlow.Proposes() || nilFlow.ChangesMessage() != proposal {
 		t.Error("a missing prFlow does not propose")
 	}
-	dir := t.TempDir()
+	dir := testRoot(t)
 	for mode, valid := range map[string]bool{"propose": true, "fix": true, "off": true, "auto": false} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"}],
-		  "prFlow":{"changesRequestedMode":"`+mode+`"}}`), 0o644)
+		writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"}],
+		  "prFlow":{"changesRequestedMode":"`+mode+`"}}`)
 		board, _, err := Load(dir)
 		if valid != (err == nil) {
 			t.Fatalf("mode %q: err = %v", mode, err)
@@ -222,7 +215,7 @@ func TestChangesRequestedMode(t *testing.T) {
 }
 
 func TestKeepAgent(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	for _, tc := range []struct {
 		name, column string
 		ok           bool
@@ -231,7 +224,7 @@ func TestKeepAgent(t *testing.T) {
 		{"autoSpawn", `{"id":"in-review","name":"In review","autoSpawn":true,"keepAgent":true}`, false},
 		{"done", `{"id":"done","name":"Done","role":"done","keepAgent":true}`, false},
 	} {
-		os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[{"id":"first","name":"First"},`+tc.column+`]}`), 0o644)
+		writeLayer(t, dir, Global, `{"columns":[{"id":"first","name":"First"},`+tc.column+`]}`)
 		board, _, err := Load(dir)
 		if (err == nil) != tc.ok {
 			t.Fatalf("%s: loaded = %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
@@ -260,9 +253,9 @@ func TestParseAge(t *testing.T) {
 }
 
 func TestArchiveDoneAfter(t *testing.T) {
-	root := t.TempDir()
+	root := testRoot(t)
 	write := func(after string) {
-		os.WriteFile(filepath.Join(root, FileName), []byte(`{"version":1,`+after+`"columns":[{"id":"done","name":"Done","role":"done"}]}`), 0o644)
+		writeLayer(t, root, Global, `{"version":1,`+after+`"columns":[{"id":"done","name":"Done","role":"done"}]}`)
 	}
 	write(`"archiveDoneAfter":"3d",`)
 	board, _, err := Load(root)
@@ -283,11 +276,11 @@ func TestArchiveDoneAfter(t *testing.T) {
 }
 
 func TestLegacyTodoColumnDropped(t *testing.T) {
-	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[
+	root := testRoot(t)
+	writeLayer(t, root, Global, `{"columns":[
 	  {"id":"backlog","name":"Backlog","role":"todo"},
 	  {"id":"planning","name":"Planning","autoSpawn":true}
-	]}`), 0o644)
+	]}`)
 	board, _, err := Load(root)
 	if err != nil {
 		t.Fatal(err)
@@ -295,26 +288,19 @@ func TestLegacyTodoColumnDropped(t *testing.T) {
 	if board.FirstColumn().ID != "planning" || !slices.Equal(board.LegacyTodo, []string{"backlog", "todo"}) {
 		t.Errorf("columns = %+v, legacy = %v; want Planning first and backlog dropped", board.Columns, board.LegacyTodo)
 	}
-	if err := board.Save(root); err != nil {
-		t.Fatal(err)
-	}
-	saved, _ := os.ReadFile(filepath.Join(root, FileName))
-	if strings.Contains(string(saved), "todo") || strings.Contains(string(saved), "Backlog") {
-		t.Errorf("saved board still holds the To Do column: %s", saved)
-	}
 
-	os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[{"id":"backlog","name":"Backlog","role":"todo"}]}`), 0o644)
+	writeLayer(t, root, Global, `{"columns":[{"id":"backlog","name":"Backlog","role":"todo"}]}`)
 	if _, _, err := Load(root); err == nil {
 		t.Error("a board with only a To Do column loaded")
 	}
 }
 
 func TestLoadNoWorktreeColumn(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(`{"columns":[
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, `{"columns":[
 	  {"id":"plan","name":"Planning","autoSpawn":true,"noWorktree":true},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`)
 	board, _, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -331,12 +317,12 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 		{"unset", ``, DefaultAgentModel},
 		{"board default", `,"defaultModel":"sonnet"`, "sonnet"},
 	} {
-		root := t.TempDir()
-		os.WriteFile(filepath.Join(root, FileName), []byte(`{"columns":[
+		root := testRoot(t)
+		writeLayer(t, root, Global, `{"columns":[
 		  {"id":"first","name":"First"},
 		  {"id":"planning","name":"Planning","autoSpawn":true},
 		  {"id":"executing","name":"Executing","autoSpawn":true,"modelOverride":"opus"}
-		]`+tc.board+`}`), 0o644)
+		]`+tc.board+`}`)
 		board, _, err := Load(root)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
@@ -353,18 +339,15 @@ func TestDefaultModelFillsColumns(t *testing.T) {
 	}
 }
 
-// loadJSON loads a board from drover.json and drover.local.json holding shared
-// and local. An empty one leaves its file out; with no drover.json the default
-// board loads.
-func loadJSON(t *testing.T, shared, local string) (*Board, error) {
+// loadJSON loads a board from the global and project config files holding
+// global and project. An empty one leaves its file out; with neither the
+// default board loads.
+func loadJSON(t *testing.T, global, project string) (*Board, error) {
 	t.Helper()
-	dir := t.TempDir()
-	for name, content := range map[string]string{FileName: shared, LocalFileName: local} {
-		if content == "" {
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
+	dir := testRoot(t)
+	for layer, content := range map[Layer]string{Global: global, Project: project} {
+		if content != "" {
+			writeLayer(t, dir, layer, content)
 		}
 	}
 	board, _, err := Load(dir)
@@ -372,7 +355,7 @@ func loadJSON(t *testing.T, shared, local string) (*Board, error) {
 }
 
 func TestDefaultBoard(t *testing.T) {
-	board, found, err := Load(t.TempDir())
+	board, found, err := Load(testRoot(t))
 	if err != nil || found || len(board.Columns) == 0 {
 		t.Fatalf("got found=%v err=%v cols=%d", found, err, len(board.Columns))
 	}
@@ -387,10 +370,6 @@ func TestDefaultBoard(t *testing.T) {
 			t.Errorf("column %q NoWorktree = %v, want %v", c.ID, c.NoWorktree, want)
 		}
 	}
-	if err := Default().validate(); err != nil {
-		t.Errorf("default board: %v", err)
-	}
-
 	col, _, ok := Default().Column("executing")
 	if !ok || len(col.Automations.OnTurnEnd) != 1 {
 		t.Fatalf("default executing column has no turn-end rule: %+v", col)
@@ -409,23 +388,33 @@ func TestDefaultBoardHasReviewLane(t *testing.T) {
 			lane = append(lane, c.ID)
 		}
 	}
-	if want := []string{"reviewing", "triage", "waiting-on-author"}; !slices.Equal(lane, want) {
+	if want := []string{"review-requested", "reviewing", "triage", "waiting-on-author", "review-done"}; !slices.Equal(lane, want) {
 		t.Errorf("review lane = %v, want %v", lane, want)
 	}
 	f := board.ReviewFlow
 	if f == nil {
 		t.Fatal("default board has no reviewFlow")
 	}
-	for name, ref := range map[string]string{"started": f.Started, "reviewed": f.Reviewed, "updated": f.Updated, "done": f.Done} {
+	for name, ref := range map[string]string{"requested": f.Requested, "started": f.Started, "reviewed": f.Reviewed, "approved": f.Approved, "updated": f.Updated, "done": f.Done} {
 		if _, ok := board.Find(ref); !ok {
 			t.Errorf("reviewFlow.%s = %q names no column", name, ref)
 		}
 	}
+	if c, _ := board.Find(f.Approved); !c.IsDone() {
+		t.Errorf("reviewFlow.approved = %q is not a Done column", f.Approved)
+	}
 	if c, _ := board.Find(f.Done); !c.IsDone() {
 		t.Errorf("reviewFlow.done = %q is not a Done column", f.Done)
 	}
-	if c, _ := board.Find(f.Updated); len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
+	c, _ := board.Find(f.Updated)
+	if len(c.Automations.OnEnter) != 1 || !strings.Contains(c.Automations.OnEnter[0].Message, "{{prUrl}}") {
 		t.Errorf("reviewFlow.updated column doesn't ask for a re-review on entry: %+v", c.Automations)
+	}
+	if len(c.Automations.OnTurnEnd) != 1 || c.Automations.OnTurnEnd[0].Type != "move_to_column" || c.Automations.OnTurnEnd[0].TargetColumn != "triage" {
+		t.Errorf("reviewFlow.updated column doesn't move on to triage when the re-review ends: %+v", c.Automations)
+	}
+	if c, _ := board.Find(f.Requested); c.IsAgent() || !c.InReviewLane() {
+		t.Errorf("reviewFlow.requested = %q should be a plain column in the lane: %+v", f.Requested, c)
 	}
 }
 
@@ -471,13 +460,13 @@ func TestExecutingWaitsForYou(t *testing.T) {
 	}
 }
 
-func TestLocalOverlay(t *testing.T) {
+func TestLayers(t *testing.T) {
 	const done = `{"columns":[{"id":"done","name":"Done","role":"done"}]}`
 	cases := []struct {
-		name, shared, local string
-		check               func(t *testing.T, b *Board)
+		name, global, project string
+		check                 func(t *testing.T, b *Board)
 	}{
-		{"shared settings without a local file",
+		{"global settings without a project file",
 			`{"maxConcurrent":4,"notifications":{"turnDone":false},"columns":[{"id":"first","name":"First"}]}`, "",
 			func(t *testing.T, b *Board) {
 				want := DefaultNotifications()
@@ -486,7 +475,7 @@ func TestLocalOverlay(t *testing.T) {
 					t.Errorf("notifications=%+v limit=%d", b.Notifications, b.Limit())
 				}
 			}},
-		{"personal settings override the shared file",
+		{"project settings override the global file",
 			`{"maxConcurrent":4,"notifications":{"turnDone":false},"columns":[{"id":"first","name":"First"}]}`,
 			`{"maxConcurrent":2,"idleTimeoutMinutes":30,"notifications":{"exited":false,"cooldownSeconds":60}}`,
 			func(t *testing.T, b *Board) {
@@ -508,22 +497,22 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("default board does not split by PR")
 				}
 			}},
-		{"splitByPR is on when drover.json omits it", done, "",
+		{"splitByPR is on when the config omits it", done, "",
 			func(t *testing.T, b *Board) {
 				if !b.SplitByPR {
-					t.Error("drover.json without splitByPR turns splitting off")
+					t.Error("a config without splitByPR turns splitting off")
 				}
 			}},
-		{"shared splitByPR false is kept", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
+		{"global splitByPR false is kept", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
 			func(t *testing.T, b *Board) {
 				if b.SplitByPR {
-					t.Error("shared splitByPR:false is ignored")
+					t.Error("global splitByPR:false is ignored")
 				}
 			}},
-		{"local splitByPR true overrides the shared file", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"splitByPR":true}`,
+		{"project splitByPR true overrides the global file", `{"splitByPR":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"splitByPR":true}`,
 			func(t *testing.T, b *Board) {
 				if !b.SplitByPR {
-					t.Error("local splitByPR:true does not override the shared file")
+					t.Error("project splitByPR:true does not override the global file")
 				}
 			}},
 		{"disableMouse is off by default", "", "",
@@ -532,10 +521,10 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("default board disables the mouse")
 				}
 			}},
-		{"local disableMouse true overrides the shared file", `{"disableMouse":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableMouse":true}`,
+		{"project disableUpdateCheck true overrides the global file", `{"disableUpdateCheck":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableUpdateCheck":true}`,
 			func(t *testing.T, b *Board) {
-				if !b.DisableMouse {
-					t.Error("local disableMouse:true does not override the shared file")
+				if !b.DisableUpdateCheck {
+					t.Error("project disableUpdateCheck:true does not override the global file")
 				}
 			}},
 		{"issue tracker is Linear by default", "", "",
@@ -544,48 +533,109 @@ func TestLocalOverlay(t *testing.T) {
 					t.Errorf("default tracker = %q", b.Tracker())
 				}
 			}},
-		{"shared issueTracker github", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
+		{"global issueTracker github", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
 			func(t *testing.T, b *Board) {
 				if b.Tracker() != TrackerGitHub {
 					t.Errorf("tracker = %q", b.Tracker())
 				}
 			}},
-		{"local issueTracker overrides the shared file", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"issueTracker":"linear"}`,
+		{"project issueTracker overrides the global file", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"issueTracker":"linear"}`,
 			func(t *testing.T, b *Board) {
 				if b.Tracker() != TrackerLinear {
 					t.Errorf("tracker = %q", b.Tracker())
 				}
 			}},
-		{"local column overrides apply by id",
-			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
-			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
+		{"project disableMouse true overrides the global file", `{"disableMouse":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableMouse":true}`,
 			func(t *testing.T, b *Board) {
-				a, _, ok := b.Column("a")
-				if !ok || a.Color != "#222" || a.PermissionMode != "auto" || a.ModelOverride != "opus" || a.EffortOverride != "high" || a.Name != "A" {
-					t.Errorf("a = %+v", a)
-				}
-				if c, _, _ := b.Column("b"); c.ModelOverride != "sonnet" || c.EffortOverride != "" {
-					t.Errorf("b = %+v", c)
-				}
-				if len(b.Columns) != 2 {
-					t.Errorf("columns = %d, an unknown id must not add one", len(b.Columns))
+				if !b.DisableMouse {
+					t.Error("project disableMouse:true does not override the global file")
 				}
 			}},
-		{"an empty local value keeps the shared one",
-			`{"columns":[{"id":"a","name":"A","modelOverride":"haiku"}]}`, `{"columns":[{"id":"a","modelOverride":""}]}`,
+		{"team review requests are off by default", "", "",
 			func(t *testing.T, b *Board) {
-				if a, _, _ := b.Column("a"); a.ModelOverride != "haiku" {
+				if b.TeamReviewRequests || b.ReviewRepos != nil {
+					t.Errorf("teamReviewRequests=%v reviewRepos=%q", b.TeamReviewRequests, b.ReviewRepos)
+				}
+			}},
+		{"project review settings override the global file", `{"reviewRepos":["o/a"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"teamReviewRequests":true,"reviewRepos":["o/b","o/c"]}`,
+			func(t *testing.T, b *Board) {
+				if !b.TeamReviewRequests || !slices.Equal(b.ReviewRepos, []string{"o/b", "o/c"}) {
+					t.Errorf("teamReviewRequests=%v reviewRepos=%q", b.TeamReviewRequests, b.ReviewRepos)
+				}
+			}},
+		{"global assistant MCP settings survive a project file without them", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"autoName":false}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"a"}) || !slices.Equal(b.AssistantTools, []string{"mcp__a__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"project empty assistant lists clear the global ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":[],"assistantTools":[]}`,
+			func(t *testing.T, b *Board) {
+				if len(b.AssistantPlugins) != 0 || len(b.AssistantTools) != 0 {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"project assistant MCP settings replace the global ones", `{"assistantPlugins":["a"],"assistantTools":["mcp__a__*"],"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"assistantPlugins":["b"],"assistantTools":["mcp__b__*"]}`,
+			func(t *testing.T, b *Board) {
+				if !slices.Equal(b.AssistantPlugins, []string{"b"}) || !slices.Equal(b.AssistantTools, []string{"mcp__b__*"}) {
+					t.Errorf("plugins=%q tools=%q", b.AssistantPlugins, b.AssistantTools)
+				}
+			}},
+		{"project columns replace the global ones",
+			`{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B"}],"prFlow":{"opened":"b"}}`,
+			`{"columns":[{"id":"b","name":"B2"}]}`,
+			func(t *testing.T, b *Board) {
+				if len(b.Columns) != 1 || b.Columns[0].Name != "B2" {
+					t.Errorf("columns = %+v", b.Columns)
+				}
+				if b.PRFlow == nil || b.PRFlow.Opened != "b" {
+					t.Errorf("flow was not kept from the global config: %+v", b.PRFlow)
+				}
+			}},
+		{"a project column does not inherit fields of the global column with its id",
+			`{"columns":[{"id":"a","name":"A","color":"#111","autoSpawn":true}]}`,
+			`{"columns":[{"id":"a","name":"A2"}]}`,
+			func(t *testing.T, b *Board) {
+				if a := b.Columns[0]; a.Name != "A2" || a.Color != "" || a.AutoSpawn {
 					t.Errorf("a = %+v", a)
 				}
 			}},
-		{"local columns that aren't a list are an error", "", `{"columns":{}}`, nil},
-		{"a local column setting of the wrong type is an error", "", `{"columns":[{"id":"a","color":5}]}`, nil},
-		{"a broken local file is an error", "", `{"maxConcurrent":`, nil},
-		{"a bad local notifications value is an error", "", `{"notifications":5}`, nil},
+		{"project flows replace the global ones",
+			`{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B"}],"prFlow":{"opened":"a","merged":"b"}}`,
+			`{"prFlow":{"opened":"b"}}`,
+			func(t *testing.T, b *Board) {
+				if b.PRFlow.Opened != "b" || b.PRFlow.Merged != "" {
+					t.Errorf("prFlow = %+v", b.PRFlow)
+				}
+			}},
+		{"project scalars override the global ones and absent keys keep them",
+			`{"maxConcurrent":4,"defaultModel":"opus","columns":[{"id":"a","name":"A"}]}`,
+			`{"defaultModel":"haiku","initScript":"make"}`,
+			func(t *testing.T, b *Board) {
+				if b.Limit() != 4 || b.DefaultModel != "haiku" || b.InitScript != "make" {
+					t.Errorf("limit=%d model=%q init=%q", b.Limit(), b.DefaultModel, b.InitScript)
+				}
+			}},
+		{"settings without columns keep the default board", `{"maxConcurrent":3}`, "",
+			func(t *testing.T, b *Board) {
+				if b.Limit() != 3 || len(b.Columns) != len(Default().Columns) || b.PRFlow == nil || b.ArchiveDoneAfter != "7d" {
+					t.Errorf("limit=%d columns=%d prFlow=%v archive=%q", b.Limit(), len(b.Columns), b.PRFlow, b.ArchiveDoneAfter)
+				}
+			}},
+		{"a custom board without archiveDoneAfter never archives", done, "",
+			func(t *testing.T, b *Board) {
+				if b.ArchiveAfter() != 0 {
+					t.Errorf("archive = %v", b.ArchiveAfter())
+				}
+			}},
+		{"project columns that aren't a list are an error", "", `{"columns":{}}`, nil},
+		{"a project column setting of the wrong type is an error", "", `{"columns":[{"id":"a","color":5}]}`, nil},
+		{"a broken project file is an error", "", `{"maxConcurrent":`, nil},
+		{"a bad project notifications value is an error", "", `{"notifications":5}`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			board, err := loadJSON(t, tc.shared, tc.local)
+			board, err := loadJSON(t, tc.global, tc.project)
 			if tc.check == nil {
 				if err == nil {
 					t.Error("want an error")
@@ -601,27 +651,19 @@ func TestLocalOverlay(t *testing.T) {
 }
 
 func TestStamp(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	empty := Stamp(dir)
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	writeLayer(t, dir, Global, sample)
 	shared := Stamp(dir)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":2}`), 0o644)
+	writeLayer(t, dir, Project, `{"maxConcurrent":2}`)
 	both := Stamp(dir)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":20}`), 0o644)
+	writeLayer(t, dir, Project, `{"maxConcurrent":20}`)
 	resized := Stamp(dir)
 	if empty == shared || shared == both || both == resized {
 		t.Errorf("stamps should all differ: %q %q %q %q", empty, shared, both, resized)
 	}
 	if Stamp(dir) != resized {
 		t.Error("stamp changed without the files changing")
-	}
-}
-
-func TestIsDone(t *testing.T) {
-	for role, want := range map[string]bool{"done": true, "": false, "todo": false, "Done": false} {
-		if got := (Column{Role: role}).IsDone(); got != want {
-			t.Errorf("Column{Role: %q}.IsDone() = %v, want %v", role, got, want)
-		}
 	}
 }
 
@@ -649,30 +691,15 @@ func TestFind(t *testing.T) {
 	}
 }
 
-func TestSave(t *testing.T) {
-	dir := t.TempDir()
-	if err := Default().Save(dir); err != nil {
-		t.Fatal(err)
+func TestClaudeEnv(t *testing.T) {
+	if got := (&Board{DisableMouse: true}).ClaudeEnv(); !reflect.DeepEqual(got, map[string]string{"CLAUDE_CODE_DISABLE_MOUSE": "1"}) {
+		t.Errorf("disableMouse env = %v", got)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, FileName))
-	if err != nil || !strings.HasSuffix(string(data), "}\n") {
-		t.Fatalf("saved file = %q, err %v", data, err)
-	}
-	board, found, err := Load(dir)
-	if err != nil || !found {
-		t.Fatalf("saved board does not load: found=%v err=%v", found, err)
-	}
-	var ids []string
-	for _, c := range board.Columns {
-		ids = append(ids, c.ID)
-	}
-	lane, _ := board.Find("reviewing")
-	if !slices.Equal(ids, []string{"planning", "executing", "waiting-for-me", "in-review", "done", "reviewing", "triage", "waiting-on-author"}) ||
-		board.PRFlow == nil || board.ReviewFlow == nil || !lane.InReviewLane() || board.ArchiveDoneAfter != "7d" {
-		t.Errorf("round trip lost data: ids=%v flow=%+v review=%+v archive=%q", ids, board.PRFlow, board.ReviewFlow, board.ArchiveDoneAfter)
-	}
-	if err := Default().Save(filepath.Join(dir, "missing")); err == nil {
-		t.Error("saving into a missing directory succeeded")
+	var none *Board
+	for name, b := range map[string]*Board{"off": {}, "no board": none} {
+		if got := b.ClaudeEnv(); len(got) != 0 {
+			t.Errorf("%s: env = %v, want none", name, got)
+		}
 	}
 }
 
@@ -680,16 +707,20 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 	cases := []struct {
 		name, shared, wantErr string
 	}{
-		{"not json", `{"columns":`, "parse drover.json"},
+		{"not json", `{"columns":`, "config.json"},
 		{"no columns", `{"columns":[]}`, "has no columns"},
-		{"missing columns key", `{}`, "has no columns"},
 		{"column without an id", `{"columns":[{"name":"First"}]}`, "needs an id and a name"},
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"unknown issueTracker", `{"issueTracker":"jira","columns":[{"id":"a","name":"A"}]}`, `issueTracker must be "linear" or "github"`},
+		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
+		{"reviewRepos without an owner", `{"reviewRepos":["widgets"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "widgets"`},
+		{"reviewRepos as a URL", `{"reviewRepos":["https://github.com/o/r"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "https://github.com/o/r"`},
+		{"bare mcp__ assistant tool", `{"assistantTools":["mcp__"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "mcp__"`},
+		{"empty assistant plugin id", `{"assistantPlugins":[" "],"columns":[{"id":"a","name":"A"}]}`, "assistantPlugins"},
 		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
 		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
-		{"unknown issueTracker", `{"issueTracker":"jira","columns":[{"id":"a","name":"A"}]}`, `issueTracker must be "linear" or "github"`},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
 	}
 	for _, tc := range cases {
@@ -702,11 +733,11 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		t.Errorf("a board without a done column: %+v, %v", board, err)
 	}
 
-	for _, name := range []string{FileName, LocalFileName} {
-		dir := t.TempDir()
-		os.Mkdir(filepath.Join(dir, name), 0o755)
+	for _, layer := range []Layer{Global, Project} {
+		dir := testRoot(t)
+		os.MkdirAll(layer.Path(dir), 0o755)
 		if _, _, err := Load(dir); err == nil {
-			t.Errorf("an unreadable %s loaded", name)
+			t.Errorf("an unreadable %s config loaded", layer)
 		}
 	}
 }
@@ -718,5 +749,94 @@ func TestDoneColumn(t *testing.T) {
 	}
 	if got := (&Board{Columns: []Column{{ID: "a"}}}).DoneColumn().ID; got != "" {
 		t.Errorf("DoneColumn without a done column = %q, want none", got)
+	}
+}
+
+func TestReviewEntry(t *testing.T) {
+	load := func(board string) *Board {
+		dir := testRoot(t)
+		writeLayer(t, dir, Global, board)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	const columns = `"columns":[{"id":"first","name":"First"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}]`
+	cases := []struct {
+		name, board, want string
+	}{
+		{"reviewFlow.started is ignored", `{` + columns + `,"reviewFlow":{"started":"Triage"}}`, "reviewing"},
+		{"started outside the lane", `{` + columns + `,"reviewFlow":{"started":"first"}}`, "reviewing"},
+		{"no reviewFlow", `{` + columns + `}`, "reviewing"},
+		{"plain column first", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true}]}`, "reviewing"},
+		{"no agent column", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"requested","name":"Requested","lane":"review"},
+		  {"id":"waiting","name":"Waiting","lane":"review"}]}`, "requested"},
+	}
+	for _, c := range cases {
+		got, ok := load(c.board).ReviewEntry()
+		if !ok || got.ID != c.want {
+			t.Errorf("%s: ReviewEntry = %q, %v; want %q", c.name, got.ID, ok, c.want)
+		}
+	}
+	if got, ok := Default().ReviewEntry(); !ok || got.ID != "reviewing" {
+		t.Errorf("default board ReviewEntry = %q, %v; want reviewing", got.ID, ok)
+	}
+	if _, ok := load(`{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done"}]}`).ReviewEntry(); ok {
+		t.Error("a board without a review lane has an entry column")
+	}
+}
+
+func TestReviewImport(t *testing.T) {
+	load := func(board string) *Board {
+		dir := testRoot(t)
+		writeLayer(t, dir, Global, board)
+		b, _, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	board := Default()
+	if got := board.ReviewImport(false).ID; got != "review-requested" {
+		t.Errorf("default board, requested: %q", got)
+	}
+	if got := board.ReviewImport(true).ID; got != "waiting-on-author" {
+		t.Errorf("default board, reviewed: %q", got)
+	}
+	const lane = `{"id":"first","name":"First","autoSpawn":true},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"parked","name":"Parked","lane":"review"},
+	  {"id":"waiting","name":"Waiting","lane":"review"}`
+	for _, c := range []struct {
+		name, board string
+		reviewed    bool
+		want        string
+	}{
+		{"requested by name", `{"columns":[` + lane + `],"reviewFlow":{"requested":"Waiting"}}`, false, "waiting"},
+		{"no requested target", `{"columns":[` + lane + `],"reviewFlow":{"started":"reviewing"}}`, false, "parked"},
+		{"no reviewed target", `{"columns":[` + lane + `],"reviewFlow":{"requested":"waiting"}}`, true, "parked"},
+		{"no reviewFlow", `{"columns":[` + lane + `]}`, false, "parked"},
+		{"lane of agents and Done", `{"columns":[{"id":"first","name":"First"},
+		  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+		  {"id":"rd","name":"Done","lane":"review","role":"done"}]}`, false, "first"},
+		{"no lane", `{"columns":[{"id":"first","name":"First"},{"id":"done","name":"Done","role":"done"}]}`, true, "first"},
+	} {
+		if got := load(c.board).ReviewImport(c.reviewed).ID; got != c.want {
+			t.Errorf("%s: ReviewImport(%v) = %q, want %q", c.name, c.reviewed, got, c.want)
+		}
+	}
+}
+
+func TestReReviewOnlyAfterAReview(t *testing.T) {
+	c, _, _ := Default().Column("reviewing")
+	row := c.Automations.OnEnter[0]
+	if row.ConditionScript != `test -n "$DROVER_PRREVIEWEDSHA"` || row.Message != reReviewMessage {
+		t.Errorf("Reviewing's entry row: %+v", row)
 	}
 }

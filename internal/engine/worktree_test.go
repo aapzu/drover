@@ -1,13 +1,16 @@
 package engine
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
@@ -192,6 +195,7 @@ func TestUpdateFromBaseNeedsAnIdleWorktree(t *testing.T) {
 func TestUpdateFromBaseAsksYouToStartTheAgentWhenTheBranchDiverged(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	git := func(dir string, args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
@@ -237,4 +241,188 @@ func TestShellOpensInTheMainCheckoutBeforeTheCardHasAWorktree(t *testing.T) {
 	if _, err := e.Shell("missing"); err == nil {
 		t.Error("Shell on an unknown card succeeded")
 	}
+}
+
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestUpdateFromBaseSaysWhichBranchItUsed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		origin func(t *testing.T, root string)
+		want   string
+	}{
+		"no origin means the local branch": {nil, "up to date with main"},
+		"a reachable origin": {func(t *testing.T, root string) {
+			remote := filepath.Join(t.TempDir(), "origin.git")
+			gitIn(t, root, "clone", "-q", "--bare", root, remote)
+			gitIn(t, root, "remote", "add", "origin", remote)
+		}, "up to date with origin/main"},
+		"an origin that cannot be fetched": {func(t *testing.T, root string) {
+			gitIn(t, root, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing.git"))
+		}, "up to date with local main (fetch failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _, _ := releaseRepo(t)
+			if tc.origin != nil {
+				tc.origin(t, root)
+			}
+			worktree := filepath.Join(t.TempDir(), "wt")
+			gitIn(t, root, "worktree", "add", "-q", "-b", "wt", worktree, "main")
+			e := bareEngine(t)
+			e.Root, e.isRepo = root, true
+			card := &store.Task{ID: "a", Number: 1, WorktreePath: worktree, BaseBranch: "main"}
+			e.state.Tasks = []*store.Task{card}
+
+			got, err := e.UpdateFromBase(card.ID)
+
+			if err != nil || !strings.Contains(got, tc.want) {
+				t.Errorf("UpdateFromBase = %q, %v; want it to say %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+const deferredWorktreeBoard = `{"initScript":%q,"columns":[
+  {"id":"backlog","name":"Backlog"},
+  {"id":"plan","name":"Planning","autoSpawn":true,"noWorktree":true},
+  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true%s},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+func startedInPlanning(t *testing.T, initScript, triageExtra string) (e *Engine, task *store.Task, id, log string) {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	root, log := setupProject(t)
+	writeBoard(root, []byte(fmt.Sprintf(deferredWorktreeBoard, initScript, triageExtra)))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+	task = e.CreateTask("Review it", "")
+	if err := e.Move(task.ID, "plan", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	started := waitFor(t, e, "first turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	id = started.Sessions[store.MainSession].AgentSessionID
+	transcript := claude.TranscriptPath(id, root)
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return e, task, id, log
+}
+
+func gatedInitScript(t *testing.T) (script, gate string) {
+	t.Helper()
+	gate = filepath.Join(t.TempDir(), "release")
+	t.Cleanup(func() { os.WriteFile(gate, nil, 0o644) })
+	return `while [ ! -f ` + gate + ` ]; do sleep 0.05; done`, gate
+}
+
+func releaseGate(t *testing.T, gate string) {
+	t.Helper()
+	if err := os.WriteFile(gate, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func requireInRoot(t *testing.T, e *Engine) {
+	t.Helper()
+	got := e.Snapshot().Tasks[0]
+	if s := got.Sessions[store.MainSession]; got.ColumnID != "triage" || got.WorktreePath != "" || s.Status != store.StatusRunning || s.Cwd != e.Root {
+		t.Fatalf("column %q, worktree %q, session %+v; want the card in Triage with its agent running in the root and no worktree", got.ColumnID, got.WorktreePath, s)
+	}
+}
+
+func TestReviewLaneMoveKeepsTheAgentInTheRootWhileTheWorktreeIsBuilt(t *testing.T) {
+	script, gate := gatedInitScript(t)
+	e, task, id, _ := startedInPlanning(t, script, "")
+
+	if err := e.Move(task.ID, "triage", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	requireInRoot(t, e)
+	releaseGate(t, gate)
+
+	got := waitFor(t, e, "the agent to resume in the worktree", inWorktree)
+	if s := got.Sessions[store.MainSession]; s.AgentSessionID != id {
+		t.Errorf("session id changed from %s to %s; the conversation should resume", id, s.AgentSessionID)
+	}
+	if _, err := os.Stat(claude.TranscriptPath(id, got.WorktreePath)); err != nil {
+		t.Errorf("the conversation did not follow the agent into the worktree: %v", err)
+	}
+}
+
+func TestReviewLaneMoveOfABusyAgentMovesItWhenItsTurnEnds(t *testing.T) {
+	script, gate := gatedInitScript(t)
+	e, task, id, _ := startedInPlanning(t, script, "")
+	if err := e.Send(task.ID, "SLOW"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to start", func(t *store.Task) bool {
+		return t.Sessions[store.MainSession].Activity == store.ActivityThinking
+	})
+
+	if err := e.Move(task.ID, "triage", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	releaseGate(t, gate)
+	got := waitFor(t, e, "the worktree to be built", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return t.WorktreePath != "" && s.Cwd != t.WorktreePath && s.RespawnPending
+	})
+	if s := got.Sessions[store.MainSession]; s.Cwd != e.Root || s.AgentSessionID != id {
+		t.Errorf("the busy agent was moved mid-turn: %+v", s)
+	}
+
+	got = waitFor(t, e, "the agent to resume in the worktree", func(t *store.Task) bool {
+		return inWorktree(t) && !t.Sessions[store.MainSession].RespawnPending
+	})
+	if s := got.Sessions[store.MainSession]; s.AgentSessionID != id {
+		t.Errorf("session id changed from %s to %s; the conversation should resume", id, s.AgentSessionID)
+	}
+}
+
+func TestReviewLaneMoveWithNewSettingsRestartsTheAgentOnce(t *testing.T) {
+	e, task, id, log := startedInPlanning(t, "", `,"effortOverride":"high"`)
+
+	if err := e.Move(task.ID, "triage", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the agent to resume in the worktree", inWorktree)
+	if s := got.Sessions[store.MainSession]; s.AgentSessionID != id || s.Effort != "high" {
+		t.Errorf("session %+v; want the same conversation at high effort", s)
+	}
+	waitForAll(t, e, "the resumed agent to launch", func([]*store.Task) bool {
+		return strings.Count(readFile(log), "---") >= 2
+	})
+	time.Sleep(time.Second)
+	if n := strings.Count(readFile(log), "---"); n != 2 {
+		t.Errorf("the agent launched %d times, want the first start and one resume", n)
+	}
+}
+
+func TestReviewLaneMoveWithFailingInitScriptLeavesTheAgentInTheRoot(t *testing.T) {
+	e, task, _, _ := startedInPlanning(t, "echo nope; exit 1", "")
+
+	if err := e.Move(task.ID, "triage", MoveOptions{}); err != nil {
+		t.Fatalf("Move = %v, want the move to succeed", err)
+	}
+	waitFor(t, e, "the worktree failure to be logged", func(t *store.Task) bool {
+		return slices.ContainsFunc(t.Log, func(l store.LogEntry) bool { return strings.Contains(l.Text, "the agent stays in the project root") })
+	})
+	requireInRoot(t, e)
 }

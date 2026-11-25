@@ -8,11 +8,15 @@ import (
 	"time"
 )
 
-func TestChangesRequestedAt(t *testing.T) {
-	at := func(s string) time.Time {
-		v, _ := time.Parse(time.RFC3339, s)
-		return v
+func at(s string) time.Time {
+	v, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(err)
 	}
+	return v
+}
+
+func TestChangesRequestedAtIsTheNewestChangesRequestedReview(t *testing.T) {
 	pr := PR{LatestReviews: []Review{
 		{State: "CHANGES_REQUESTED", SubmittedAt: at("2026-10-01T10:00:00Z")},
 		{State: "APPROVED", SubmittedAt: at("2026-10-03T10:00:00Z")},
@@ -25,22 +29,35 @@ func TestChangesRequestedAt(t *testing.T) {
 	if got := (PR{}).ChangesRequestedAt(); !got.IsZero() {
 		t.Errorf("no reviews: %v", got)
 	}
-	mine := func(login, state, when string) Review {
+}
+
+func TestReviewedByIsTheLoginsNewestReview(t *testing.T) {
+	by := func(login, state, when string) Review {
 		return Review{Author: Author{Login: login}, State: state, SubmittedAt: at(when)}
 	}
-	reviewed := PR{LatestReviews: []Review{
-		mine("them", "APPROVED", "2026-10-05T10:00:00Z"),
-		mine("me", "COMMENTED", "2026-10-01T10:00:00Z"),
-		mine("me", "CHANGES_REQUESTED", "2026-10-02T10:00:00Z"),
+	pr := PR{LatestReviews: []Review{
+		by("them", "APPROVED", "2026-10-05T10:00:00Z"),
+		by("me", "COMMENTED", "2026-10-01T10:00:00Z"),
+		by("me", "CHANGES_REQUESTED", "2026-10-02T10:00:00Z"),
 	}}
-	if got := reviewed.ReviewedBy("me"); got.State != "CHANGES_REQUESTED" {
+	if got := pr.ReviewedBy("me"); got.State != "CHANGES_REQUESTED" {
 		t.Errorf("ReviewedBy = %+v, want my newest review", got)
 	}
-	if got := reviewed.ReviewedBy("nobody"); !got.SubmittedAt.IsZero() {
+	if got := pr.ReviewedBy("nobody"); !got.SubmittedAt.IsZero() {
 		t.Errorf("ReviewedBy without a review: %+v", got)
 	}
-	if (PR{}).MergeOID() != "" {
-		t.Error("MergeOID without a merge commit")
+}
+
+func TestMergeOID(t *testing.T) {
+	if got := (PR{}).MergeOID(); got != "" {
+		t.Errorf("MergeOID without a merge commit = %q", got)
+	}
+	var merged PR
+	merged.MergeCommit = &struct {
+		OID string `json:"oid"`
+	}{OID: "def"}
+	if got := merged.MergeOID(); got != "def" {
+		t.Errorf("MergeOID = %q, want def", got)
 	}
 }
 
@@ -95,7 +112,9 @@ func TestNumber(t *testing.T) {
 		"https://github.com/acme/widgets/pull/42/files": 0,
 		"https://github.com/acme/widgets/issues/42":     0,
 		"https://github.com/acme/widgets/pull/":         0,
-		"":                                              0,
+		"https://github.com/acme/widgets/pull/42/":      0,
+		"https://github.com/acme/widgets/pull/42?x=1":   0,
+		"": 0,
 	} {
 		if got := Number(url); got != want {
 			t.Errorf("Number(%q) = %d, want %d", url, got, want)
@@ -104,12 +123,23 @@ func TestNumber(t *testing.T) {
 }
 
 func TestViewParsesThePullRequest(t *testing.T) {
-	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
+	fakeGh(t, `echo '{"title":"Fix it","headRefName":"fix","state":"MERGED","reviewDecision":"APPROVED","headRefOid":"abc","mergeable":"CONFLICTING","mergeCommit":{"oid":"def"},"author":{"login":"me"},"latestReviews":[{"author":{"login":"them"},"state":"APPROVED"}]}'`)
 	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+	if pr.Title != "Fix it" || pr.Branch != "fix" || pr.State != "MERGED" || pr.HeadSHA != "abc" || pr.Mergeable != "CONFLICTING" || pr.MergeOID() != "def" || pr.Author.Login != "me" || len(pr.LatestReviews) != 1 {
+		t.Errorf("View = %+v", pr)
+	}
+}
+
+func TestViewOfAnOpenPullRequestHasNoMergeCommitOrReviews(t *testing.T) {
+	fakeGh(t, `echo '{"title":"Wip","headRefName":"wip","state":"OPEN","reviewDecision":"","headRefOid":"abc","mergeCommit":null,"author":{"login":"me"}}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.MergeOID() != "" || len(pr.LatestReviews) != 0 || !pr.ChangesRequestedAt().IsZero() {
 		t.Errorf("View = %+v", pr)
 	}
 }
@@ -150,6 +180,64 @@ func TestRunWithoutGhInstalled(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := Me(t.TempDir()); err == nil {
 		t.Error("Me succeeded without gh on PATH")
+	}
+}
+
+func TestSearchScopesToTheReposAndParses(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	t.Setenv("FAKE_ARGS", args)
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+echo '[{"number":12,"title":"Fix it","url":"https://github.com/o/r/pull/12","author":{"login":"them","is_bot":false},"isDraft":true}]'`)
+	found, err := Search(dir, []string{"o/r", "o/foundation"}, "user-review-requested:@me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].Number != 12 || found[0].Title != "Fix it" || found[0].URL != "https://github.com/o/r/pull/12" || found[0].Author.Login != "them" || !found[0].IsDraft {
+		t.Errorf("Search = %+v", found)
+	}
+	argv, _ := os.ReadFile(args)
+	if want := "search prs user-review-requested:@me --repo o/r --repo o/foundation --state open --limit 100 --json number,title,url,author,isDraft\n"; string(argv) != want {
+		t.Errorf("gh was run with %q, want %q", argv, want)
+	}
+	if _, err := Search(dir, nil, "--reviewed-by=@me"); err == nil {
+		t.Error("a search without a repository should be an error")
+	}
+}
+
+func TestRepo(t *testing.T) {
+	fakeGh(t, `echo ' o/r '`)
+	if got, err := Repo(t.TempDir()); err != nil || got != "o/r" {
+		t.Errorf("Repo = %q, %v", got, err)
+	}
+	fakeGh(t, `echo 'no git remotes found' >&2; exit 1`)
+	if _, err := Repo(t.TempDir()); err == nil || !strings.Contains(err.Error(), "gh repo view: no git remotes found") {
+		t.Errorf("Repo outside a GitHub repo: %v", err)
+	}
+}
+
+func TestIsURL(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/o/r/pull/12":       true,
+		"https://ghe.example.com/o/r/pull/7":   true,
+		"https://github.com/o/r/pull/12/files": false,
+		"https://github.com/o/r/issues/12":     false,
+		"o/r#12":                               false,
+	} {
+		if got := IsURL(url); got != want {
+			t.Errorf("IsURL(%q) = %v", url, got)
+		}
+	}
+}
+
+func TestRequestedFrom(t *testing.T) {
+	fakeGh(t, `echo '{"state":"OPEN","reviewRequests":[{"__typename":"Team","name":"Infra","slug":"infra"},{"__typename":"User","login":"Me"}]}'`)
+	pr, err := View(t.TempDir(), "https://github.com/acme/widgets/pull/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pr.RequestedFrom("me") || pr.RequestedFrom("them") || pr.RequestedFrom("") {
+		t.Errorf("RequestedFrom with requests %+v", pr.ReviewRequests)
 	}
 }
 

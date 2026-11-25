@@ -194,18 +194,13 @@ func TestTagValue(t *testing.T) {
 		{"surrounded", "pre <a>x</a> post", "a", "x", true},
 		{"other tag", "<b>x</b>", "a", "", false},
 		{"empty", "<a></a>", "a", "", true},
+		{"unclosed", "<a>x", "a", "", false},
 	}
 	for _, c := range cases {
 		value, ok := tagValue(c.in, c.tag)
-		if value != c.value || ok != c.ok {
+		if ok != c.ok || (ok && value != c.value) {
 			t.Errorf("%s: tagValue(%q, %q) = %q, %v", c.name, c.in, c.tag, value, ok)
 		}
-	}
-}
-
-func TestTagValueNeedsTheClosingTag(t *testing.T) {
-	if _, ok := tagValue("<a>x", "a"); ok {
-		t.Error("an unclosed tag reported ok")
 	}
 }
 
@@ -259,14 +254,6 @@ func TestShortID(t *testing.T) {
 	}
 }
 
-func TestLiveBackground(t *testing.T) {
-	for kind, want := range map[string]bool{"bg": true, "": false, "interactive": false} {
-		if got := (Live{Kind: kind}).Background(); got != want {
-			t.Errorf("Live{Kind: %q}.Background() = %v, want %v", kind, got, want)
-		}
-	}
-}
-
 func TestProcessAliveAndTerminate(t *testing.T) {
 	if ProcessAlive(0) || ProcessAlive(-1) {
 		t.Error("a non-positive pid is not alive")
@@ -295,5 +282,132 @@ func TestProcessAliveAndTerminate(t *testing.T) {
 	}
 	if err := Terminate(cmd.Process.Pid); err != nil {
 		t.Errorf("terminating a gone process: %v", err)
+	}
+}
+
+func TestRunningListsOnlyLiveRealSessions(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	dir := filepath.Join(config, "sessions")
+	os.MkdirAll(dir, 0o755)
+	write := func(name string, l Live) {
+		b, _ := json.Marshal(l)
+		os.WriteFile(filepath.Join(dir, name+".json"), b, 0o644)
+	}
+	write("live", Live{PID: os.Getpid(), SessionID: "live-id", Status: "busy"})
+	write("dead", Live{PID: 99999999, SessionID: "dead-id"})
+	write("spare", Live{PID: os.Getpid(), SessionID: "spare-id", Spare: true})
+	write("unnamed", Live{PID: os.Getpid()})
+	os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o644)
+
+	got := Running()
+	if len(got) != 1 || !got["live-id"].Busy() {
+		t.Errorf("Running() = %+v; want only the live, non-spare session with an id", got)
+	}
+}
+
+func TestReadTranscript(t *testing.T) {
+	const cwd = "/work/app"
+	read := func(t *testing.T, lines ...string) (Found, bool) {
+		t.Helper()
+		config := t.TempDir()
+		writeTranscript(t, config, cwd, "id", lines...)
+		return readTranscript(filepath.Join(config, "projects", projectDirName(cwd), "id.jsonl"))
+	}
+
+	t.Run("a custom title beats a generated one", func(t *testing.T) {
+		f, ok := read(t, "do it", `{"type":"summary","summary":"S"}`, `{"type":"ai-title","aiTitle":"A"}`, `{"type":"agent-name","agentName":"G"}`, `{"type":"custom-title","customTitle":"C"}`)
+		if !ok || f.Title != "C" {
+			t.Errorf("title = %q, %v", f.Title, ok)
+		}
+	})
+	t.Run("then the agent name, the AI title and the summary", func(t *testing.T) {
+		for want, lines := range map[string][]string{
+			"G": {"do it", `{"type":"summary","summary":"S"}`, `{"type":"ai-title","aiTitle":"A"}`, `{"type":"agent-name","agentName":"G"}`},
+			"A": {"do it", `{"type":"summary","summary":"S"}`, `{"type":"ai-title","aiTitle":"A"}`},
+			"S": {"do it", `{"type":"summary","summary":"S"}`},
+			"":  {"do it"},
+		} {
+			if f, _ := read(t, lines...); f.Title != want {
+				t.Errorf("title = %q, want %q", f.Title, want)
+			}
+		}
+	})
+	t.Run("a detached HEAD is not a branch", func(t *testing.T) {
+		f, _ := read(t, "do it", `{"type":"user","cwd":"/work/app","gitBranch":"HEAD","message":{"content":"more"}}`)
+		if f.Branch != "feature-x" {
+			t.Errorf("branch = %q, want the last real one", f.Branch)
+		}
+	})
+	t.Run("a subagent's messages are not the session's", func(t *testing.T) {
+		f, ok := read(t, `{"type":"user","isSidechain":true,"cwd":"/elsewhere","message":{"content":"subagent task"}}`, "the real prompt")
+		if !ok || f.FirstPrompt != "the real prompt" || f.Cwd != cwd {
+			t.Errorf("found %+v, %v", f, ok)
+		}
+	})
+	t.Run("a prompt longer than the scanner's first buffer is read", func(t *testing.T) {
+		f, ok := read(t, strings.Repeat("x", 200*1024))
+		if !ok || len(f.FirstPrompt) != 200*1024 {
+			t.Errorf("long prompt: ok=%v, %d bytes", ok, len(f.FirstPrompt))
+		}
+	})
+	t.Run("a conversation with nothing typed is not a session", func(t *testing.T) {
+		if _, ok := read(t, `{"type":"user","cwd":"/work/app","message":{"content":[{"type":"tool_result"}]}}`); ok {
+			t.Error("a transcript without a prompt or title was found")
+		}
+	})
+	t.Run("a missing file", func(t *testing.T) {
+		if _, ok := readTranscript(filepath.Join(t.TempDir(), "nope.jsonl")); ok {
+			t.Error("a missing transcript was found")
+		}
+	})
+}
+
+func TestMoveTranscriptReportsWhatFailed(t *testing.T) {
+	t.Run("a directory that can't be moved still moved the transcript", func(t *testing.T) {
+		config := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", config)
+		writeTranscript(t, config, "/repo", "abc", "fix the thing")
+		from := TranscriptPath("abc", "/repo")
+		os.MkdirAll(filepath.Join(strings.TrimSuffix(from, ".jsonl"), "subagents"), 0o755)
+		taken := filepath.Join(strings.TrimSuffix(TranscriptPath("abc", "/wt"), ".jsonl"), "other")
+		os.MkdirAll(taken, 0o755)
+
+		moved, err := MoveTranscript(from, "/wt")
+		if !moved || err == nil {
+			t.Errorf("moved=%v err=%v; want the transcript moved with the directory's error", moved, err)
+		}
+		if _, err := os.Stat(TranscriptPath("abc", "/wt")); err != nil {
+			t.Errorf("the transcript is not in the new project: %v", err)
+		}
+	})
+
+	t.Run("a project directory that can't be created moves nothing", func(t *testing.T) {
+		config := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", config)
+		writeTranscript(t, config, "/repo", "abc", "fix the thing")
+		from := TranscriptPath("abc", "/repo")
+		blocker := filepath.Join(config, "projects", projectDirName("/wt"))
+		os.WriteFile(blocker, nil, 0o644)
+
+		if moved, err := MoveTranscript(from, "/wt"); moved || err == nil {
+			t.Errorf("moved=%v err=%v; want an error and no move", moved, err)
+		}
+		if _, err := os.Stat(from); err != nil {
+			t.Errorf("the transcript left its project anyway: %v", err)
+		}
+	})
+}
+
+func TestConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/custom")
+	if got := ConfigDir(); got != "/custom" {
+		t.Errorf("ConfigDir = %q, want CLAUDE_CONFIG_DIR", got)
+	}
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("HOME", home)
+	if got := ConfigDir(); got != filepath.Join(home, ".claude") {
+		t.Errorf("ConfigDir = %q, want ~/.claude", got)
 	}
 }

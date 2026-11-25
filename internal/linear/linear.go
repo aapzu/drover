@@ -111,12 +111,24 @@ func (c *Client) MyIssues(ctx context.Context) ([]Issue, error) {
 	return out.Viewer.AssignedIssues.Nodes, nil
 }
 
-var keyPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9]*-\d+`)
+const keyExpr = `[A-Za-z][A-Za-z0-9]*-\d+`
 
-// ParseKey extracts an issue key such as DX-123 from a key or issue URL.
+var (
+	issueKey = regexp.MustCompile(`/issue/(` + keyExpr + `)(?:[/?#]|$)`)
+	bareKey  = regexp.MustCompile(`^` + keyExpr + `$`)
+)
+
+// ParseKey extracts an issue key such as DX-123 from a key or issue URL. In a
+// URL only the issue segment counts, so a team slug like my-team-2 is no key.
 func ParseKey(s string) (string, bool) {
-	key := keyPattern.FindString(strings.TrimSpace(s))
-	return strings.ToUpper(key), key != ""
+	s = strings.TrimSpace(s)
+	if m := issueKey.FindStringSubmatch(s); m != nil {
+		return strings.ToUpper(m[1]), true
+	}
+	if bareKey.MatchString(s) {
+		return strings.ToUpper(s), true
+	}
+	return "", false
 }
 
 // Issue fetches one issue by key (DX-123) or id.
