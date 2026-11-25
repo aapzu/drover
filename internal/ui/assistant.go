@@ -23,7 +23,7 @@ const (
 	minAssistantWidth = 40
 
 	tooSmallForAssistant = "The terminal is too small for the assistant panel"
-	noReviewLane         = `No review lane: give columns "lane": "review" in drover.json, or W writes the default board`
+	noReviewLane         = `No review lane: give columns "lane": "review" in your config, or W writes the default board`
 )
 
 var (

@@ -28,6 +28,9 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("XDG_STATE_HOME", state); err != nil {
 		panic(err)
 	}
+	if err := os.Setenv("XDG_CONFIG_HOME", filepath.Join(state, "config")); err != nil {
+		panic(err)
+	}
 	tmux.Socket = fmt.Sprintf("kt-ui-test-%d", os.Getpid())
 	code := m.Run()
 	exec.Command("tmux", "-L", tmux.Socket, "kill-server").Run()

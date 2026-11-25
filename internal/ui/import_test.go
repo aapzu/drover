@@ -175,6 +175,7 @@ func TestGroupSessionsByDirectory(t *testing.T) {
 func importOn(t *testing.T, sessions ...claude.Found) Model {
 	t.Helper()
 	m := importModel(false, sessions...)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	eng, err := engine.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

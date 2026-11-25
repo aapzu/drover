@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- Settings now live in `~/.config/drover/config.json` and a per-repo config in the state directory instead of `drover.json` and `drover.local.json`; old repo files are imported once
+
 ## [0.15.3](https://github.com/aapzu/drover/compare/v0.15.2...v0.15.3) - 2026-11-24
 
 - Search more card fields in the board filter ([#175](https://github.com/aapzu/drover/pull/175))

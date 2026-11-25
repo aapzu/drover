@@ -131,7 +131,7 @@ func TestImportLinearIssue(t *testing.T) {
 
 func TestImportSplitsSessionThatOpenedSeveralPRs(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	writeBoard(root, []byte(prBoard))
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	e, err := New(root)
 	if err != nil {

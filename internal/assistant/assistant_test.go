@@ -83,6 +83,7 @@ func flagValue(argv []string, flag string) string {
 func newRoot(t *testing.T) string {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	return filepath.Join(t.TempDir(), "repo")
 }
 
@@ -294,8 +295,10 @@ func TestDocsWriteFailureChangesNothing(t *testing.T) {
 
 func TestAskReadsTheBoardFromTheRepoAndGivesClaudeADeadline(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(`{"columns":[{"id":"backlog","name":"Backlog"},{"id":"qa","name":"QA lane","autoSpawn":true}]}`), 0o644); err != nil {
+	os.MkdirAll(filepath.Dir(config.ProjectPath(root)), 0o755)
+	if err := os.WriteFile(config.ProjectPath(root), []byte(`{"columns":[{"id":"backlog","name":"Backlog"},{"id":"qa","name":"QA lane","autoSpawn":true}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var deadline time.Time
@@ -320,6 +323,7 @@ func TestAskReadsTheBoardFromTheRepoAndGivesClaudeADeadline(t *testing.T) {
 
 func TestAskReportsWhatWentWrong(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 
 	fakeClaude(t, "  \n", nil)
@@ -343,6 +347,7 @@ func TestAskReportsWhatWentWrong(t *testing.T) {
 
 func TestAnswerSurvivesAFailedSave(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(store.Dir(root), sessionFile+".tmp"), 0o755); err != nil {
 		t.Fatal(err)
@@ -356,6 +361,7 @@ func TestAnswerSurvivesAFailedSave(t *testing.T) {
 
 func TestQuestionsTakeTurns(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	orig := runClaude
 	t.Cleanup(func() { runClaude = orig })
@@ -448,6 +454,7 @@ func TestStartOpensOneInteractiveSessionAndSavesItsConversation(t *testing.T) {
 
 func TestSessionNameIsSafeAndPerProject(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	a, b := SessionName("/work/a/my repo.x"), SessionName("/work/b/my repo.x")
 	if a == b {
 		t.Errorf("two repos named alike share %q", a)
@@ -459,6 +466,7 @@ func TestSessionNameIsSafeAndPerProject(t *testing.T) {
 
 func TestRealTranscriptLookupFollowsClaudesProjectDir(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	stubTranscript(t, true, nil)
 	hasTranscript = realHasTranscript
@@ -882,7 +890,7 @@ func TestFreshKeepsTheConversationWhenTheQuestionCannotRun(t *testing.T) {
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", false); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(root, config.FileName), []byte("{"), 0o644)
+	os.WriteFile(config.ProjectPath(root), []byte("{"), 0o644)
 	before := SessionID(root)
 	if _, err := Ask(context.Background(), root, "/bin/drover", "q", true); err == nil {
 		t.Fatal("expected the broken board to fail the question")
@@ -1059,11 +1067,11 @@ func TestAssistantMCPSettingsComeFromTheBoardAndOnlyAddAllowRules(t *testing.T) 
 	ask := func(t *testing.T) []string {
 		fakePanel(t)
 		root := newRoot(t)
-		if err := os.MkdirAll(root, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(config.ProjectPath(root)), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		data := `{"assistantPlugins":["` + plugin + `"],"assistantTools":["` + tool + `"],"columns":[{"id":"a","name":"A"}]}`
-		if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(data), 0o644); err != nil {
+		if err := os.WriteFile(config.ProjectPath(root), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		return askArgv(t, root)

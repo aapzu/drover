@@ -81,18 +81,11 @@ reports (for example with `disableMouse`), the wheel sends it `pgup` /
 
 ## Columns
 
-A board is a row of columns defined in `drover.json`. Each card sits in one of
-them, and where it sits decides what happens to its agent and worktree. Columns
-live in `drover.json`. `drover.local.json` can override a column's `color`,
-`permissionMode`, `modelOverride` and `effortOverride` by `id`, for your own
-settings only:
-
-```json
-{ "columns": [{ "id": "executing", "modelOverride": "opus", "effortOverride": "high" }] }
-```
-
-An override for an `id` the board doesn't have is ignored, and an empty value
-doesn't clear the shared one. `O` edits column settings in both files; see
+A board is a row of columns defined in your [config](#where-settings-live).
+Each card sits in one of them, and where it sits decides what happens to its
+agent and worktree. Each of `columns`, `prFlow` and
+`reviewFlow` comes whole from the highest config that sets it. `O` edits column
+settings in the config that holds the columns; see
 [Settings view](#how-it-works).
 
 Every column is one of three kinds:
@@ -130,7 +123,7 @@ Each column takes these fields:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Unique. Used in `drover.json` targets such as `prFlow` and `planExitTarget`. |
+| `id` | Unique. Used in targets such as `prFlow` and `planExitTarget`. |
 | `name` | Shown on the board. Targets and the CLI also accept it, case-insensitively. |
 | `lane` | `review` puts the column in the [review lane](#the-review-lane). Not allowed on the first column. |
 | `role` | `done`. Leave it out for other columns. A `todo` role from older versions is dropped when the board loads, and its cards move to the first column. |
@@ -161,9 +154,9 @@ every column.
 }
 ```
 
-With no `drover.json`, the board uses this default, with `prFlow` moving a card
-to Waiting for me when an agent is asked to open a PR, to In review once it is
-open, and to Done once it merges:
+With no columns in either config, the board uses this default, with `prFlow`
+moving a card to Waiting for me when an agent is asked to open a PR, to In
+review once it is open, and to Done once it merges:
 
 | Column | Kind |
 | --- | --- |
@@ -185,41 +178,43 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 
 ## How it works
 
-- **Shared board file.** Columns come from `drover.json` at the repo root, so
-  you and your teammates share one board. With
-  no file it uses a built-in default (Planning, Executing,
-  Waiting for me, In review, Done); press `W` to write it out.
-  `drover.local.json` holds your own settings on top of it: `defaultBaseBranch`,
-  `worktreesDir`, `splitByPR`, `teamReviewRequests`, `reviewRepos` (see
+- **Settings live outside the repo.** Only the one-time import of old
+  `drover.json` files reads the repo. See
+  [Where settings live](#where-settings-live). With no columns in either
+  config the board uses a built-in default (Planning, Executing, Waiting for
+  me, In review, Done, and the review lane); press `W` to write it to the
+  project config. `worktreesDir` (default `.drover/worktrees`) is where
+  worktrees go, relative to the repo root or absolute, e.g. `.claude/worktrees`.
+  `splitByPR`, `teamReviewRequests`, `reviewRepos` (see
   [Importing PRs to review](#importing-prs-to-review)) and those under
-  [Agents and notifications](#agents-and-notifications).
-  `worktreesDir` (default `.drover/worktrees`) is where worktrees go, relative
-  to the repo root or absolute, e.g. `.claude/worktrees`.
+  [Agents and notifications](#agents-and-notifications) work in either config.
 - **Archiving Done.** `archiveDoneAfter` (e.g. `"7d"`, `"36h"`) hides cards
   that have sat in Done that long. Archived cards stay in the state file and
   the column header shows how many are hidden (`Done 4 +37`). The built-in
-  board uses `7d`; with the setting missing from your `drover.json` nothing is
-  archived automatically. `drover.local.json` doesn't read it. Archiving
+  board uses `7d`; with the setting missing from a board you wrote nothing is
+  archived automatically. Archiving
   removes the card's worktree; a worktree shared by several cards goes once all
   of them are archived. `A` asks before deleting uncommitted
   changes, while `C` and the automatic archive keep such a worktree.
 - **Card order.** A column lists the card that entered it last first. `P` pins
   the selected card above the rest (`⚑`) and unpins it again. The pin stays
   when the card moves.
-- **Settings view.** `o` changes the settings in both files. Each row shows
-  where its value comes from: `local`, `shared` (`drover.json`) or `default`.
-  Enter edits, Tab picks `drover.json` or `drover.local.json` for options that
-  allow either, and `x` removes the override. `/` searches the options by name or JSON key
-  (esc clears the search). Flows stay in `drover.json`.
-  The `Columns…` row at the bottom, or `c` (`O` on the board), opens a
-  column's settings: pick a column, then its name, color, permission mode,
-  model, effort, `autoSpawn`, `keepAgent`, opening prompt, `planExitTarget` or
-  `noWorktree`. Only color, permission mode, model and effort can go in
-  `drover.local.json`. The opening prompt is the first `onEnter` row, when it is
-  a `send_message` without a condition: Enter edits it in a multi-line box (Ctrl+S
-  saves, an empty prompt removes the row) and adds the row if the column has
-  none. Columns can't be added, removed or reordered there, and other
-  automations stay in `drover.json`.
+- **Settings view.** `o` changes the settings. Each row shows where its value
+  comes from: `project`, `global` or `default`. Enter edits, Tab picks the
+  global or the project config, and `x` removes the override. `/` searches the
+  options by name or JSON key (esc clears the search). Per-repo options
+  (`worktreesDir`, `defaultBaseBranch`, `initScript`, `linkUntracked`) default
+  to the project config and the rest to the global one. `prFlow` options edit
+  the config that holds the columns. The `Columns…` row at the bottom, or `c`
+  (`O` on the board), opens a column's settings: pick a column, then its name,
+  color, permission mode, model, effort, `autoSpawn`, `keepAgent`, opening
+  prompt, `planExitTarget` or `noWorktree`. These save to the config that holds
+  the columns. If neither does, the first edit copies the default board into
+  the global config, so press `W` first to keep it per repo. The opening prompt
+  is the first `onEnter` row, when it is a `send_message` without a condition:
+  Enter edits it in a multi-line box (Ctrl+S saves, an empty prompt removes the
+  row) and adds the row if the column has none. Columns can't be added, removed
+  or reordered there, and other automations are edited by hand in that file.
 - **New cards.** `n` adds a card to the first column and starts its agent on
   that column's settings (the default board uses Planning in `plan` mode), in
   the project root when the column sets `noWorktree`, as Planning does by
@@ -277,8 +272,8 @@ When an Executing agent finishes a turn and its reply asks you for a decision or
 
 ## Agents and notifications
 
-These settings work in `drover.json` and, for you alone, in
-`drover.local.json`. Both files are reloaded while the board runs.
+These settings work in the global and the project config. Both files are
+reloaded while the board runs.
 
 ```json
 {
@@ -318,7 +313,7 @@ These settings work in `drover.json` and, for you alone, in
   to enable, like `"slack@claude-plugins-official"`; `assistantTools` lists the
   tool patterns it may use without asking, each starting with `mcp__`, like
   `"mcp__plugin_slack_slack__slack_read_*"`. Allow only read tools unless you
-  want it to write. A value in `drover.local.json` replaces the shared one.
+  want it to write. A value in the project config replaces the global one.
   What those tools return can come from anyone, so the assistant is told to
   treat it as data and to ask before adding cards from it. An enabled plugin
   runs as a whole, hooks included, and those aren't limited by the
@@ -434,9 +429,8 @@ more in that column), so a pile of merged PRs doesn't fill Done.
 - The agent stops once no card in the group is in an agent column. The
   worktree goes once every card is archived.
 - Deleting a card removes only that card while others remain.
-- **`splitByPR`** (default `true`): `false` in `drover.json` or
-  `drover.local.json` stops further PRs, opened or sent for review, from getting
-  cards. Only the first stays on the session's own card; the rest are noted in
+- **`splitByPR`** (default `true`): `false` in either config stops further
+  PRs, opened or sent for review, from getting cards. Only the first stays on the session's own card; the rest are noted in
   its log and not tracked. A review you ask for in a session that has moved on
   from the first column gets no card at all. Existing split cards stay.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
@@ -447,7 +441,7 @@ more in that column), so a pile of merged PRs doesn't fill Done.
 
 ### Following a PR to release
 
-`prFlow` in `drover.json` moves PR cards as their PR progresses. Targets are
+`prFlow` moves PR cards as their PR progresses. Targets are
 column ids or names; leave one out to keep cards where they are. The default
 board uses:
 
@@ -512,7 +506,7 @@ ask it to, for example with `--comment`.
 The card shows `review PR #12 @author` once gh has confirmed it, and
 `✓ you approved`, `✗ you requested changes` or `✓ you reviewed` once you have
 reviewed it. `↻ new commits` replaces that when the author has pushed since.
-`reviewFlow` in `drover.json` moves the card as the PR changes, with the
+`reviewFlow` moves the card as the PR changes, with the
 same column targets as `prFlow`:
 
 ```json
@@ -571,11 +565,11 @@ out. `/` fetches any open PR by URL, from any repo.
   other way, such as by `reviewFlow` or `drover move`, runs without a level.
 - The card then follows `reviewFlow` like any review card. A review of yours
   already on the PR is only recorded, so the card stays where it landed.
-- **`teamReviewRequests`** (default `false`): `true` in `drover.json` or
-  `drover.local.json` also lists PRs requested from your teams
+- **`teamReviewRequests`** (default `false`): `true` in either config also
+  lists PRs requested from your teams
   (`--review-requested=@me`). With CODEOWNERS that can be many.
 - **`reviewRepos`**: more repos to search, as `owner/name`, for example
-  `["acme/infra"]`. A value in `drover.local.json` replaces the shared one.
+  `["acme/infra"]`. A value in the project config replaces the global one.
   The agent still runs in this repo; `/code-review` reads the PR from GitHub.
 
 ### The review lane
@@ -599,8 +593,8 @@ findings, `reviewed` to Waiting on author (`approved` goes to the lane's Done
 instead when you approve), `updated` back to Reviewing when the author pushes,
 your approval is dismissed or the PR gets conflicts, and `done` to the lane's
 Done. Reviewing sends the card on to Triage findings once a re-review turn
-ends. A board with a
-`drover.json` keeps its own columns; add the lane columns and `reviewFlow` to
+ends. A board you
+define keeps its own columns; add the lane columns and `reviewFlow` to
 get it, or press `W` to write out the default board.
 
 Moving a card whose agent is already working in the project root, such as one
@@ -795,6 +789,27 @@ drover ask --new "start over: what's in Planning?"
   conversation whose transcript is gone starts over by itself. If `claude`
   still can't resume one that has a transcript, every question fails until you
   use `--new`.
+
+## Where settings live
+
+Settings are personal, so drover keeps them outside the repo, in two JSON files
+that share one schema:
+
+| Config | Path | Applies to |
+| --- | --- | --- |
+| Global | `$XDG_CONFIG_HOME/drover/config.json` (default `~/.config/drover/config.json`) | every repo |
+| Project | `config.json` in the repo's state directory, `$XDG_STATE_HOME/drover/<repo>-<hash>/` (default `~/.local/state`) | one repo |
+
+The project config wins over the global one, which wins over the built-in
+default. A key a file leaves out keeps the value from below; `columns`,
+`prFlow` and `reviewFlow` are taken whole from the highest config that sets
+them. The project directory is keyed by the repo's absolute path, so moving
+the repo leaves its project config behind, as it does its tasks.
+
+Older versions read `drover.json` and `drover.local.json` from the repo root.
+The first time a repo with either opens and has no project config, drover
+copies them into it: `drover.json` as is, then `drover.local.json` on top.
+The repo files are never read again or deleted; remove them yourself.
 
 ## Notes
 

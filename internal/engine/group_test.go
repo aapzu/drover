@@ -57,6 +57,7 @@ func TestImportColumn(t *testing.T) {
 func TestHandOverMovesTheGroupToTheHeir(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	old := &store.Task{ID: "old", Number: 1, WorktreePath: "/wt/1", Branch: "feat", BaseBranch: "main", ActiveCard: "old", Visit: 3, SeenPRs: []string{"x"},
 		Sessions: map[string]*store.Session{store.MainSession: {Status: store.StatusSuspended}}}
 	heir := &store.Task{ID: "heir", Number: 2, GroupID: "old"}

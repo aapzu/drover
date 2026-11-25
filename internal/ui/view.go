@@ -182,10 +182,7 @@ func (m Model) renderFooter() string {
 		modeConfig:      "↑↓ select  enter change/open  / search  x reset  c columns  esc close",
 	}
 	if m.configEditing {
-		hints[modeConfig] = "enter save  tab drover.json / drover.local.json  esc cancel"
-		if configOptions[m.configSel].shared {
-			hints[modeConfig] = "enter save  esc cancel"
-		}
+		hints[modeConfig] = "enter save  tab global / project  esc cancel"
 	}
 	hints[modeColumns] = m.columnsHint()
 	if m.assist.full {
@@ -824,9 +821,9 @@ var helpKeys = [][2]string{
 	{"R", "show or hide the review lane (columns with lane \"review\")"},
 	{"X", "show only the review lane, or bring the main columns back"},
 	{"t", "show or hide column settings under column names"},
-	{"o", "change settings in drover.local.json and drover.json (press / there to search)"},
-	{"O", "change column settings in drover.local.json and drover.json"},
-	{"W", "write the default board to drover.json"},
+	{"o", "change settings in the global and project config (press / there to search)"},
+	{"O", "change column settings in the config that holds the columns"},
+	{"W", "write the default board to the project config"},
 	{"q", "quit (agents keep running in tmux)"},
 	{"Q", "suspend every agent and quit, printing claude --resume commands"},
 }

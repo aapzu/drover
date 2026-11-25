@@ -94,6 +94,10 @@ func New(root string) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	migrated, err := config.MigrateRepoFiles(root)
+	if err != nil {
+		return nil, err
+	}
 	board, found, err := config.Load(root)
 	if err != nil {
 		return nil, err
@@ -123,6 +127,9 @@ func New(root string) (*Engine, error) {
 	}
 	if e.isRepo {
 		gitx.EnsureExcluded(root, board.WorktreesPath(root))
+	}
+	if migrated != "" {
+		e.notify("Moved the repo's drover.json settings to %s; the repo files are no longer read and can be deleted", migrated)
 	}
 	e.reconcile()
 	e.migrateTodo()
@@ -215,15 +222,14 @@ func (e *Engine) logf(t *store.Task, format string, args ...any) {
 	e.with(func() { t.AddLog(fmt.Sprintf(format, args...)) })
 }
 
-// WriteDefaultBoard writes the built-in board to drover.json, without your
-// drover.local.json settings.
+// WriteDefaultBoard writes the built-in board to the project config file.
 func (e *Engine) WriteDefaultBoard() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.boardFound {
 		return nil
 	}
-	if err := config.Default().Save(e.Root); err != nil {
+	if err := config.WriteDefaultBoard(e.Root, config.Project); err != nil {
 		return err
 	}
 	e.boardFound = true
@@ -262,14 +268,14 @@ func (e *Engine) ownsWorktree(path string) bool {
 // ReloadBoard picks up a settings change straight away rather than on the next tick.
 func (e *Engine) ReloadBoard() { e.reload(false) }
 
-// Board is the board as last loaded from drover.json and drover.local.json.
+// Board is the board as last loaded from the global and project config files.
 func (e *Engine) Board() *config.Board {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.board
 }
 
-// reloadBoard picks up edits to drover.json and drover.local.json made while
+// reloadBoard picks up edits to the config files made while
 // the TUI runs.
 func (e *Engine) reloadBoard() { e.reload(true) }
 
@@ -299,7 +305,7 @@ func (e *Engine) reload(notice bool) {
 	}
 	e.migrateTodo()
 	if notice {
-		e.notify("Reloaded drover.json")
+		e.notify("Reloaded config")
 	}
 }
 
@@ -419,7 +425,7 @@ func (e *Engine) createTask(title, prompt, columnID string) *store.Task {
 func (e *Engine) NewSession() (*store.Task, error) {
 	col := e.firstColumn()
 	if !col.IsAgent() {
-		return nil, fmt.Errorf("%s, the first column, runs no agent; make it an agent column in drover.json to start sessions with n", col.Name)
+		return nil, fmt.Errorf("%s, the first column, runs no agent; make it an agent column in your config to start sessions with n", col.Name)
 	}
 	return e.startSession(col)
 }
@@ -434,7 +440,7 @@ func (e *Engine) NewReviewSession() (*store.Task, error) {
 	case !ok:
 		return nil, config.ErrNoReviewLane
 	case !col.IsAgent():
-		return nil, fmt.Errorf("%s, where reviews start, runs no agent; make it an agent column in drover.json to start reviews with ctrl+n", col.Name)
+		return nil, fmt.Errorf("%s, where reviews start, runs no agent; make it an agent column in your config to start reviews with ctrl+n", col.Name)
 	}
 	return e.startSession(col)
 }

@@ -156,6 +156,7 @@ func setupProject(t *testing.T) (root, log string) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_LOG", log)
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
 	isolateTmux(t)
 
 	for _, args := range [][]string{
@@ -168,8 +169,31 @@ func setupProject(t *testing.T) (root, log string) {
 			t.Fatalf("git %v: %s", args, out)
 		}
 	}
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(testBoard), 0o644)
+	writeBoard(root, []byte(testBoard))
 	return root, log
+}
+
+// writeBoard writes the project config of the repo at root and returns its path.
+func writeBoard(root string, data []byte) string {
+	file := config.ProjectPath(root)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(file, data, 0o644); err != nil {
+		panic(err)
+	}
+	return file
+}
+
+// writeGlobalConfig writes the global config file.
+func writeGlobalConfig(data []byte) {
+	file := config.GlobalPath()
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(file, data, 0o644); err != nil {
+		panic(err)
+	}
 }
 
 func waitFor(t *testing.T, e *Engine, what string, cond func(*store.Task) bool) *store.Task {
@@ -321,10 +345,10 @@ func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
 		t.Run(fmt.Sprint(on), func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_DISABLE_MOUSE", "")
 			root, log := setupProject(t)
-			os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(`{"disableMouse":%t,"columns":[
+			writeBoard(root, []byte(fmt.Sprintf(`{"disableMouse":%t,"columns":[
 			  {"id":"backlog","name":"Backlog"},
 			  {"id":"exec","name":"Executing","autoSpawn":true},
-			  {"id":"done","name":"Done","role":"done"}]}`, on)), 0o644)
+			  {"id":"done","name":"Done","role":"done"}]}`, on)))
 			e, err := New(root)
 			if err != nil {
 				t.Fatal(err)
@@ -356,11 +380,11 @@ func TestDisableMouseSetsTheAgentEnv(t *testing.T) {
 
 func TestMoveMidTurnRespawnsWithNewModeWhenTurnEnds(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	writeBoard(root, []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -406,7 +430,7 @@ const stopOnMoveBoard = `{"columns":[
 
 func startSlowTurn(t *testing.T, root string) (*Engine, *store.Task) {
 	t.Helper()
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(stopOnMoveBoard), 0o644)
+	writeBoard(root, []byte(stopOnMoveBoard))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -483,11 +507,11 @@ func TestSendRefusedWhileStopPending(t *testing.T) {
 func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 	root, log := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	writeBoard(root, []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -541,11 +565,11 @@ func TestMoveToPlanInterruptsTheTurn(t *testing.T) {
 func TestStopFailureAppliesPendingRespawn(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	writeBoard(root, []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -582,12 +606,12 @@ func TestStopFailureAppliesPendingRespawn(t *testing.T) {
 
 func TestUnsetPermissionModeInheritsClaudeDefault(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -659,12 +683,12 @@ func TestSettingsDiffer(t *testing.T) {
 
 func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"review","name":"Review","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -698,10 +722,10 @@ func TestInheritedAgentSwitchesInPlaceAndBack(t *testing.T) {
 
 func TestSendMessageAndMoveBackToTheFirstColumn(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -752,11 +776,11 @@ func TestSendMessageAndMoveBackToTheFirstColumn(t *testing.T) {
 
 func TestWorktreesDirSetting(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
-	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"worktreesDir":".claude/worktrees"}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
+	writeGlobalConfig([]byte(`{"worktreesDir":".claude/worktrees"}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -851,7 +875,7 @@ func TestPlanExit(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			root, _ := setupProject(t)
-			os.WriteFile(filepath.Join(root, "drover.json"), []byte(tc.board), 0o644)
+			writeBoard(root, []byte(tc.board))
 			e, err := New(root)
 			if err != nil {
 				t.Fatal(err)
@@ -973,11 +997,11 @@ func TestPlanExitReleasesTheGateWhenItCannotFollow(t *testing.T) {
 func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","noWorktree":true},
 	  {"id":"review","name":"Review","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1016,14 +1040,14 @@ func TestStartedAgentResumesInTheWorktreeWhenOnlyTheDirectoryChanges(t *testing.
 
 func TestPRRequestMovesCard(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"self","name":"Self-review","autoSpawn":true,
 	   "automations":{"onEnter":[{"type":"send_message","message":"/code-review"}],
 	    "onTurnEnd":[{"type":"move_to_column","targetColumn":"Done"}]}},
 	  {"id":"done","name":"Done","role":"done"}],
-	  "prFlow":{"requested":"self"}}`), 0o644)
+	  "prFlow":{"requested":"self"}}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1051,12 +1075,12 @@ func TestPRRequestMovesCard(t *testing.T) {
 
 func TestPromptInReviewStaysInReview(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"In review"},
 	  {"id":"done","name":"Done","role":"done"}],
-	  "prFlow":{"opened":"review","changesRequested":"exec"}}`), 0o644)
+	  "prFlow":{"opened":"review","changesRequested":"exec"}}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1090,11 +1114,11 @@ func TestPromptInReviewStaysInReview(t *testing.T) {
 // start once a slot frees up instead of being dropped.
 func TestQueuedManualStartRunsWhenSlotFrees(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1173,8 +1197,8 @@ esac
 
 func TestSplitByPROffKeepsOneCard(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
-	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"splitByPR":false}`), 0o644)
+	writeBoard(root, []byte(prBoard))
+	writeGlobalConfig([]byte(`{"splitByPR":false}`))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	e, err := New(root)
@@ -1209,7 +1233,7 @@ func TestSplitByPROffKeepsOneCard(t *testing.T) {
 
 func TestSessionOpeningTwoPRsSplitsIntoCards(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	writeBoard(root, []byte(prBoard))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	e, err := New(root)
@@ -1315,7 +1339,7 @@ const openedBoard = `{
 func startWithBoard(t *testing.T, board string) *Engine {
 	t.Helper()
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
+	writeBoard(root, []byte(board))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	e, err := New(root)
@@ -1423,7 +1447,7 @@ const flowBoard = `{
 func TestPRCardShowsTheMergeQueue(t *testing.T) {
 	root, _ := setupProject(t)
 	tmp := filepath.Dir(root)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(flowBoard), 0o644)
+	writeBoard(root, []byte(flowBoard))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncase \"$1\" in\n  api) cat \"$FAKE_QUEUE\";;\n  *) cat \"$FAKE_GH\";;\nesac\n"), 0o755)
 	ghFile, queueFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "queue")
@@ -1476,7 +1500,7 @@ func TestPRCardShowsTheMergeQueue(t *testing.T) {
 func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 	root, log := setupProject(t)
 	tmp := filepath.Dir(root)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(flowBoard), 0o644)
+	writeBoard(root, []byte(flowBoard))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
 	ghFile, pushFile := filepath.Join(tmp, "gh.json"), filepath.Join(tmp, "pushed.json")
@@ -1573,7 +1597,7 @@ func TestPRCardFollowsReviewMergeAndRelease(t *testing.T) {
 
 func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{
+	writeBoard(root, []byte(`{
   "columns": [
     {"id":"backlog","name":"Backlog"},
     {"id":"exec","name":"Executing","autoSpawn":true},
@@ -1581,7 +1605,7 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
     {"id":"done","name":"Done","role":"done"}
   ],
   "prFlow": {"opened": "review", "changesRequested": "exec"}
-}`), 0o644)
+}`))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
 	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
@@ -1623,7 +1647,7 @@ func TestChangesRequestedProposesWithoutFixing(t *testing.T) {
 
 func TestChangesRequestedOffLeavesTheCardAlone(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{
+	writeBoard(root, []byte(`{
   "columns": [
     {"id":"backlog","name":"Backlog"},
     {"id":"exec","name":"Executing","autoSpawn":true},
@@ -1631,7 +1655,7 @@ func TestChangesRequestedOffLeavesTheCardAlone(t *testing.T) {
     {"id":"done","name":"Done","role":"done"}
   ],
   "prFlow": {"opened": "review", "changesRequested": "exec", "changesRequestedMode": "off"}
-}`), 0o644)
+}`))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\ncat \"$FAKE_GH\"\n"), 0o755)
 	ghFile := filepath.Join(filepath.Dir(root), "gh.json")
@@ -1667,7 +1691,7 @@ func TestChangesRequestedOffLeavesTheCardAlone(t *testing.T) {
 
 func TestTranscriptPRsFillSessionCardThenSplit(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(prBoard), 0o644)
+	writeBoard(root, []byte(prBoard))
 	bin := strings.SplitN(os.Getenv("PATH"), string(os.PathListSeparator), 2)[0]
 	os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeGh), 0o755)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
@@ -1736,11 +1760,11 @@ func waitForAll(t *testing.T, e *Engine, what string, cond func([]*store.Task) b
 
 func TestExplicitStartSuspendsIdlestAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"Review"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -1824,10 +1848,10 @@ func TestBackgroundForkGoesExternal(t *testing.T) {
 
 func TestSuspendAllHandsOffEveryAgent(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -2083,11 +2107,11 @@ func TestTakeOverOnlyStopsRegisteredAgents(t *testing.T) {
 
 func TestMoveToColumnWithoutModelResetsModel(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -2115,12 +2139,12 @@ func TestMoveToColumnWithoutModelResetsModel(t *testing.T) {
 
 func TestMoveSwitchesSettingsInPlace(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	writeBoard(root, []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"modelOverride":"opus"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","modelOverride":"opus"},
 	  {"id":"review","name":"Review","autoSpawn":true,"permissionMode":"plan","modelOverride":"sonnet"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -2309,7 +2333,7 @@ type reviewRig struct {
 func newReviewRig(t *testing.T, author, board string) *reviewRig {
 	t.Helper()
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(board), 0o644)
+	writeBoard(root, []byte(board))
 	dir := filepath.Join(filepath.Dir(root), "gh")
 	os.MkdirAll(dir, 0o755)
 	t.Setenv("FAKE_DIR", dir)
@@ -3079,12 +3103,12 @@ func TestTurnEndMoveStillShipsPR(t *testing.T) {
 
 func TestKeepAgentLeavesPendingRespawnAlone(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
+	writeBoard(root, []byte(`{"defaultPermissionMode":"acceptEdits","columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
 	  {"id":"review","name":"In review","keepAgent":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -3277,11 +3301,11 @@ func TestResumeMode(t *testing.T) {
 
 func TestPlanExitIntoAnInheritingColumnResumesInTheApprovedMode(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"backlog","name":"Backlog"},
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan","planExitTarget":"Executing","noWorktree":true},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)

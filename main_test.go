@@ -91,7 +91,7 @@ func runMainIn(t *testing.T, dir, args, stdin string) (stdout, stderr string, ex
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestMainProcess$")
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin)
-	cmd.Env = []string{"DROVER_TEST_ARGS=" + args, "XDG_STATE_HOME=" + t.TempDir(), "PATH=" + t.TempDir()}
+	cmd.Env = []string{"DROVER_TEST_ARGS=" + args, "XDG_STATE_HOME=" + t.TempDir(), "XDG_CONFIG_HOME=" + t.TempDir(), "PATH=" + t.TempDir()}
 	var out, errOut strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err := cmd.Run()

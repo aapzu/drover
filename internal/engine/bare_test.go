@@ -21,19 +21,18 @@ func bareEngine(t *testing.T) *Engine {
 	t.Helper()
 	isolateTmux(t)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	stopping, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
 	return &Engine{Root: t.TempDir(), state: &store.State{NextNumber: 1}, board: config.Default(), notices: make(chan string, 8),
 		alerted: map[string]time.Time{}, stopping: stopping, stop: stop}
 }
 
-// boardEngine is a bareEngine on the board given as drover.json text.
+// boardEngine is a bareEngine on the board given as project config text.
 func boardEngine(t *testing.T, board string) *Engine {
 	t.Helper()
 	e := bareEngine(t)
-	if err := os.WriteFile(filepath.Join(e.Root, config.FileName), []byte(board), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeBoard(e.Root, []byte(board))
 	loaded, _, err := config.Load(e.Root)
 	if err != nil {
 		t.Fatal(err)
@@ -53,11 +52,10 @@ func notice(e *Engine) string {
 
 func TestReloadBoardKeepsTheOldBoardOnAnInvalidFile(t *testing.T) {
 	e := bareEngine(t)
-	file := filepath.Join(e.Root, config.FileName)
-	os.WriteFile(file, []byte(`{"columns":[`), 0o644)
+	file := writeBoard(e.Root, []byte(`{"columns":[`))
 
 	e.ReloadBoard()
-	if got := notice(e); !strings.HasPrefix(got, "board config:") || !strings.Contains(got, "drover.json") {
+	if got := notice(e); !strings.HasPrefix(got, "board config:") || !strings.Contains(got, config.FileName) {
 		t.Errorf("notice = %q, want the parse error", got)
 	}
 	if got := e.Board().FirstColumn().ID; got != "planning" || e.boardFound {
@@ -81,9 +79,9 @@ func TestReloadBoardKeepsTheOldBoardOnAnInvalidFile(t *testing.T) {
 
 func TestReloadBoardAnnouncesWatchedChanges(t *testing.T) {
 	e := bareEngine(t)
-	os.WriteFile(filepath.Join(e.Root, config.FileName), []byte(`{"columns":[{"id":"inbox","name":"Inbox"},{"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	writeBoard(e.Root, []byte(`{"columns":[{"id":"inbox","name":"Inbox"},{"id":"done","name":"Done","role":"done"}]}`))
 	e.reloadBoard()
-	if got := notice(e); got != "Reloaded drover.json" {
+	if got := notice(e); got != "Reloaded config" {
 		t.Errorf("notice = %q", got)
 	}
 	e.reloadBoard()
@@ -103,7 +101,7 @@ func TestWriteDefaultBoard(t *testing.T) {
 	}
 
 	custom := []byte(`{"columns":[{"id":"inbox","name":"Inbox"},{"id":"done","name":"Done","role":"done"}]}`)
-	file := filepath.Join(e.Root, config.FileName)
+	file := config.ProjectPath(e.Root)
 	os.WriteFile(file, custom, 0o644)
 	if err := e.WriteDefaultBoard(); err != nil {
 		t.Fatal(err)
@@ -154,6 +152,50 @@ func TestMoveConversation(t *testing.T) {
 	e.moveConversation(card, from, worktree)
 	if _, err := os.Stat(claude.TranscriptPath("sid", worktree)); err != nil || exists(from) || !hasLog(card, "Moved the conversation into the worktree") {
 		t.Errorf("transcript not moved: %v, old still there %v, log %v", err, exists(from), card.Log)
+	}
+}
+
+func TestNewMovesRepoConfigFilesAndSaysSo(t *testing.T) {
+	root, _ := setupProject(t)
+	os.Remove(config.ProjectPath(root))
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[{"id":"inbox","name":"Inbox"}]}`), 0o644)
+	os.WriteFile(filepath.Join(root, "drover.local.json"), []byte(`{"maxConcurrent":3}`), 0o644)
+
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := notice(e); !strings.Contains(got, "Moved the repo") || !strings.Contains(got, config.ProjectPath(root)) {
+		t.Errorf("notice = %q", got)
+	}
+	if got := e.Board().FirstColumn().ID; got != "inbox" || e.Board().Limit() != 3 {
+		t.Errorf("first column %q, limit %d", got, e.Board().Limit())
+	}
+	if _, err := os.Stat(filepath.Join(root, "drover.json")); err != nil {
+		t.Errorf("the repo file was removed: %v", err)
+	}
+}
+
+func TestReloadBoardNoticesEitherConfigFile(t *testing.T) {
+	e := bareEngine(t)
+	e.boardStamp = config.Stamp(e.Root)
+	for _, layer := range []config.Layer{config.Global, config.Project} {
+		file := layer.Path(e.Root)
+		os.MkdirAll(filepath.Dir(file), 0o755)
+		os.WriteFile(file, []byte(`{"maxConcurrent":3}`), 0o644)
+		e.reloadBoard()
+		if got := notice(e); got != "Reloaded config" || e.Board().Limit() != 3 {
+			t.Errorf("%s: notice=%q limit=%d", layer, got, e.Board().Limit())
+		}
+		os.WriteFile(file, []byte(`{"maxConcurrent":4}`), 0o644)
+		e.reloadBoard()
+		if e.Board().Limit() != 4 {
+			t.Errorf("%s: an edit was not picked up, limit=%d", layer, e.Board().Limit())
+		}
+		notice(e)
+		os.Remove(file)
+		e.reloadBoard()
+		notice(e)
 	}
 }
 

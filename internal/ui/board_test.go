@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -568,7 +567,7 @@ func TestUpdateKeyReportsWhyACardCannotBeUpdated(t *testing.T) {
 
 func TestWriteDefaultBoardKeyReportsAnUnwritableProject(t *testing.T) {
 	m := realModel(t, "a")
-	if err := os.Mkdir(filepath.Join(m.eng.Root, config.FileName), 0o755); err != nil {
+	if err := os.MkdirAll(config.ProjectPath(m.eng.Root), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

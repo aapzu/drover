@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
@@ -54,7 +55,7 @@ const planningWithoutWorktree = `{"columns":[
 
 func TestNewSessionStartsItsAgentInTheProjectRoot(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +82,7 @@ func TestNewSessionStartsItsAgentInTheProjectRoot(t *testing.T) {
 
 func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +108,7 @@ func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
 
 func TestDiscardSilentDropsASessionThatNeverGotAWorktree(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -228,10 +229,10 @@ func TestMovingBackToTheFirstColumnKeepsTheWorktreeAndConversation(t *testing.T)
 
 func TestNotStartedCardHoldsNoSlotAndQueuesWhenStarted(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"planning","name":"Planning","autoSpawn":true},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +272,7 @@ const legacyBoard = `{"columns":[
 func TestLegacyTodoCardsMoveToTheFirstColumn(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(legacyBoard), 0o644)
+	writeBoard(root, []byte(legacyBoard))
 
 	card := func(n int, title, column string, s *store.Session) *store.Task {
 		task := &store.Task{ID: uuid.NewString(), Number: n, Title: title, ColumnID: column, CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -330,7 +331,7 @@ func TestLegacyTodoCardsMoveToTheFirstColumn(t *testing.T) {
 
 func TestDefaultBoardWithAnOldTodoCardMovesItToPlanning(t *testing.T) {
 	root, _ := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
+	os.Remove(config.ProjectPath(root))
 	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: uuid.NewString(), Number: 1, Title: "Old", ColumnID: "todo", CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
 	if err := state.Save(root); err != nil {
 		t.Fatal(err)
@@ -347,10 +348,10 @@ func TestDefaultBoardWithAnOldTodoCardMovesItToPlanning(t *testing.T) {
 func TestStartingANewCardRunsTheFirstColumnsEnterAutomations(t *testing.T) {
 	root, _ := setupProject(t)
 	marker := filepath.Join(t.TempDir(), "entered")
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"planning","name":"Planning","autoSpawn":true,"automations":{"onEnter":[
 	    {"name":"Mark","type":"run_script","script":"echo x >> `+marker+`"}]}},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +398,7 @@ func TestFailedNewSessionLeavesNothingBehind(t *testing.T) {
 func TestLegacyTodoMigrationLeavesASharedAgentAlone(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(legacyBoard), 0o644)
+	writeBoard(root, []byte(legacyBoard))
 
 	liveName := "repo-1-shared"
 	if err := tmux.NewSession(liveName, root, []string{"sleep", "60"}, nil); err != nil {
@@ -438,9 +439,9 @@ func TestLegacyTodoMigrationLeavesASharedAgentAlone(t *testing.T) {
 
 func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"todo","name":"Backlog"},
-	  {"id":"planning","name":"Planning","autoSpawn":true}]}`), 0o644)
+	  {"id":"planning","name":"Planning","autoSpawn":true}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -450,10 +451,10 @@ func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 		t.Fatalf("the card starts in %q, want the plain first column", task.ColumnID)
 	}
 
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"todo","name":"Backlog","role":"todo"},
 	  {"id":"planning","name":"Planning","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e.reloadBoard()
 
 	got := e.Snapshot().Tasks[0]
@@ -468,10 +469,10 @@ func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 
 func TestRespawnAtTheLimitKeepsItsOwnSlot(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)

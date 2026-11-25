@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -24,13 +23,15 @@ const (
 	optPrompt
 )
 
-// configOption is a setting the config view can change. A shared option only
-// lives in drover.json; the others default to drover.local.json.
+// configOption is a setting the config view can change. A board option lives
+// in the config that defines the columns; the others go in the config that
+// already sets them, else the global one, or the project one if they are per repo.
 type configOption struct {
 	name    string
 	path    []string
 	kind    optKind
-	shared  bool
+	board   bool
+	project bool
 	min     int
 	choices []string
 	get     func(*config.Board) any
@@ -49,9 +50,9 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.Limit() }},
 	{name: "Idle timeout (minutes)", path: []string{"idleTimeoutMinutes"}, kind: optNumber,
 		get: func(b *config.Board) any { return b.IdleTimeoutMinutes }},
-	{name: "Default base branch", path: []string{"defaultBaseBranch"}, kind: optText,
+	{name: "Default base branch", path: []string{"defaultBaseBranch"}, kind: optText, project: true,
 		get: func(b *config.Board) any { return b.DefaultBaseBranch }},
-	{name: "Worktrees directory", path: []string{"worktreesDir"}, kind: optText,
+	{name: "Worktrees directory", path: []string{"worktreesDir"}, kind: optText, project: true,
 		get: func(b *config.Board) any { return b.WorktreesDir }},
 	{name: "Notify when a turn ends", path: []string{"notifications", "turnDone"}, kind: optToggle,
 		get: func(b *config.Board) any { return b.Notifications.TurnDone }},
@@ -63,15 +64,17 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.Notifications.Exited }},
 	{name: "Notification cooldown (seconds)", path: []string{"notifications", "cooldownSeconds"}, kind: optNumber,
 		get: func(b *config.Board) any { return b.Notifications.CooldownSeconds }},
-	{name: "Default permission mode", path: []string{"defaultPermissionMode"}, kind: optText, shared: true,
+	{name: "Default permission mode", path: []string{"defaultPermissionMode"}, kind: optText,
 		get: func(b *config.Board) any { return b.DefaultPermissionMode }},
-	{name: "Default model", path: []string{"defaultModel"}, kind: optText, shared: true,
+	{name: "Default model", path: []string{"defaultModel"}, kind: optText,
 		get: func(b *config.Board) any { return b.DefaultModel }},
-	{name: "Archive Done after", path: []string{"archiveDoneAfter"}, kind: optText, shared: true,
+	{name: "Archive Done after", path: []string{"archiveDoneAfter"}, kind: optText,
 		get: func(b *config.Board) any { return b.ArchiveDoneAfter }},
-	{name: "Init script", path: []string{"initScript"}, kind: optText, shared: true,
+	{name: "Init script", path: []string{"initScript"}, kind: optText, project: true,
 		get: func(b *config.Board) any { return b.InitScript }},
-	{name: "PR review fix mode", path: []string{"prFlow", "changesRequestedMode"}, kind: optChoice, shared: true,
+	{name: "Symlink untracked files", path: []string{"linkUntracked"}, kind: optToggle, project: true,
+		get: func(b *config.Board) any { return b.LinkUntracked }},
+	{name: "PR review fix mode", path: []string{"prFlow", "changesRequestedMode"}, kind: optChoice, board: true,
 		choices: []string{config.ChangesModePropose, config.ChangesModeFix, config.ChangesModeOff},
 		get: func(b *config.Board) any {
 			switch {
@@ -82,15 +85,22 @@ var configOptions = []configOption{
 			}
 			return config.ChangesModeFix
 		}},
-	{name: "Symlink untracked files", path: []string{"linkUntracked"}, kind: optToggle, shared: true,
-		get: func(b *config.Board) any { return b.LinkUntracked }},
 }
 
-func defaultConfigLayer(opt configOption) config.Layer {
-	if opt.shared {
-		return config.Shared
+func defaultConfigLayer(root string, opt configOption) config.Layer {
+	if opt.board {
+		if config.Sets(root, config.Project, opt.path[:1]) {
+			return config.Project
+		}
+		return config.ColumnLayer(root)
 	}
-	return config.Local
+	if layer, ok := sourceLayer(root, opt); ok {
+		return layer
+	}
+	if opt.project {
+		return config.Project
+	}
+	return config.Global
 }
 
 // configText is the value as typed into the prompt.
@@ -121,28 +131,24 @@ func configValue(opt configOption, b *config.Board) string {
 
 // sourceLayer is the layer that sets opt's value; false when it is the default.
 func sourceLayer(root string, opt configOption) (config.Layer, bool) {
-	if !opt.shared && config.Sets(root, config.Local, opt.path) {
-		return config.Local, true
-	}
-	if config.Sets(root, config.Shared, opt.path) {
-		return config.Shared, true
+	for _, layer := range []config.Layer{config.Project, config.Global} {
+		if config.Sets(root, layer, opt.path) {
+			return layer, true
+		}
 	}
 	return 0, false
 }
 
-// configSource labels where opt's value comes from: local, shared or default.
+// configSource labels where opt's value comes from: project, global or default.
 func configSource(root string, opt configOption) string {
 	return sourceLabel(sourceLayer(root, opt))
 }
 
 func sourceLabel(layer config.Layer, ok bool) string {
-	switch {
-	case !ok:
+	if !ok {
 		return "default"
-	case layer == config.Local:
-		return "local"
 	}
-	return "shared"
+	return layer.String()
 }
 
 // configQuery is the committed or in-progress search.
@@ -275,14 +281,14 @@ func (m Model) beginConfigEdit() (tea.Model, tea.Cmd) {
 	switch opt.kind {
 	case optToggle:
 		on, _ := opt.get(m.snap.Board).(bool)
-		return m.saveConfig(defaultConfigLayer(opt), opt, !on), nil
+		return m.saveConfig(defaultConfigLayer(m.eng.Root, opt), opt, !on), nil
 	case optChoice:
 		current, _ := opt.get(m.snap.Board).(string)
 		next := opt.choices[(slices.Index(opt.choices, current)+1)%len(opt.choices)]
-		return m.saveConfig(defaultConfigLayer(opt), opt, next), nil
+		return m.saveConfig(defaultConfigLayer(m.eng.Root, opt), opt, next), nil
 	}
 	m.configEditing = true
-	m.configLayer = defaultConfigLayer(opt)
+	m.configLayer = defaultConfigLayer(m.eng.Root, opt)
 	m.configInput.SetValue(configText(opt.get(m.snap.Board)))
 	m.configInput.CursorEnd()
 	return m, m.configInput.Focus()
@@ -300,9 +306,7 @@ func (m Model) updateConfigInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.configInput.Blur()
 		return m.commitConfig(opt), nil
 	case "tab":
-		if !opt.shared {
-			m.configLayer = otherLayer(m.configLayer)
-		}
+		m.configLayer = otherLayer(m.configLayer)
 		return m, nil
 	}
 	var cmd tea.Cmd
@@ -317,7 +321,7 @@ func (m Model) commitConfig(opt configOption) Model {
 	switch {
 	case text == "":
 		if !config.Sets(m.eng.Root, m.configLayer, opt.path) {
-			m.setFlash(fmt.Sprintf("%s is not set in %s", opt.name, m.configLayer.FileName()))
+			m.setFlash(fmt.Sprintf("%s is not set in the %s config", opt.name, m.configLayer))
 			return m
 		}
 		return m.saveConfig(m.configLayer, opt, nil)
@@ -346,19 +350,19 @@ func (m Model) resetConfig() Model {
 // saveConfig writes value to the layer, or removes the key when value is nil,
 // then reloads the board and the source labels.
 func (m Model) saveConfig(layer config.Layer, opt configOption, value any) Model {
-	m, err := m.writeSetting(layer, opt.path, value, "settings")
+	m, err := m.writeSetting(layer, opt.path, value)
 	if err != nil {
 		m.setFlash("Error: " + err.Error())
 		return m
 	}
 	m.configSrc = configSources(m.eng.Root)
-	done := "Saved %s to %s"
+	done := "Saved %s to the %s config"
 	if value == nil {
-		done = "Reset %s in %s"
+		done = "Reset %s in the %s config"
 	}
-	msg := fmt.Sprintf(done, opt.name, layer.FileName())
+	msg := fmt.Sprintf(done, opt.name, layer)
 	if src, ok := sourceLayer(m.eng.Root, opt); value != nil && ok && src != layer {
-		msg += fmt.Sprintf(" (overridden by %s)", src.FileName())
+		msg += fmt.Sprintf(" (overridden by %s)", src)
 	}
 	m.setFlash(msg)
 	return m
@@ -366,15 +370,12 @@ func (m Model) saveConfig(layer config.Layer, opt configOption, value any) Model
 
 // writeSetting writes value at path in the layer, or removes the key when value
 // is nil, then reloads the board.
-func (m Model) writeSetting(layer config.Layer, path []string, value any, view string) (Model, error) {
+func (m Model) writeSetting(layer config.Layer, path []string, value any) (Model, error) {
 	var err error
 	if value == nil {
 		err = config.Unset(m.eng.Root, layer, path)
 	} else {
 		err = config.Set(m.eng.Root, layer, path, value)
-	}
-	if errors.Is(err, config.ErrNoSharedFile) {
-		err = fmt.Errorf("%w; close %s and press W to write the default board", err, view)
 	}
 	if err != nil {
 		return m, err
@@ -385,10 +386,10 @@ func (m Model) writeSetting(layer config.Layer, path []string, value any, view s
 }
 
 func otherLayer(layer config.Layer) config.Layer {
-	if layer == config.Local {
-		return config.Shared
+	if layer == config.Project {
+		return config.Global
 	}
-	return config.Local
+	return config.Project
 }
 
 // configSources labels where each option's value comes from. It runs when the
@@ -415,8 +416,8 @@ func (m Model) renderConfig() string {
 	}
 	for n, i := range visible {
 		opt := configOptions[i]
-		if opt.shared && (n == 0 || !configOptions[visible[n-1]].shared) {
-			rows = append(rows, "", dim.Render("drover.json only"))
+		if opt.board && (n == 0 || !configOptions[visible[n-1]].board) {
+			rows = append(rows, "", dim.Render("in the config that holds the columns"))
 		}
 		selected := i == m.configSel
 		prefix, name := "  ", fmt.Sprintf("%-32s", opt.name)
@@ -427,7 +428,7 @@ func (m Model) renderConfig() string {
 		value, note := fmt.Sprintf("%-12s", configValue(opt, m.snap.Board)), dim.Render(m.configSrc[i])
 		if selected && m.configEditing {
 			value = m.configInput.View()
-			note = dim.Render("→ " + m.configLayer.FileName())
+			note = dim.Render("→ " + m.configLayer.String())
 		}
 		rows = append(rows, prefix+name+value+"  "+note)
 	}
@@ -444,7 +445,7 @@ func (m Model) renderConfig() string {
 		}
 		rows = append(rows, prefix+name+fmt.Sprintf("%-12s", count)+"  "+dim.Render("enter to edit"))
 	}
-	foot := dim.Width(width - 4).Render("Flows and automations live in drover.json only; the columns view edits just the opening prompt.")
+	foot := dim.Width(width - 4).Render("Flows and automations live in the config that holds the columns.")
 	if room := m.height - 7 - len(head) - lipgloss.Height(foot); m.height > 0 && len(rows) > room {
 		room = max(room, 3)
 		start := clamp(selectedRow-room/2, 0, len(rows)-room)

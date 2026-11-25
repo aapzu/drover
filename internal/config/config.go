@@ -1,8 +1,8 @@
-// Package config loads the board definition from drover.json at the repo root.
+// Package config loads the board definition and your settings from the global
+// and project config files, which live outside the repo.
 package config
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,16 +12,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aapzu/drover/internal/store"
 )
 
-const FileName = "drover.json"
+// FileName is the name of both the global and the project config file.
+const FileName = "config.json"
 
 const (
-	LocalFileName        = "drover.local.json"
 	DefaultWorktreesDir  = ".drover/worktrees"
 	DefaultMaxConcurrent = 8
 	DefaultAgentModel    = "default"
 )
+
+// GlobalPath is the config file that applies to every repo.
+func GlobalPath() string {
+	return filepath.Join(store.XDGDir("XDG_CONFIG_HOME", ".config"), "drover", FileName)
+}
+
+// ProjectPath is the config file of one repo, kept in its state directory.
+func ProjectPath(root string) string {
+	return filepath.Join(store.Dir(root), FileName)
+}
 
 // maxArchiveDays keeps a day count inside what a Duration can hold.
 const maxArchiveDays = 100 * 365
@@ -193,24 +205,19 @@ func (c Column) InReviewLane() bool { return c.Lane == LaneReview }
 // IsAgent columns run an agent for the cards in them.
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsDone() }
 
-// Load reads drover.json and applies drover.local.json on top of it.
-// A missing drover.json yields the default board and found=false.
+// Load builds the board from the global config file, then the project one on
+// top of it. found is false when neither defines columns, and the default
+// board is used.
 func Load(root string) (board *Board, found bool, err error) {
-	data, err := os.ReadFile(filepath.Join(root, FileName))
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		board = Default()
-	case err != nil:
-		return nil, false, err
-	default:
-		found = true
-		board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
-		if err := json.Unmarshal(data, board); err != nil {
-			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
+	board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
+	for _, layer := range []Layer{Global, Project} {
+		if err := board.applyLayer(layer.Path(root)); err != nil {
+			return nil, false, err
 		}
 	}
-	if err := board.applyLocal(root); err != nil {
-		return nil, found, err
+	found = board.Columns != nil
+	if !found {
+		board.useDefaultBoard()
 	}
 	board.dropTodo()
 	if err := board.validate(); err != nil {
@@ -223,6 +230,48 @@ func Load(root string) (board *Board, found bool, err error) {
 	board.defaultModel()
 	board.defaultWaitingForYou()
 	return board, found, nil
+}
+
+// applyLayer overlays the keys the file sets. A key it leaves out keeps the
+// value from the layer below, except that columns, prFlow and reviewFlow are
+// replaced whole.
+func (b *Board) applyLayer(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	columns, prFlow, reviewFlow := b.Columns, b.PRFlow, b.ReviewFlow
+	b.Columns, b.PRFlow, b.ReviewFlow = nil, nil, nil
+	if err := json.Unmarshal(data, b); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if b.Columns == nil {
+		b.Columns = columns
+	}
+	if b.PRFlow == nil {
+		b.PRFlow = prFlow
+	}
+	if b.ReviewFlow == nil {
+		b.ReviewFlow = reviewFlow
+	}
+	return nil
+}
+
+// useDefaultBoard fills in the built-in board, keeping what the files set.
+func (b *Board) useDefaultBoard() {
+	def := Default()
+	b.Columns = def.Columns
+	if b.PRFlow == nil {
+		b.PRFlow = def.PRFlow
+	}
+	if b.ReviewFlow == nil {
+		b.ReviewFlow = def.ReviewFlow
+	}
+	if b.ArchiveDoneAfter == "" {
+		b.ArchiveDoneAfter = def.ArchiveDoneAfter
+	}
 }
 
 // ClaudeEnv is the environment drover adds to every claude session it starts.
@@ -287,99 +336,11 @@ func waitingForYou(target string) Automation {
 	}
 }
 
-// applyLocal overlays your personal settings from drover.local.json.
-func (b *Board) applyLocal(root string) error {
-	data, err := os.ReadFile(filepath.Join(root, LocalFileName))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	var local struct {
-		DefaultBaseBranch  string          `json:"defaultBaseBranch"`
-		WorktreesDir       string          `json:"worktreesDir"`
-		MaxConcurrent      *int            `json:"maxConcurrent"`
-		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
-		AutoName           *bool           `json:"autoName"`
-		SplitByPR          *bool           `json:"splitByPR"`
-		DisableMouse       *bool           `json:"disableMouse"`
-		TeamReviewRequests *bool           `json:"teamReviewRequests"`
-		ReviewRepos        []string        `json:"reviewRepos"`
-		AssistantPlugins   []string        `json:"assistantPlugins"`
-		AssistantTools     []string        `json:"assistantTools"`
-		Notifications      json.RawMessage `json:"notifications"`
-		Columns            []localColumn   `json:"columns"`
-	}
-	if err := json.Unmarshal(data, &local); err != nil {
-		return fmt.Errorf("parse %s: %w", LocalFileName, err)
-	}
-	if local.DefaultBaseBranch != "" {
-		b.DefaultBaseBranch = local.DefaultBaseBranch
-	}
-	if local.WorktreesDir != "" {
-		b.WorktreesDir = local.WorktreesDir
-	}
-	if local.MaxConcurrent != nil {
-		b.MaxConcurrent = *local.MaxConcurrent
-	}
-	if local.IdleTimeoutMinutes != nil {
-		b.IdleTimeoutMinutes = *local.IdleTimeoutMinutes
-	}
-	if local.AutoName != nil {
-		b.AutoName = *local.AutoName
-	}
-	if local.SplitByPR != nil {
-		b.SplitByPR = *local.SplitByPR
-	}
-	if local.DisableMouse != nil {
-		b.DisableMouse = *local.DisableMouse
-	}
-	if local.TeamReviewRequests != nil {
-		b.TeamReviewRequests = *local.TeamReviewRequests
-	}
-	if local.ReviewRepos != nil {
-		b.ReviewRepos = local.ReviewRepos
-	}
-	if local.AssistantPlugins != nil {
-		b.AssistantPlugins = local.AssistantPlugins
-	}
-	if local.AssistantTools != nil {
-		b.AssistantTools = local.AssistantTools
-	}
-	if local.Notifications != nil {
-		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
-			return fmt.Errorf("parse %s: notifications: %w", LocalFileName, err)
-		}
-	}
-	for _, lc := range local.Columns {
-		if _, i, ok := b.Column(lc.ID); ok {
-			lc.applyTo(&b.Columns[i])
-		}
-	}
-	return nil
-}
-
-// localColumn is the part of a column that drover.local.json can override.
-type localColumn struct {
-	ID             string `json:"id"`
-	Color          string `json:"color"`
-	PermissionMode string `json:"permissionMode"`
-	ModelOverride  string `json:"modelOverride"`
-	EffortOverride string `json:"effortOverride"`
-}
-
-func (lc localColumn) applyTo(c *Column) {
-	c.Color = cmp.Or(lc.Color, c.Color)
-	c.PermissionMode = cmp.Or(lc.PermissionMode, c.PermissionMode)
-	c.ModelOverride = cmp.Or(lc.ModelOverride, c.ModelOverride)
-	c.EffortOverride = cmp.Or(lc.EffortOverride, c.EffortOverride)
-}
-
-// Stamp changes whenever drover.json or drover.local.json does.
+// Stamp changes whenever the global or the project config file does.
 func Stamp(root string) string {
 	var stamp string
-	for _, name := range []string{FileName, LocalFileName} {
-		if info, err := os.Stat(filepath.Join(root, name)); err == nil {
+	for _, layer := range []Layer{Global, Project} {
+		if info, err := os.Stat(layer.Path(root)); err == nil {
 			stamp += info.ModTime().String() + fmt.Sprint(info.Size())
 		}
 		stamp += "|"
@@ -423,45 +384,45 @@ func (b *Board) ArchiveAfter() time.Duration {
 
 func (b *Board) validate() error {
 	if len(b.Columns) == 0 {
-		return fmt.Errorf("%s has no columns", FileName)
+		return errors.New("config has no columns")
 	}
 	if b.ArchiveDoneAfter != "" {
 		if _, err := parseAge(b.ArchiveDoneAfter); err != nil {
-			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
+			return fmt.Errorf("config: archiveDoneAfter %w", err)
 		}
 	}
 	for _, id := range b.AssistantPlugins {
 		if strings.TrimSpace(id) == "" {
-			return fmt.Errorf("%s or %s: assistantPlugins must not hold an empty id", FileName, LocalFileName)
+			return fmt.Errorf("config: assistantPlugins must not hold an empty id")
 		}
 	}
 	for _, r := range b.ReviewRepos {
 		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-			return fmt.Errorf("%s or %s: reviewRepos entry %q must be owner/name", FileName, LocalFileName, r)
+			return fmt.Errorf("config: reviewRepos entry %q must be owner/name", r)
 		}
 	}
 	for _, t := range b.AssistantTools {
 		if !strings.HasPrefix(t, "mcp__") || len(t) == len("mcp__") {
-			return fmt.Errorf("%s or %s: assistantTools entry %q must be an MCP tool pattern starting with mcp__", FileName, LocalFileName, t)
+			return fmt.Errorf("config: assistantTools entry %q must be an MCP tool pattern starting with mcp__", t)
 		}
 	}
 	if b.Columns[0].InReviewLane() {
-		return fmt.Errorf("%s: the first column must not be in the %s lane, since new cards land there", FileName, LaneReview)
+		return fmt.Errorf("config: the first column must not be in the %s lane, since new cards land there", LaneReview)
 	}
 	seen := map[string]bool{}
 	for _, c := range b.Columns {
 		if c.ID == "" || c.Name == "" {
-			return fmt.Errorf("%s: every column needs an id and a name", FileName)
+			return errors.New("config: every column needs an id and a name")
 		}
 		if seen[c.ID] {
-			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
+			return fmt.Errorf("config: duplicate column id %s", c.ID)
 		}
 		seen[c.ID] = true
 		if c.Lane != "" && !c.InReviewLane() {
-			return fmt.Errorf("%s: column %s has unknown lane %q, only %q is supported", FileName, c.ID, c.Lane, LaneReview)
+			return fmt.Errorf("config: column %s has unknown lane %q, only %q is supported", c.ID, c.Lane, LaneReview)
 		}
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
-			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
+			return fmt.Errorf("config: keepAgent column %s must not be autoSpawn or Done", c.ID)
 		}
 	}
 	if f := b.PRFlow; f != nil {
@@ -469,10 +430,10 @@ func (b *Board) validate() error {
 			return err
 		}
 		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
-			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
+			return errors.New("config: prFlow.requested must be an autoSpawn column")
 		}
 		if m := f.ChangesRequestedMode; m != "" && m != ChangesModePropose && m != ChangesModeFix && m != ChangesModeOff {
-			return fmt.Errorf("%s: prFlow.changesRequestedMode must be %q, %q or %q, not %q", FileName, ChangesModePropose, ChangesModeFix, ChangesModeOff, m)
+			return fmt.Errorf("config: prFlow.changesRequestedMode must be %q, %q or %q, not %q", ChangesModePropose, ChangesModeFix, ChangesModeOff, m)
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
@@ -485,7 +446,7 @@ func (b *Board) validate() error {
 func (b *Board) checkColumns(flow string, refs ...string) error {
 	for _, ref := range refs {
 		if _, ok := b.Find(ref); ref != "" && !ok {
-			return fmt.Errorf("%s: %s names unknown column %q", FileName, flow, ref)
+			return fmt.Errorf("config: %s names unknown column %q", flow, ref)
 		}
 	}
 	return nil
@@ -502,14 +463,6 @@ func (b *Board) WorktreesPath(root string) string {
 		return filepath.Clean(dir)
 	}
 	return filepath.Join(root, dir)
-}
-
-func (b *Board) Save(root string) error {
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(root, FileName), append(data, '\n'), 0o644)
 }
 
 func (b *Board) Column(id string) (Column, int, bool) {
@@ -553,7 +506,7 @@ func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
 // ErrNoReviewLane is what starting a review on a board without a review lane
 // reports.
-var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in drover.json`)
+var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in your config`)
 
 // ReviewEntry is where a card you review starts: the review lane's first agent
 // column, else its first column. It reports false when the board has no review

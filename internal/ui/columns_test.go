@@ -23,8 +23,11 @@ const columnsBoard = `{
 
 func columnsModel(t *testing.T) (Model, string) {
 	t.Helper()
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(columnsBoard), 0o644); err != nil {
+	root := newRoot(t)
+	if err := os.MkdirAll(filepath.Dir(config.GlobalPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.GlobalPath(), []byte(columnsBoard), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return configModel(t, root), root
@@ -95,56 +98,57 @@ func TestColumnsOpenFromTheBoardAndSettings(t *testing.T) {
 	}
 }
 
-func TestColumnsLocalEditDoesNotTouchTheSharedFile(t *testing.T) {
+func TestColumnsEditsGoToTheConfigHoldingTheColumns(t *testing.T) {
 	m, root := columnsModel(t)
 	m = openColumn(t, m, "run", "Effort")
 	m = pressColumns(t, m, keyPress("enter"))
-	if m.configLayer != config.Local {
+	if m.configLayer != config.Global {
 		t.Fatalf("layer = %v", m.configLayer)
 	}
 	m.configInput.SetValue("high")
 	m = pressColumns(t, m, keyPress("enter"))
 
-	if !config.Sets(root, config.Local, config.ColumnPath("run", "effortOverride")) {
-		t.Fatalf("not saved to drover.local.json; flash=%q", m.flash)
+	if !config.Sets(root, config.Global, config.ColumnPath("run", "effortOverride")) {
+		t.Fatalf("not saved to the global config; flash=%q", m.flash)
 	}
-	if shared, _ := os.ReadFile(filepath.Join(root, config.FileName)); string(shared) != columnsBoard {
-		t.Errorf("drover.json changed:\n%s", shared)
+	if _, err := os.Stat(config.ProjectPath(root)); !os.IsNotExist(err) {
+		t.Errorf("the project config was created: %v", err)
 	}
 	if c, _, _ := m.snap.Board.Column("run"); c.EffortOverride != "high" {
 		t.Errorf("running board column = %+v", c)
 	}
-	if row := rowOf(m.renderColumns(), "Effort"); !strings.Contains(row, "high") || !strings.Contains(row, "local") {
+	if row := rowOf(m.renderColumns(), "Effort"); !strings.Contains(row, "high") || !strings.Contains(row, "global") {
 		t.Errorf("row = %q", row)
 	}
+	if data, _ := os.ReadFile(config.GlobalPath()); strings.Contains(string(data), "modelOverride") {
+		t.Errorf("a default was written into the config:\n%s", data)
+	}
 }
 
-func TestColumnsSharedEditViaTab(t *testing.T) {
+func TestColumnsEditsGoToTheProjectConfigWhenItHoldsTheColumns(t *testing.T) {
 	m, root := columnsModel(t)
-	m = openColumn(t, m, "run", "Permission mode")
-	m = pressColumns(t, m, keyPress("enter"))
-	m = pressColumns(t, m, keyPress("tab"))
-	if m.configLayer != config.Shared {
-		t.Fatal("tab didn't switch to drover.json")
+	project := `{"columns":[{"id":"run","name":"Executing","autoSpawn":true}]}`
+	if err := os.MkdirAll(filepath.Dir(config.ProjectPath(root)), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	m.configInput.SetValue("acceptEdits")
-	m = pressColumns(t, m, keyPress("enter"))
-
-	if !config.Sets(root, config.Shared, config.ColumnPath("run", "permissionMode")) {
-		t.Fatalf("not saved to drover.json; flash=%q", m.flash)
+	if err := os.WriteFile(config.ProjectPath(root), []byte(project), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); strings.Contains(string(data), "modelOverride") {
-		t.Errorf("a default was written into drover.json:\n%s", data)
+	m = configModel(t, root)
+	m = openColumn(t, m, "run", "Effort")
+	m = typeColumn(t, m, "high")
+	if !config.Sets(root, config.Project, config.ColumnPath("run", "effortOverride")) || config.Sets(root, config.Global, config.ColumnPath("run", "effortOverride")) {
+		t.Errorf("the edit landed in the wrong config; flash=%q", m.flash)
 	}
 }
 
-func TestColumnsTabDoesNothingForSharedOnlyOptions(t *testing.T) {
+func TestColumnsTabDoesNothing(t *testing.T) {
 	m, _ := columnsModel(t)
 	m = openColumn(t, m, "run", "Plan exit target")
 	m = pressColumns(t, m, keyPress("enter"))
 	m = pressColumns(t, m, keyPress("tab"))
-	if m.configLayer != config.Shared {
-		t.Errorf("layer = %v", m.configLayer)
+	if m.configLayer != config.Global || !m.columnEditing {
+		t.Errorf("layer = %v editing=%v", m.configLayer, m.columnEditing)
 	}
 }
 
@@ -153,7 +157,7 @@ func TestColumnsRejectedValueKeepsThePromptOpen(t *testing.T) {
 	m = openColumn(t, m, "run", "Effort")
 	m = typeColumn(t, m, "extreme")
 
-	if config.Sets(root, config.Local, config.ColumnPath("run", "effortOverride")) {
+	if config.Sets(root, config.Global, config.ColumnPath("run", "effortOverride")) {
 		t.Error("an unknown effort was saved")
 	}
 	if !strings.Contains(m.flash, "one of") {
@@ -168,94 +172,62 @@ func TestColumnsRejectedValueKeepsThePromptOpen(t *testing.T) {
 	}
 }
 
-func TestColumnsEmptyInputRemovesTheKeyFromTheChosenLayer(t *testing.T) {
+func TestColumnsEmptyInputRemovesTheKey(t *testing.T) {
 	m, root := columnsModel(t)
 	m = openColumn(t, m, "run", "Effort")
 	m = typeColumn(t, m, "high")
 
 	m = typeColumn(t, m, "")
-	if config.Sets(root, config.Local, config.ColumnPath("run", "effortOverride")) || !strings.HasPrefix(m.flash, "Reset") {
-		t.Errorf("local key survived; flash=%q", m.flash)
+	if config.Sets(root, config.Global, config.ColumnPath("run", "effortOverride")) || !strings.HasPrefix(m.flash, "Reset") {
+		t.Errorf("key survived; flash=%q", m.flash)
 	}
 
 	m = typeColumn(t, m, "")
-	if !strings.Contains(m.flash, "not set in "+config.LocalFileName) || !m.columnEditing {
+	if !strings.Contains(m.flash, "not set in the global config") || !m.columnEditing {
 		t.Errorf("flash=%q editing=%v", m.flash, m.columnEditing)
 	}
 
 	m = openColumn(t, m, "plan", "Permission mode")
-	m = pressColumns(t, m, keyPress("enter"))
-	m = pressColumns(t, m, keyPress("tab"))
-	m.configInput.SetValue("")
-	m = pressColumns(t, m, keyPress("enter"))
-	if config.Sets(root, config.Shared, config.ColumnPath("plan", "permissionMode")) {
-		t.Errorf("shared key survived; flash=%q", m.flash)
+	m = typeColumn(t, m, "")
+	if config.Sets(root, config.Global, config.ColumnPath("plan", "permissionMode")) {
+		t.Errorf("key survived; flash=%q", m.flash)
 	}
 }
 
-func TestColumnsToggleWritesSharedAndOffRemovesTheKey(t *testing.T) {
+func TestColumnsToggleWritesAndOffRemovesTheKey(t *testing.T) {
 	m, root := columnsModel(t)
 	m = openColumn(t, m, "run", "Skip the worktree")
-	if columnOptions[m.columnOptSel].local {
-		t.Fatal("noWorktree must be shared-only")
-	}
 	m = pressColumns(t, m, keyPress("enter"))
-	if !config.Sets(root, config.Shared, config.ColumnPath("run", "noWorktree")) {
+	if !config.Sets(root, config.Global, config.ColumnPath("run", "noWorktree")) {
 		t.Fatalf("toggle wasn't saved; flash=%q", m.flash)
 	}
 	m = pressColumns(t, m, keyPress("enter"))
-	if config.Sets(root, config.Shared, config.ColumnPath("run", "noWorktree")) {
+	if config.Sets(root, config.Global, config.ColumnPath("run", "noWorktree")) {
 		t.Error("toggling off left the key behind")
 	}
 }
 
 func TestColumnsConflictingToggleIsRolledBack(t *testing.T) {
-	m, root := columnsModel(t)
+	m, _ := columnsModel(t)
 	m = openColumn(t, m, "run", "Keep the agent running")
 	m = pressColumns(t, m, keyPress("enter"))
 
 	if !strings.HasPrefix(m.flash, "Error:") {
 		t.Errorf("flash=%q", m.flash)
 	}
-	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); string(data) != columnsBoard {
+	if data, _ := os.ReadFile(config.GlobalPath()); string(data) != columnsBoard {
 		t.Errorf("invalid column was left on disk:\n%s", data)
-	}
-}
-
-func TestColumnsSavingInTheShadowedLayerWarns(t *testing.T) {
-	m, root := columnsModel(t)
-	m = openColumn(t, m, "run", "Effort")
-	m = typeColumn(t, m, "high")
-
-	m = pressColumns(t, m, keyPress("enter"))
-	m = pressColumns(t, m, keyPress("tab"))
-	m.configInput.SetValue("low")
-	m = pressColumns(t, m, keyPress("enter"))
-	if !strings.Contains(m.flash, "overridden by "+config.LocalFileName) {
-		t.Errorf("flash=%q", m.flash)
-	}
-	if m.columnSrc[m.columnOptSel] != "local" {
-		t.Errorf("source = %q", m.columnSrc[m.columnOptSel])
-	}
-
-	m = pressColumns(t, m, key("x"))
-	if m.columnSrc[m.columnOptSel] != "shared" || config.Sets(root, config.Local, config.ColumnPath("run", "effortOverride")) {
-		t.Errorf("first x should drop the local value; source = %q", m.columnSrc[m.columnOptSel])
-	}
-	m = pressColumns(t, m, key("x"))
-	if config.Sets(root, config.Shared, config.ColumnPath("run", "effortOverride")) {
-		t.Error("second x should drop the shared value")
 	}
 }
 
 func TestColumnsResetRemovesTheOverride(t *testing.T) {
 	m, root := columnsModel(t)
 	m = openColumn(t, m, "plan", "Permission mode")
-	if m.columnSrc[m.columnOptSel] != "shared" {
+	if m.columnSrc[m.columnOptSel] != "global" {
 		t.Fatalf("source = %q", m.columnSrc[m.columnOptSel])
 	}
 	m = pressColumns(t, m, key("x"))
-	if config.Sets(root, config.Shared, config.ColumnPath("plan", "permissionMode")) {
+	if config.Sets(root, config.Global, config.ColumnPath("plan", "permissionMode")) {
 		t.Errorf("reset kept the key; flash=%q", m.flash)
 	}
 	m = pressColumns(t, m, key("x"))
@@ -265,7 +237,7 @@ func TestColumnsResetRemovesTheOverride(t *testing.T) {
 }
 
 func TestColumnsNameCannotBeEmptiedOrReset(t *testing.T) {
-	m, root := columnsModel(t)
+	m, _ := columnsModel(t)
 	m = openColumn(t, m, "run", "Name")
 	m = pressColumns(t, m, key("x"))
 	if !strings.Contains(m.flash, "can't be reset") {
@@ -275,8 +247,8 @@ func TestColumnsNameCannotBeEmptiedOrReset(t *testing.T) {
 	if !strings.Contains(m.flash, "can't be empty") {
 		t.Errorf("flash=%q", m.flash)
 	}
-	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); string(data) != columnsBoard {
-		t.Errorf("drover.json changed:\n%s", data)
+	if data, _ := os.ReadFile(config.GlobalPath()); string(data) != columnsBoard {
+		t.Errorf("the config changed:\n%s", data)
 	}
 }
 
@@ -295,27 +267,26 @@ func TestColumnsRenameWarnsWhenATargetNamesTheOldName(t *testing.T) {
 	}
 }
 
-func TestColumnsMissingSharedFilePointsToW(t *testing.T) {
-	m := configModel(t, t.TempDir())
+func TestColumnsEditOfTheDefaultBoardWritesItToTheGlobalConfig(t *testing.T) {
+	root := newRoot(t)
+	m := configModel(t, root)
 	m = openColumn(t, m, m.snap.Board.Columns[0].ID, "Name")
 	m = typeColumn(t, m, "Backlog")
-	if !strings.Contains(m.flash, "press W") {
+	if !strings.HasPrefix(m.flash, "Saved") || !strings.Contains(m.flash, "global config") {
 		t.Errorf("flash=%q", m.flash)
 	}
-	m = openColumn(t, m, m.snap.Board.Columns[0].ID, "Skip the worktree")
-	m = pressColumns(t, m, keyPress("enter"))
-	if !strings.Contains(m.flash, "press W") {
-		t.Errorf("toggle flash=%q", m.flash)
+	if got := m.snap.Board.Columns[0].Name; got != "Backlog" || len(m.snap.Board.Columns) != len(config.Default().Columns) {
+		t.Errorf("columns = %+v", m.snap.Board.Columns)
+	}
+	if !config.Sets(root, config.Global, []string{"columns"}) {
+		t.Error("the board wasn't written to the global config")
 	}
 }
 
 func TestColumnsEditLeavesOtherColumnsAlone(t *testing.T) {
 	m, root := columnsModel(t)
 	m = openColumn(t, m, "plan", "Color")
-	m = pressColumns(t, m, keyPress("enter"))
-	m = pressColumns(t, m, keyPress("tab"))
-	m.configInput.SetValue("#ff0000")
-	m = pressColumns(t, m, keyPress("enter"))
+	m = typeColumn(t, m, "#ff0000")
 
 	board, _, err := config.Load(root)
 	if err != nil {
@@ -324,7 +295,7 @@ func TestColumnsEditLeavesOtherColumnsAlone(t *testing.T) {
 	if len(board.Columns) != 3 || board.Columns[0].Color != "#ff0000" || board.Columns[0].PermissionMode != "plan" || board.Columns[1].Name != "Executing" {
 		t.Errorf("columns = %+v", board.Columns)
 	}
-	data, _ := os.ReadFile(filepath.Join(root, config.FileName))
+	data, _ := os.ReadFile(config.GlobalPath())
 	if !strings.Contains(string(data), `"role": "done"`) || !strings.HasSuffix(string(data), "\n") {
 		t.Errorf("file formatting:\n%s", data)
 	}
@@ -341,7 +312,7 @@ func TestColumnsFollowTheColumnWhenTheBoardIsReordered(t *testing.T) {
 	m.columnSel = 0
 
 	m = typeColumn(t, m, "high")
-	if !config.Sets(root, config.Local, config.ColumnPath("run", "effortOverride")) || config.Sets(root, config.Local, config.ColumnPath("plan", "effortOverride")) {
+	if !config.Sets(root, config.Global, config.ColumnPath("run", "effortOverride")) || config.Sets(root, config.Global, config.ColumnPath("plan", "effortOverride")) {
 		t.Errorf("the edit landed on the wrong column; flash=%q", m.flash)
 	}
 }
@@ -445,11 +416,11 @@ func TestColumnsFooterHintFollowsWhatYouAreDoing(t *testing.T) {
 	}{
 		{"the list", func(*Model) {}, "enter open"},
 		{"a column's options", func(m *Model) { m.columnOpen = true }, "x reset"},
-		{"editing a setting that has two files", func(m *Model) {
+		{"editing a setting", func(m *Model) {
 			m.columnOpen, m.columnEditing = true, true
 			m.columnOptSel = columnOptionIndex(t, "Color")
-		}, "tab drover.json / drover.local.json"},
-		{"editing a shared-only setting", func(m *Model) {
+		}, "enter save  esc cancel"},
+		{"editing another setting", func(m *Model) {
 			m.columnOpen, m.columnEditing = true, true
 			m.columnOptSel = columnOptionIndex(t, "Run an agent")
 		}, "enter save  esc cancel"},
@@ -479,8 +450,11 @@ const promptBoard = `{
 
 func promptModel(t *testing.T) (Model, string) {
 	t.Helper()
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, config.FileName), []byte(promptBoard), 0o644); err != nil {
+	root := newRoot(t)
+	if err := os.MkdirAll(filepath.Dir(config.GlobalPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.GlobalPath(), []byte(promptBoard), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return configModel(t, root), root
@@ -508,7 +482,7 @@ func onEnter(t *testing.T, m Model, id string) []config.Automation {
 func TestColumnsShowAndEditTheOpeningPrompt(t *testing.T) {
 	m, root := promptModel(t)
 	m = openColumn(t, m, "review", "Opening prompt")
-	if row := rowOf(m.renderColumns(), "Opening prompt"); !strings.Contains(row, "/code-review …") || !strings.Contains(row, "shared") {
+	if row := rowOf(m.renderColumns(), "Opening prompt"); !strings.Contains(row, "/code-review …") || !strings.Contains(row, "global") {
 		t.Errorf("row = %q", row)
 	}
 	m = pressColumns(t, m, keyPress("enter"))
@@ -535,7 +509,7 @@ func TestColumnsShowAndEditTheOpeningPrompt(t *testing.T) {
 }
 
 func TestColumnsEscCancelsPromptEdit(t *testing.T) {
-	m, root := promptModel(t)
+	m, _ := promptModel(t)
 	m = openColumn(t, m, "review", "Opening prompt")
 	m = pressColumns(t, m, keyPress("enter"))
 	m.columnPrompt.SetValue("changed")
@@ -543,8 +517,8 @@ func TestColumnsEscCancelsPromptEdit(t *testing.T) {
 	if m.columnEditing {
 		t.Error("esc kept editing")
 	}
-	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); string(data) != promptBoard {
-		t.Errorf("drover.json changed:\n%s", data)
+	if data, _ := os.ReadFile(config.GlobalPath()); string(data) != promptBoard {
+		t.Errorf("the config changed:\n%s", data)
 	}
 }
 
@@ -568,7 +542,7 @@ func TestColumnsAddOpeningPromptBeforeOtherRows(t *testing.T) {
 }
 
 func TestColumnsEmptyOpeningPromptRemovesTheRow(t *testing.T) {
-	m, root := promptModel(t)
+	m, _ := promptModel(t)
 	m = openColumn(t, m, "review", "Opening prompt")
 	m = savePrompt(t, m, "  ")
 	if rows := onEnter(t, m, "review"); len(rows) != 1 || rows[0].Type != "notify" {
@@ -585,7 +559,7 @@ func TestColumnsEmptyOpeningPromptRemovesTheRow(t *testing.T) {
 	m = openColumn(t, m, "plain", "Opening prompt")
 	m = savePrompt(t, m, "x")
 	m = pressColumns(t, m, keyPress("x"))
-	if data, _ := os.ReadFile(filepath.Join(root, config.FileName)); strings.Contains(string(data), `"message": "x"`) {
+	if data, _ := os.ReadFile(config.GlobalPath()); strings.Contains(string(data), `"message": "x"`) {
 		t.Errorf("row left behind:\n%s", data)
 	}
 	c, _, _ := m.snap.Board.Column("plain")
@@ -603,11 +577,13 @@ func TestColumnsEmptyOpeningPromptWhenUnsetSaysSo(t *testing.T) {
 	}
 }
 
-func TestColumnsMissingSharedFileBlocksOpeningPrompt(t *testing.T) {
-	m := configModel(t, t.TempDir())
-	m = openColumn(t, m, m.snap.Board.Columns[0].ID, "Opening prompt")
+func TestColumnsOpeningPromptOfTheDefaultBoardWritesItToTheGlobalConfig(t *testing.T) {
+	root := newRoot(t)
+	m := configModel(t, root)
+	id := m.snap.Board.Columns[0].ID
+	m = openColumn(t, m, id, "Opening prompt")
 	m = savePrompt(t, m, "hi")
-	if !strings.Contains(m.flash, "press W") {
+	if !strings.HasPrefix(m.flash, "Saved") || !config.Sets(root, config.Global, config.ColumnPath(id, "automations", "onEnter")) {
 		t.Errorf("flash=%q", m.flash)
 	}
 }

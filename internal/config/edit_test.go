@@ -1,21 +1,46 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestSetKeepsTheRestOfTheSharedFileInOrder(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+// testRoot returns an empty repo root whose global config and state
+// directories belong to the test.
+func testRoot(t *testing.T) string {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	return t.TempDir()
+}
 
-	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); err != nil {
+func writeLayer(t *testing.T, root string, layer Layer, content string) string {
+	t.Helper()
+	file := layer.Path(root)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func readLayer(root string, layer Layer) string {
+	data, _ := os.ReadFile(layer.Path(root))
+	return string(data)
+}
+
+func TestSetKeepsTheRestOfTheFileInOrder(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+
+	if err := Set(dir, Global, []string{"archiveDoneAfter"}, "30d"); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(Global.Path(dir))
 	if !strings.Contains(string(data), `"_modifiedBy": "7ef4fd0cb484"`) {
 		t.Errorf("lost an unrelated key:\n%s", data)
 	}
@@ -28,11 +53,11 @@ func TestSetKeepsTheRestOfTheSharedFileInOrder(t *testing.T) {
 	}
 }
 
-func TestSetNestedKeyCreatesTheLocalFile(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+func TestSetNestedKeyCreatesTheProjectFile(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
 
-	if err := Set(dir, Local, []string{"notifications", "turnDone"}, false); err != nil {
+	if err := Set(dir, Project, []string{"notifications", "turnDone"}, false); err != nil {
 		t.Fatal(err)
 	}
 	board, _, err := Load(dir)
@@ -42,21 +67,21 @@ func TestSetNestedKeyCreatesTheLocalFile(t *testing.T) {
 	if board.Notifications.TurnDone || !board.Notifications.NeedsYou {
 		t.Errorf("notifications=%+v", board.Notifications)
 	}
-	if !Sets(dir, Local, []string{"notifications", "turnDone"}) || Sets(dir, Local, []string{"notifications", "needsYou"}) {
+	if !Sets(dir, Project, []string{"notifications", "turnDone"}) || Sets(dir, Project, []string{"notifications", "needsYou"}) {
 		t.Errorf("Sets does not see the nested key")
 	}
 }
 
 func TestUnsetFallsBackToTheDefault(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	if err := Set(dir, Local, []string{"autoName"}, false); err != nil {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	if err := Set(dir, Project, []string{"autoName"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := Unset(dir, Local, []string{"autoName"}); err != nil {
+	if err := Unset(dir, Project, []string{"autoName"}); err != nil {
 		t.Fatal(err)
 	}
-	if Sets(dir, Local, []string{"autoName"}) {
+	if Sets(dir, Project, []string{"autoName"}) {
 		t.Fatal("override is still there")
 	}
 	board, _, _ := Load(dir)
@@ -66,39 +91,39 @@ func TestUnsetFallsBackToTheDefault(t *testing.T) {
 }
 
 func TestUnsetLastNestedKeyRemovesTheParent(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	Set(dir, Local, []string{"notifications", "exited"}, false)
-	if err := Unset(dir, Local, []string{"notifications", "exited"}); err != nil {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	Set(dir, Project, []string{"notifications", "exited"}, false)
+	if err := Unset(dir, Project, []string{"notifications", "exited"}); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
+	data, _ := os.ReadFile(Project.Path(dir))
 	if strings.Contains(string(data), "notifications") {
 		t.Errorf("empty parent left behind:\n%s", data)
 	}
 }
 
 func TestUnsetNestedKeyKeepsSiblings(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	Set(dir, Local, []string{"notifications", "turnDone"}, false)
-	Set(dir, Local, []string{"notifications", "exited"}, false)
-	if err := Unset(dir, Local, []string{"notifications", "exited"}); err != nil {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	Set(dir, Project, []string{"notifications", "turnDone"}, false)
+	Set(dir, Project, []string{"notifications", "exited"}, false)
+	if err := Unset(dir, Project, []string{"notifications", "exited"}); err != nil {
 		t.Fatal(err)
 	}
-	if !Sets(dir, Local, []string{"notifications", "turnDone"}) {
+	if !Sets(dir, Project, []string{"notifications", "turnDone"}) {
 		t.Error("unsetting one nested key removed its sibling")
 	}
 }
 
-func TestUnsetWithoutLocalFileIsNoOp(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	if err := Unset(dir, Local, []string{"autoName"}); err != nil {
+func TestUnsetWithoutProjectFileIsNoOp(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	if err := Unset(dir, Project, []string{"autoName"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, LocalFileName)); !os.IsNotExist(err) {
-		t.Errorf("unset created drover.local.json: %v", err)
+	if _, err := os.Stat(Project.Path(dir)); !os.IsNotExist(err) {
+		t.Errorf("unset created the project config: %v", err)
 	}
 }
 
@@ -114,9 +139,9 @@ func TestSetsIsFalseForUnusableFiles(t *testing.T) {
 		{"scalar parent", `{"notifications":5}`, []string{"notifications", "turnDone"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			os.WriteFile(filepath.Join(dir, LocalFileName), []byte(tc.content), 0o644)
-			if Sets(dir, Local, tc.path) {
+			dir := testRoot(t)
+			writeLayer(t, dir, Project, tc.content)
+			if Sets(dir, Project, tc.path) {
 				t.Errorf("Sets is true for %q", tc.content)
 			}
 		})
@@ -124,23 +149,23 @@ func TestSetsIsFalseForUnusableFiles(t *testing.T) {
 }
 
 func TestSetWritesAmpersandsReadably(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	if err := Set(dir, Shared, []string{"initScript"}, "make && make test"); err != nil {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	if err := Set(dir, Global, []string{"initScript"}, "make && make test"); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	data, _ := os.ReadFile(Global.Path(dir))
 	if !strings.Contains(string(data), `"make && make test"`) {
 		t.Errorf("value was HTML-escaped:\n%s", data)
 	}
 }
 
 func TestSetKeepsTheFileMode(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	file := filepath.Join(dir, LocalFileName)
-	os.WriteFile(file, []byte(`{}`), 0o600)
-	if err := Set(dir, Local, []string{"autoName"}, false); err != nil {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	file := writeLayer(t, dir, Project, `{}`)
+	os.Chmod(file, 0o600)
+	if err := Set(dir, Project, []string{"autoName"}, false); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(file)
@@ -150,14 +175,15 @@ func TestSetKeepsTheFileMode(t *testing.T) {
 }
 
 func TestSetThroughASymlinkedFileUpdatesTheTarget(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "elsewhere.json")
+	dir := testRoot(t)
+	target := filepath.Join(t.TempDir(), "elsewhere.json")
 	os.WriteFile(target, []byte(sample), 0o644)
-	link := filepath.Join(dir, FileName)
+	link := Global.Path(dir)
+	os.MkdirAll(filepath.Dir(link), 0o755)
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); err != nil {
+	if err := Set(dir, Global, []string{"archiveDoneAfter"}, "30d"); err != nil {
 		t.Fatal(err)
 	}
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -169,29 +195,83 @@ func TestSetThroughASymlinkedFileUpdatesTheTarget(t *testing.T) {
 }
 
 func TestEditRejectsAnUnknownLayerAndAnEmptyPath(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
 	if err := Set(dir, Layer(7), []string{"autoName"}, false); err == nil {
 		t.Error("expected an error for an unknown layer")
 	}
-	if err := Set(dir, Local, nil, false); err == nil {
+	if err := Set(dir, Project, nil, false); err == nil {
 		t.Error("expected an error for an empty path")
 	}
-	if Sets(dir, Local, nil) {
+	if Sets(dir, Project, nil) {
 		t.Error("an empty path can't be set")
 	}
-	if _, err := os.Stat(filepath.Join(dir, LocalFileName)); !os.IsNotExist(err) {
-		t.Errorf("a rejected edit created drover.local.json: %v", err)
+	if _, err := os.Stat(Project.Path(dir)); !os.IsNotExist(err) {
+		t.Errorf("a rejected edit created the project config: %v", err)
 	}
 }
 
-func TestSharedEditNeedsADrover(t *testing.T) {
-	dir := t.TempDir()
-	if err := Set(dir, Shared, []string{"archiveDoneAfter"}, "30d"); !errors.Is(err, ErrNoSharedFile) {
-		t.Fatalf("err=%v, want ErrNoSharedFile", err)
+func TestEditCreatesAMissingFile(t *testing.T) {
+	dir := testRoot(t)
+	if err := Set(dir, Global, []string{"archiveDoneAfter"}, "30d"); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, FileName)); !os.IsNotExist(err) {
-		t.Errorf("drover.json was created: %v", err)
+	board, found, err := Load(dir)
+	if err != nil || found || board.ArchiveDoneAfter != "30d" {
+		t.Fatalf("found=%v archive=%q err=%v", found, board.ArchiveDoneAfter, err)
+	}
+}
+
+func TestEditingTheDefaultBoardWritesItToTheLayerFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path []string
+		val  any
+	}{
+		{"column", ColumnPath("executing", "modelOverride"), "haiku"},
+		{"flow", []string{"prFlow", "changesRequestedMode"}, ChangesModeFix},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testRoot(t)
+			if err := Set(dir, Global, tc.path, tc.val); err != nil {
+				t.Fatal(err)
+			}
+			board, found, err := Load(dir)
+			if err != nil || !found {
+				t.Fatalf("found=%v err=%v", found, err)
+			}
+			def := Default()
+			if len(board.Columns) != len(def.Columns) || board.PRFlow.Opened != def.PRFlow.Opened || board.ReviewFlow.Started != def.ReviewFlow.Started {
+				t.Errorf("the default board was not copied whole: %d columns, prFlow=%+v", len(board.Columns), board.PRFlow)
+			}
+		})
+	}
+}
+
+func TestEditingColumnsOfALayerBelowTheBoardIsRejected(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	err := Set(dir, Project, ColumnPath("dc9f2b38", "color"), "#fff")
+	if err == nil || !strings.Contains(err.Error(), "global") {
+		t.Fatalf("err=%v, want a pointer to the global config", err)
+	}
+	if _, err := os.Stat(Project.Path(dir)); !os.IsNotExist(err) {
+		t.Errorf("a rejected edit created the project config: %v", err)
+	}
+}
+
+func TestColumnLayerIsTheOneThatDefinesColumns(t *testing.T) {
+	dir := testRoot(t)
+	if got := ColumnLayer(dir); got != Global {
+		t.Errorf("without columns anywhere = %v, want global", got)
+	}
+	writeLayer(t, dir, Global, sample)
+	if got := ColumnLayer(dir); got != Global {
+		t.Errorf("columns in global = %v", got)
+	}
+	writeLayer(t, dir, Project, `{"columns":[{"id":"a","name":"A","autoSpawn":true}]}`)
+	if got := ColumnLayer(dir); got != Project {
+		t.Errorf("columns in project = %v", got)
 	}
 }
 
@@ -203,18 +283,18 @@ func TestRejectedEditLeavesTheFileAsItWas(t *testing.T) {
 		path   []string
 		value  any
 	}{
-		{"bad shared value", Shared, sample, []string{"archiveDoneAfter"}, "soon"},
-		{"bad local value leaves no new file", Local, "", []string{"maxConcurrent"}, "many"},
-		{"trailing data", Local, `{"autoName":false} junk`, []string{"maxConcurrent"}, 4},
-		{"truncated file", Local, `{"autoName":false`, []string{"maxConcurrent"}, 4},
-		{"scalar parent", Local, `{"notifications": 5}`, []string{"notifications", "turnDone"}, false},
+		{"bad global value", Global, sample, []string{"archiveDoneAfter"}, "soon"},
+		{"bad project value leaves no new file", Project, "", []string{"maxConcurrent"}, "many"},
+		{"trailing data", Project, `{"autoName":false} junk`, []string{"maxConcurrent"}, 4},
+		{"truncated file", Project, `{"autoName":false`, []string{"maxConcurrent"}, 4},
+		{"scalar parent", Project, `{"notifications": 5}`, []string{"notifications", "turnDone"}, false},
 	}
 	for _, tc := range cases {
-		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-		file := filepath.Join(dir, tc.layer.FileName())
+		dir := testRoot(t)
+		writeLayer(t, dir, Global, sample)
+		file := tc.layer.Path(dir)
 		if tc.before != "" {
-			os.WriteFile(file, []byte(tc.before), 0o644)
+			writeLayer(t, dir, tc.layer, tc.before)
 		}
 		if err := Set(dir, tc.layer, tc.path, tc.value); err == nil {
 			t.Errorf("%s: expected an error", tc.name)
@@ -230,14 +310,14 @@ func TestRejectedEditLeavesTheFileAsItWas(t *testing.T) {
 	}
 }
 
-func TestSetColumnSettingInTheSharedFileKeepsTheRest(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+func TestSetColumnSettingKeepsTheRest(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
 
-	if err := Set(dir, Shared, ColumnPath("dc9f2b38", "effortOverride"), "high"); err != nil {
+	if err := Set(dir, Global, ColumnPath("dc9f2b38", "effortOverride"), "high"); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	data, _ := os.ReadFile(Global.Path(dir))
 	if !strings.Contains(string(data), `"_modifiedBy": "7ef4fd0cb484"`) || !strings.Contains(string(data), `"Apply findings"`) {
 		t.Errorf("lost an unrelated key:\n%s", data)
 	}
@@ -251,25 +331,25 @@ func TestSetColumnSettingInTheSharedFileKeepsTheRest(t *testing.T) {
 	if c, _, _ := board.Column("4873bb89"); c.EffortOverride != "xhigh" {
 		t.Errorf("planning = %+v", c)
 	}
-	if !Sets(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")) || Sets(dir, Shared, ColumnPath("dc9f2b38", "color")) {
+	if !Sets(dir, Global, ColumnPath("dc9f2b38", "effortOverride")) || Sets(dir, Global, ColumnPath("dc9f2b38", "color")) {
 		t.Error("Sets does not see the column key")
 	}
-	if err := Unset(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")); err != nil {
+	if err := Unset(dir, Global, ColumnPath("dc9f2b38", "effortOverride")); err != nil {
 		t.Fatal(err)
 	}
-	if Sets(dir, Shared, ColumnPath("dc9f2b38", "effortOverride")) {
+	if Sets(dir, Global, ColumnPath("dc9f2b38", "effortOverride")) {
 		t.Error("effortOverride is still set")
 	}
 }
 
 func TestSetColumnSettingWritesNamesReadably(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
 
-	if err := Set(dir, Shared, ColumnPath("dc9f2b38", "name"), `Build & "ship" <it>`); err != nil {
+	if err := Set(dir, Global, ColumnPath("dc9f2b38", "name"), `Build & "ship" <it>`); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(filepath.Join(dir, FileName))
+	data, _ := os.ReadFile(Global.Path(dir))
 	if !strings.Contains(string(data), `"Build & \"ship\" <it>"`) || !strings.HasSuffix(string(data), "}\n") {
 		t.Errorf("name was escaped or the file reformatted oddly:\n%s", data)
 	}
@@ -280,72 +360,26 @@ func TestSetColumnSettingWritesNamesReadably(t *testing.T) {
 	}
 }
 
-func TestSetColumnSettingLocallyCreatesAndRemovesTheOverride(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(`{"maxConcurrent":3}`), 0o644)
-
-	if err := Set(dir, Local, ColumnPath("dc9f2b38", "modelOverride"), "haiku"); err != nil {
-		t.Fatal(err)
-	}
-	if err := Set(dir, Local, ColumnPath("4873bb89", "effortOverride"), "low"); err != nil {
-		t.Fatal(err)
-	}
-	board, _, err := Load(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if board.Limit() != 3 {
-		t.Errorf("lost the other local keys, limit = %d", board.Limit())
-	}
-	if c, _, _ := board.Column("dc9f2b38"); c.ModelOverride != "haiku" {
-		t.Errorf("executing model = %q", c.ModelOverride)
-	}
-	if c, _, _ := board.Column("4873bb89"); c.EffortOverride != "low" || c.ModelOverride != "opus" {
-		t.Errorf("planning = %+v", c)
-	}
-	if err := Unset(dir, Local, ColumnPath("dc9f2b38", "modelOverride")); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(filepath.Join(dir, LocalFileName))
-	if strings.Contains(string(data), "dc9f2b38") || !strings.Contains(string(data), "4873bb89") {
-		t.Errorf("unsetting the last key should drop only that element:\n%s", data)
-	}
-	if err := Unset(dir, Local, ColumnPath("4873bb89", "effortOverride")); err != nil {
-		t.Fatal(err)
-	}
-	data, _ = os.ReadFile(filepath.Join(dir, LocalFileName))
-	if strings.Contains(string(data), "columns") || !strings.Contains(string(data), "maxConcurrent") {
-		t.Errorf("an empty columns array should go and the rest stay:\n%s", data)
-	}
-	if err := Unset(dir, Local, ColumnPath("no-such", "color")); err != nil {
-		t.Fatal(err)
-	}
-	if after, _ := os.ReadFile(filepath.Join(dir, LocalFileName)); string(after) != string(data) {
-		t.Errorf("unsetting a missing override changed the file:\n%s", after)
-	}
-}
-
-func TestSetColumnSettingInTheSharedFileNeverAddsOrDropsAColumn(t *testing.T) {
+func TestSetColumnSettingNeverAddsOrDropsAColumn(t *testing.T) {
 	cases := []struct {
-		name   string
-		shared string
-		run    func(dir string) error
+		name  string
+		board string
+		run   func(dir string) error
 	}{
-		{"unknown column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("no-such", "color"), "#fff") }},
-		{"no columns key", `{"autoName":false}`, func(dir string) error { return Set(dir, Shared, ColumnPath("x", "name"), "X") }},
-		{"unsetting the name", sample, func(dir string) error { return Unset(dir, Shared, ColumnPath("64f9ef9a", "name")) }},
-		{"keepAgent on an agent column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("dc9f2b38", "keepAgent"), true) }},
-		{"a whole column", sample, func(dir string) error { return Set(dir, Shared, ColumnPath("dc9f2b38"), "x") }},
+		{"unknown column", sample, func(dir string) error { return Set(dir, Global, ColumnPath("no-such", "color"), "#fff") }},
+		{"no columns key", `{"autoName":false}`, func(dir string) error { return Set(dir, Global, ColumnPath("x", "name"), "X") }},
+		{"unsetting the name", sample, func(dir string) error { return Unset(dir, Global, ColumnPath("64f9ef9a", "name")) }},
+		{"keepAgent on an agent column", sample, func(dir string) error { return Set(dir, Global, ColumnPath("dc9f2b38", "keepAgent"), true) }},
+		{"a whole column", sample, func(dir string) error { return Set(dir, Global, ColumnPath("dc9f2b38"), "x") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			os.WriteFile(filepath.Join(dir, FileName), []byte(tc.shared), 0o644)
+			dir := testRoot(t)
+			writeLayer(t, dir, Global, tc.board)
 			if err := tc.run(dir); err == nil {
 				t.Error("expected an error")
 			}
-			if data, _ := os.ReadFile(filepath.Join(dir, FileName)); string(data) != tc.shared {
+			if data, _ := os.ReadFile(Global.Path(dir)); string(data) != tc.board {
 				t.Errorf("file changed after a rejected edit:\n%s", data)
 			}
 		})
@@ -353,32 +387,77 @@ func TestSetColumnSettingInTheSharedFileNeverAddsOrDropsAColumn(t *testing.T) {
 }
 
 func TestColumnPathsOnlyAddressTheColumnsArray(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	const local = `{"flows":[{"id":"a","x":1}]}`
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(local), 0o644)
+	writeLayer(t, dir, Global, sample)
+	writeLayer(t, dir, Project, local)
 
-	if Sets(dir, Local, []string{"flows", "a", "x"}) {
+	if Sets(dir, Project, []string{"flows", "a", "x"}) {
 		t.Error("Sets looked inside an array other than columns")
 	}
-	if err := Set(dir, Local, []string{"flows", "a", "x"}, 2); err == nil {
+	if err := Set(dir, Project, []string{"flows", "a", "x"}, 2); err == nil {
 		t.Error("expected an error addressing another array by id")
 	}
-	if data, _ := os.ReadFile(filepath.Join(dir, LocalFileName)); string(data) != local {
+	if data, _ := os.ReadFile(Project.Path(dir)); string(data) != local {
 		t.Errorf("file changed:\n%s", data)
 	}
 }
 
 func TestSetColumnSettingRejectsMalformedColumns(t *testing.T) {
-	dir := t.TempDir()
+	dir := testRoot(t)
 	const local = `{"columns":[{"id":5}]}`
-	os.WriteFile(filepath.Join(dir, FileName), []byte(sample), 0o644)
-	os.WriteFile(filepath.Join(dir, LocalFileName), []byte(local), 0o644)
+	writeLayer(t, dir, Global, sample)
+	writeLayer(t, dir, Project, local)
 
-	if err := Set(dir, Local, ColumnPath("dc9f2b38", "color"), "#fff"); err == nil {
+	if err := Set(dir, Project, ColumnPath("dc9f2b38", "color"), "#fff"); err == nil {
 		t.Error("expected an error for a column whose id isn't a string")
 	}
-	if Sets(dir, Local, ColumnPath("dc9f2b38", "color")) {
+	if Sets(dir, Project, ColumnPath("dc9f2b38", "color")) {
 		t.Error("Sets matched a malformed element")
+	}
+}
+
+func TestGlobalPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	xdg := t.TempDir()
+	for _, tc := range []struct{ name, env, want string }{
+		{"absolute XDG_CONFIG_HOME", xdg, filepath.Join(xdg, "drover", FileName)},
+		{"unset", "", filepath.Join(home, ".config", "drover", FileName)},
+		{"relative is ignored", "rel", filepath.Join(home, ".config", "drover", FileName)},
+	} {
+		t.Setenv("XDG_CONFIG_HOME", tc.env)
+		if got := GlobalPath(); got != tc.want {
+			t.Errorf("%s: GlobalPath = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestWriteDefaultBoardKeepsWhatTheLayerHas(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Project, `{"maxConcurrent":3,"_extra":1}`)
+	if err := WriteDefaultBoard(dir, Project); err != nil {
+		t.Fatal(err)
+	}
+	got := readLayer(dir, Project)
+	if !strings.Contains(got, `"_extra": 1`) || strings.Index(got, "maxConcurrent") > strings.Index(got, `"columns"`) || !strings.Contains(got, `"archiveDoneAfter": "7d"`) {
+		t.Errorf("keys lost or reordered:\n%s", got)
+	}
+
+	custom := `{"columns":[{"id":"inbox","name":"Inbox"}]}`
+	writeLayer(t, dir, Project, custom)
+	if err := WriteDefaultBoard(dir, Project); err != nil || strings.Contains(readLayer(dir, Project), "prFlow") || strings.Contains(readLayer(dir, Project), "archiveDoneAfter") {
+		t.Errorf("a layer with columns got the default flows: err=%v\n%s", err, readLayer(dir, Project))
+	}
+}
+
+func TestWriteDefaultBoardRefusesBelowTheBoard(t *testing.T) {
+	dir := testRoot(t)
+	writeLayer(t, dir, Global, sample)
+	if err := WriteDefaultBoard(dir, Project); err == nil || !strings.Contains(err.Error(), "global") {
+		t.Fatalf("err=%v, want a pointer to the global config", err)
+	}
+	if _, err := os.Stat(Project.Path(dir)); !os.IsNotExist(err) {
+		t.Errorf("a refused write created the project config: %v", err)
 	}
 }
