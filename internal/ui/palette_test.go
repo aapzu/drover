@@ -414,4 +414,7 @@ func TestPaletteEnterOnAHiddenMainLaneCardShowsTheLane(t *testing.T) {
 	if got.mainLaneHidden() || got.attached != target.ID {
 		t.Errorf("main lane hidden %v, attached %q, want the lane shown and %q attached", got.mainLaneHidden(), got.attached, target.ID)
 	}
+	if cur := got.current(); cur == nil || cur.ID != target.ID {
+		t.Errorf("current = %v, want the main lane card", cur)
+	}
 }

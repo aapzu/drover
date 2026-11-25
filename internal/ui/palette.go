@@ -105,7 +105,8 @@ func (m Model) paletteCards() []*store.Task {
 	}
 	var onBoard []*store.Task
 	for _, t := range m.snap.Tasks {
-		if _, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && !m.offBoard(t, m.hidesArchived(m.columnOf(t))) {
+		id := m.columnOf(t)
+		if _, _, ok := m.snap.Board.Column(id); ok && !m.offBoard(t, m.hidesArchived(id)) {
 			onBoard = append(onBoard, t)
 		}
 	}
