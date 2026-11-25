@@ -54,6 +54,7 @@ var paletteCommands = []paletteCommand{
 	{"Cycle card size", "z"},
 	{"Reset layout", "0"},
 	{"Toggle mouse", "M"},
+	{"Update drover to the latest release", "U"},
 	{"Write the default board to drover.json", "W"},
 	{"Help", "?"},
 	{"Suspend every agent and quit", "Q"},

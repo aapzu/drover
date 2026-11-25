@@ -175,6 +175,9 @@ func (m Model) renderFooter() string {
 // two keys that lead to every other command.
 func (m Model) boardFooter() string {
 	right := dim.Render("ctrl+k commands · ? help") + " "
+	if m.updateTag != "" {
+		right = bold.Render(m.updateTag+" available: U") + dim.Render(" · ") + right
+	}
 	var parts []string
 	if t := m.current(); t != nil {
 		parts = append(parts, bold.Render(fmt.Sprintf("#%d", t.Number)))
@@ -754,6 +757,7 @@ func (m Model) renderHelp() string {
 		{"t", "show or hide column settings under column names"},
 		{"o", "change settings in drover.local.json and drover.json"},
 		{"O", "change column settings in drover.local.json and drover.json"},
+		{"U", "update drover when the footer says a newer release is out"},
 		{"W", "write the default board to drover.json"},
 		{"q", "quit (agents keep running in tmux)"},
 		{"Q", "suspend every agent and quit, printing claude --resume commands"},

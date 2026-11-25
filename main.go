@@ -25,6 +25,7 @@ const usage = `drover: a kanban board for AI coding agents, in your terminal.
 Usage:
   drover [project-dir]          open the board for a git repository (default: .)
   drover version                print the version (also --version, -v)
+  drover update [--check]       install the latest release (--check only looks)
   drover hook <file>            internal: record a Claude Code hook event
   drover hook-gate <file>       internal: hold an approved plan until its worktree is ready
 
@@ -53,6 +54,13 @@ func main() {
 	}
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
 		fmt.Println("drover", buildVersion())
+		return
+	}
+	if len(args) > 0 && args[0] == "update" {
+		if err := cmdUpdate(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "drover:", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if len(args) > 0 {
@@ -97,7 +105,7 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(eng).WithVersion(buildVersion()), tea.WithAltScreen())
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {

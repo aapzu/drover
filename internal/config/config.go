@@ -42,6 +42,7 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	DisableUpdateCheck    bool          `json:"disableUpdateCheck,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -291,6 +292,7 @@ func (b *Board) applyLocal(root string) error {
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
 		DisableMouse       *bool           `json:"disableMouse"`
+		DisableUpdateCheck *bool           `json:"disableUpdateCheck"`
 		Notifications      json.RawMessage `json:"notifications"`
 		Columns            []localColumn   `json:"columns"`
 	}
@@ -317,6 +319,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.DisableMouse != nil {
 		b.DisableMouse = *local.DisableMouse
+	}
+	if local.DisableUpdateCheck != nil {
+		b.DisableUpdateCheck = *local.DisableUpdateCheck
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {

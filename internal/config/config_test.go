@@ -538,6 +538,18 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local disableMouse:true does not override the shared file")
 				}
 			}},
+		{"disableUpdateCheck is off by default", "", "",
+			func(t *testing.T, b *Board) {
+				if b.DisableUpdateCheck {
+					t.Error("default board disables the update check")
+				}
+			}},
+		{"local disableUpdateCheck true overrides the shared file", `{"disableUpdateCheck":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableUpdateCheck":true}`,
+			func(t *testing.T, b *Board) {
+				if !b.DisableUpdateCheck {
+					t.Error("local disableUpdateCheck:true does not override the shared file")
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,

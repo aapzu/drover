@@ -35,6 +35,16 @@ prints the version.
 Install the binary somewhere permanent. Claude's hooks call it to report
 activity, so don't run it with `go run`.
 
+### Updating
+
+When the board opens it checks GitHub for a newer release, at most once a day,
+and says so in the footer. Press `U` to download it, verify its checksum and
+replace the binary, then restart the board to use it. `drover update` does the
+same from the shell, and `drover update --check` only reports.
+
+Local builds and `go install` of a commit never check. Turn the check off with
+`disableUpdateCheck` or `DROVER_NO_UPDATE_CHECK=1`.
+
 ## Use
 
 ```sh
@@ -261,7 +271,8 @@ These settings work in `drover.json` and, for you alone, in
   "idleTimeoutMinutes": 0,
   "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 },
   "autoName": true,
-  "disableMouse": false
+  "disableMouse": false,
+  "disableUpdateCheck": false
 }
 ```
 
@@ -283,6 +294,8 @@ These settings work in `drover.json` and, for you alone, in
 - **`disableMouse`** (default `false`) starts agents and the assistant with
   `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
   your terminal. It applies to sessions started or resumed after you change it.
+- **`disableUpdateCheck`** (default `false`) stops the board from checking
+  GitHub for a newer release when it opens. See [Updating](#updating).
 
 ## Automations
 

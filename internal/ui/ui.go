@@ -127,6 +127,9 @@ type Model struct {
 	flash   string
 	flashAt time.Time
 
+	// version is the running release; updateTag is a newer one, once found.
+	version, updateTag string
+
 	// form
 	editingID   string
 	titleInput  textinput.Model
@@ -206,7 +209,7 @@ func New(eng *engine.Engine) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tick(), m.waitNotice()}
+	cmds := []tea.Cmd{tick(), m.waitNotice(), m.checkUpdateCmd()}
 	if !m.prefs.NoMouse {
 		cmds = append(cmds, tea.EnableMouseCellMotion)
 	}
@@ -664,6 +667,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case suspendAllMsg:
 		m.suspendAll = true
 		return m, tea.Quit
+	case updateAvailableMsg:
+		m.updateTag = string(msg)
+		return m, nil
+	case updatingMsg:
+		m.setFlash("Updating drover…")
+		return m, nil
+	case updateDoneMsg:
+		return m.updateFinished(msg), nil
 	case sessionStartedMsg:
 		m.applySnap(msg.snap)
 		if msg.err != nil {
@@ -1310,6 +1321,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.configSrc = configSources(m.eng.Root)
 	case "O":
 		return m.openColumns(), nil
+	case "U":
+		m.confirmUpdate()
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

@@ -40,6 +40,8 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.SplitByPR }},
 	{name: "Disable mouse in agents", path: []string{"disableMouse"}, kind: optToggle,
 		get: func(b *config.Board) any { return b.DisableMouse }},
+	{name: "Disable update check", path: []string{"disableUpdateCheck"}, kind: optToggle,
+		get: func(b *config.Board) any { return b.DisableUpdateCheck }},
 	{name: "Max concurrent agents", path: []string{"maxConcurrent"}, kind: optNumber, min: 1,
 		get: func(b *config.Board) any { return b.Limit() }},
 	{name: "Idle timeout (minutes)", path: []string{"idleTimeoutMinutes"}, kind: optNumber,
