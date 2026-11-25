@@ -274,7 +274,7 @@ func TestDiscoverSessionsSkipsTheAssistantsConversation(t *testing.T) {
 	}
 }
 
-// linearServer answers the queries LinearIssues and syncIssueStarted send and
+// linearServer answers the queries IssueList and syncIssueStarted send and
 // records the issue updates.
 func linearServer(t *testing.T) (*linear.Client, func() []string) {
 	t.Helper()
@@ -315,7 +315,7 @@ func TestLinearIssuesSkipsTheOnesOnTheBoard(t *testing.T) {
 		t.Error("TrackerReady without a client")
 	}
 	if _, err := e.IssueList(context.Background()); err == nil || !strings.Contains(err.Error(), "LINEAR_API_KEY") {
-		t.Errorf("LinearIssues without a key = %v", err)
+		t.Errorf("IssueList without a key = %v", err)
 	}
 
 	e.linear, _ = linearServer(t)

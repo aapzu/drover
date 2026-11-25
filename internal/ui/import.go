@@ -419,7 +419,11 @@ func (m Model) renderImport(height int) string {
 		hint = "space select · a all · m load more · enter import · tab switch · esc close"
 	}
 	if imp.source == sourceIssues {
-		hint = "space select · a all · / fetch by key · enter import · tab switch · esc close"
+		fetch := "key"
+		if m.eng.Tracker() == config.TrackerGitHub {
+			fetch = "number"
+		}
+		hint = "space select · a all · / fetch by " + fetch + " · enter import · tab switch · esc close"
 	}
 	lines = append(lines, "", dim.Render(hint))
 	if imp.source == sourceClaude {

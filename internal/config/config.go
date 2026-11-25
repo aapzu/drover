@@ -370,7 +370,6 @@ func Stamp(root string) string {
 	return stamp
 }
 
-// Limit is how many agents may run at once.
 // Tracker is the issue tracker the import view lists issues from: Linear
 // unless the board asks for GitHub.
 func (b *Board) Tracker() string {
@@ -380,6 +379,7 @@ func (b *Board) Tracker() string {
 	return TrackerLinear
 }
 
+// Limit is how many agents may run at once.
 func (b *Board) Limit() int {
 	if b.MaxConcurrent > 0 {
 		return b.MaxConcurrent

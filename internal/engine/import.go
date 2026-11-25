@@ -236,6 +236,8 @@ func (e *Engine) pollExternal() []func() {
 	return out
 }
 
+var errNoLinear = errors.New("set LINEAR_API_KEY to import Linear issues")
+
 // Issue is a tracker issue that can become a card.
 type Issue struct {
 	Provider    string
@@ -297,7 +299,7 @@ func (e *Engine) IssueList(ctx context.Context) ([]Issue, error) {
 		}
 	} else {
 		if e.linear == nil {
-			return nil, errors.New("set LINEAR_API_KEY to import Linear issues")
+			return nil, errNoLinear
 		}
 		found, err := e.linear.MyIssues(ctx)
 		if err != nil {
@@ -329,7 +331,7 @@ func (e *Engine) IssueByRef(ctx context.Context, ref string) (Issue, error) {
 // LinearIssue fetches one Linear issue by key or URL.
 func (e *Engine) LinearIssue(ctx context.Context, ref string) (Issue, error) {
 	if e.linear == nil {
-		return Issue{}, errors.New("set LINEAR_API_KEY to import Linear issues")
+		return Issue{}, errNoLinear
 	}
 	key, ok := linear.ParseKey(ref)
 	if !ok {
