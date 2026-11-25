@@ -3,7 +3,6 @@ package ui
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,6 +30,13 @@ func configModel(t *testing.T, root string) Model {
 	return m
 }
 
+// newRoot returns an empty repo root with a global config directory of its own.
+func newRoot(t *testing.T) string {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	return t.TempDir()
+}
+
 func selectOption(t *testing.T, m Model, name string) Model {
 	t.Helper()
 	for i, opt := range configOptions {
@@ -50,14 +56,14 @@ func pressConfig(t *testing.T, m Model, k tea.KeyMsg) Model {
 }
 
 func TestConfigOpensFromTheBoard(t *testing.T) {
-	m := configModel(t, t.TempDir())
+	m := configModel(t, newRoot(t))
 	next, _ := m.updateBoard(key("o"))
 	if next.(Model).mode != modeConfig {
 		t.Fatal("o didn't open the config view")
 	}
 }
 
-func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
+func TestConfigToggleSavesToTheGlobalConfig(t *testing.T) {
 	tests := []struct {
 		option, key string
 		value       func(*config.Board) bool
@@ -67,7 +73,7 @@ func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
-			root := t.TempDir()
+			root := newRoot(t)
 			m := configModel(t, root)
 			if !tt.value(m.snap.Board) {
 				t.Fatalf("%s is not on by default", tt.key)
@@ -78,18 +84,18 @@ func TestConfigToggleSavesToTheLocalFile(t *testing.T) {
 			if tt.value(m.snap.Board) {
 				t.Error("toggle didn't change the running board")
 			}
-			if !config.Sets(root, config.Local, []string{tt.key}) {
-				t.Error("toggle wasn't saved to drover.local.json")
+			if !config.Sets(root, config.Global, []string{tt.key}) {
+				t.Error("toggle wasn't saved to the global config")
 			}
-			if !strings.Contains(m.renderConfig(), "local") {
+			if !strings.Contains(m.renderConfig(), "global") {
 				t.Errorf("row doesn't show where the value comes from:\n%s", m.renderConfig())
 			}
 		})
 	}
 }
 
-func TestConfigDisableMouseToggleSavesToTheLocalFile(t *testing.T) {
-	root := t.TempDir()
+func TestConfigDisableMouseToggleSavesToTheGlobalConfig(t *testing.T) {
+	root := newRoot(t)
 	m := configModel(t, root)
 	if m.snap.Board.DisableMouse {
 		t.Fatal("disableMouse is on by default")
@@ -100,13 +106,13 @@ func TestConfigDisableMouseToggleSavesToTheLocalFile(t *testing.T) {
 	if !m.snap.Board.DisableMouse {
 		t.Error("toggle didn't change the running board")
 	}
-	if !config.Sets(root, config.Local, []string{"disableMouse"}) {
-		t.Error("toggle wasn't saved to drover.local.json")
+	if !config.Sets(root, config.Global, []string{"disableMouse"}) {
+		t.Error("toggle wasn't saved to the global config")
 	}
 }
 
 func TestConfigNumberRejectsText(t *testing.T) {
-	root := t.TempDir()
+	root := newRoot(t)
 	m := configModel(t, root)
 	m = selectOption(t, m, "Max concurrent agents")
 
@@ -116,7 +122,7 @@ func TestConfigNumberRejectsText(t *testing.T) {
 	}
 	m.configInput.SetValue("many")
 	m = pressConfig(t, m, keyPress("enter"))
-	if config.Sets(root, config.Local, []string{"maxConcurrent"}) {
+	if config.Sets(root, config.Global, []string{"maxConcurrent"}) {
 		t.Error("text was saved into a number field")
 	}
 	if !strings.Contains(m.flash, "whole number") {
@@ -132,7 +138,7 @@ func TestConfigNumberRejectsText(t *testing.T) {
 }
 
 func TestConfigEscCancelsAnEdit(t *testing.T) {
-	root := t.TempDir()
+	root := newRoot(t)
 	m := configModel(t, root)
 	m = selectOption(t, m, "Default base branch")
 	m.mode = modeConfig
@@ -143,7 +149,7 @@ func TestConfigEscCancelsAnEdit(t *testing.T) {
 	if m.configEditing || m.mode != modeConfig {
 		t.Fatalf("esc in the prompt should cancel only the edit: editing=%v mode=%v", m.configEditing, m.mode)
 	}
-	if config.Sets(root, config.Local, []string{"defaultBaseBranch"}) {
+	if config.Sets(root, config.Project, []string{"defaultBaseBranch"}) {
 		t.Error("cancelled edit was saved")
 	}
 	m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyEsc})
@@ -152,50 +158,63 @@ func TestConfigEscCancelsAnEdit(t *testing.T) {
 	}
 }
 
-func TestConfigTabTargetsDroverJSON(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
-		t.Fatal(err)
-	}
+func TestConfigTabSwitchesTheTargetLayer(t *testing.T) {
+	root := newRoot(t)
 	m := configModel(t, root)
 	m = selectOption(t, m, "Worktrees directory")
 
 	m = pressConfig(t, m, keyPress("enter"))
+	if m.configLayer != config.Project {
+		t.Fatal("a per-repo option didn't default to the project config")
+	}
 	m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.configLayer != config.Shared {
-		t.Fatal("tab didn't switch the target to drover.json")
+	if m.configLayer != config.Global {
+		t.Fatal("tab didn't switch the target to the global config")
 	}
 	m.configInput.SetValue(".worktrees")
 	m = pressConfig(t, m, keyPress("enter"))
-	if !config.Sets(root, config.Shared, []string{"worktreesDir"}) {
-		t.Error("value wasn't saved to drover.json")
+	if !config.Sets(root, config.Global, []string{"worktreesDir"}) {
+		t.Error("value wasn't saved to the global config")
 	}
-	if config.Sets(root, config.Local, []string{"worktreesDir"}) {
-		t.Error("value also landed in drover.local.json")
+	if config.Sets(root, config.Project, []string{"worktreesDir"}) {
+		t.Error("value also landed in the project config")
 	}
 }
 
-func TestConfigSharedOnlyOptionGoesToDroverJSON(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
-		t.Fatal(err)
-	}
+func TestConfigOptionsDefaultToTheGlobalConfigUnlessPerRepo(t *testing.T) {
+	root := newRoot(t)
 	m := configModel(t, root)
 	m = selectOption(t, m, "Archive Done after")
 
 	m = pressConfig(t, m, keyPress("enter"))
-	if m.configLayer != config.Shared {
-		t.Fatal("shared-only option defaulted to a local target")
-	}
-	m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.configLayer != config.Shared {
-		t.Error("tab moved a shared-only option off drover.json")
+	if m.configLayer != config.Global {
+		t.Fatal("a general option didn't default to the global config")
 	}
 	m.configInput.SetValue("30d")
 	m = pressConfig(t, m, keyPress("enter"))
 	if m.snap.Board.ArchiveAfter().Hours() != 30*24 {
 		t.Errorf("archiveDoneAfter not applied: %v", m.snap.Board.ArchiveAfter())
 	}
+	if !config.Sets(root, config.Global, []string{"archiveDoneAfter"}) {
+		t.Error("the first edit didn't create the global config")
+	}
+
+	for _, name := range []string{"Default base branch", "Worktrees directory", "Init script", "Symlink untracked files"} {
+		if got := defaultConfigLayer(root, configOptions[optionIndex(t, name)]); got != config.Project {
+			t.Errorf("%s defaults to the %s config", name, got)
+		}
+	}
+}
+
+func optionIndex(t *testing.T, name string) int {
+	t.Helper()
+	for i, opt := range configOptions {
+		if opt.name == name {
+			return i
+		}
+	}
+	t.Fatalf("no option %q", name)
+	return -1
 }
 
 func TestConfigResetOfASingleLayer(t *testing.T) {
@@ -204,26 +223,26 @@ func TestConfigResetOfASingleLayer(t *testing.T) {
 		preset bool
 		flash  string
 	}{
-		{"removes the local override", true, "Reset"},
+		{"removes the global override", true, "Reset"},
 		{"on a default row changes nothing", false, "already the default"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := newRoot(t)
 			if tt.preset {
-				if err := config.Set(root, config.Local, []string{"autoName"}, false); err != nil {
+				if err := config.Set(root, config.Global, []string{"autoName"}, false); err != nil {
 					t.Fatal(err)
 				}
 			}
 			m := configModel(t, root)
 			m = selectOption(t, m, "Auto-name cards")
 			if tt.preset && m.snap.Board.AutoName {
-				t.Fatal("setup: local override not loaded")
+				t.Fatal("setup: global override not loaded")
 			}
 
 			m = pressConfig(t, m, key("x"))
-			if config.Sets(root, config.Local, []string{"autoName"}) {
-				t.Error("x didn't remove the local override")
+			if config.Sets(root, config.Global, []string{"autoName"}) {
+				t.Error("x didn't remove the global override")
 			}
 			if !m.snap.Board.AutoName {
 				t.Error("autoName did not fall back to the default")
@@ -231,26 +250,10 @@ func TestConfigResetOfASingleLayer(t *testing.T) {
 			if !strings.Contains(m.flash, tt.flash) {
 				t.Errorf("flash=%q", m.flash)
 			}
-			if _, err := os.Stat(filepath.Join(root, config.LocalFileName)); !tt.preset && !os.IsNotExist(err) {
-				t.Errorf("reset created drover.local.json: %v", err)
+			if _, err := os.Stat(config.GlobalPath()); !tt.preset && !os.IsNotExist(err) {
+				t.Errorf("reset created the global config: %v", err)
 			}
 		})
-	}
-}
-
-func TestConfigSharedEditWithoutDroverJSONSaysHowToCreateIt(t *testing.T) {
-	root := t.TempDir()
-	m := configModel(t, root)
-	m = selectOption(t, m, "Archive Done after")
-
-	m = pressConfig(t, m, keyPress("enter"))
-	m.configInput.SetValue("30d")
-	m = pressConfig(t, m, keyPress("enter"))
-	if !strings.Contains(m.flash, "press W") {
-		t.Errorf("flash=%q", m.flash)
-	}
-	if _, err := os.Stat(filepath.Join(root, config.FileName)); !os.IsNotExist(err) {
-		t.Errorf("drover.json was created: %v", err)
 	}
 }
 
@@ -268,7 +271,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sharedSeen := false
+	boardSeen := false
 	for _, opt := range configOptions {
 		var typed bool
 		switch got := opt.get(board); opt.kind {
@@ -294,17 +297,17 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 			}
 		}
 
-		if opt.shared {
-			sharedSeen = true
-		} else if sharedSeen {
-			t.Errorf("%s: shared options must come last, renderConfig groups them by position", opt.name)
+		if opt.board {
+			boardSeen = true
+		} else if boardSeen {
+			t.Errorf("%s: board options must come last, renderConfig groups them by position", opt.name)
 		}
 	}
 }
 
 func TestConfigFixModeCyclesThroughTheChoices(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
+	root := newRoot(t)
+	if err := config.WriteDefaultBoard(root, config.Global); err != nil {
 		t.Fatal(err)
 	}
 	m := configModel(t, root)
@@ -318,44 +321,28 @@ func TestConfigFixModeCyclesThroughTheChoices(t *testing.T) {
 		if got := configValue(configOptions[m.configSel], m.snap.Board); got != want {
 			t.Fatalf("after enter = %q, want %q (flash %q)", got, want, m.flash)
 		}
-		data, _ := os.ReadFile(filepath.Join(root, config.FileName))
+		data, _ := os.ReadFile(config.GlobalPath())
 		if !strings.Contains(string(data), `"changesRequestedMode": "`+want+`"`) {
-			t.Errorf("drover.json doesn't hold %q:\n%s", want, data)
+			t.Errorf("the global config doesn't hold %q:\n%s", want, data)
 		}
 	}
 
 	m = pressConfig(t, m, keyPress("x"))
-	if config.Sets(root, config.Shared, configOptions[m.configSel].path) {
-		t.Error("x left changesRequestedMode in drover.json")
+	if config.Sets(root, config.Global, configOptions[m.configSel].path) {
+		t.Error("x left changesRequestedMode in the global config")
 	}
 }
 
-func TestConfigFooterHidesTabForSharedOnlyOptions(t *testing.T) {
-	root := t.TempDir()
-	m := configModel(t, root)
-	m.mode = modeConfig
-	m.configEditing = true
-
-	m = selectOption(t, m, "Auto-name cards")
-	if !strings.Contains(m.renderFooter(), "tab") {
-		t.Errorf("footer=%q, want a tab hint for a local-capable option", m.renderFooter())
-	}
-	m = selectOption(t, m, "Archive Done after")
-	if strings.Contains(m.renderFooter(), "tab") {
-		t.Errorf("footer=%q, tab does nothing for a shared-only option", m.renderFooter())
-	}
-}
-
-func TestConfigResetWithBothLayersRemovesLocalFirst(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
+func TestConfigResetWithBothLayersRemovesProjectFirst(t *testing.T) {
+	root := newRoot(t)
+	if err := config.WriteDefaultBoard(root, config.Global); err != nil {
 		t.Fatal(err)
 	}
 	path := []string{"worktreesDir"}
-	if err := config.Set(root, config.Shared, path, ".shared-wt"); err != nil {
+	if err := config.Set(root, config.Global, path, ".global-wt"); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.Set(root, config.Local, path, ".local-wt"); err != nil {
+	if err := config.Set(root, config.Project, path, ".project-wt"); err != nil {
 		t.Fatal(err)
 	}
 	m := configModel(t, root)
@@ -363,16 +350,16 @@ func TestConfigResetWithBothLayersRemovesLocalFirst(t *testing.T) {
 	m.configSrc = configSources(root)
 
 	m = pressConfig(t, m, key("x"))
-	if config.Sets(root, config.Local, path) || !config.Sets(root, config.Shared, path) {
-		t.Fatal("the first x should remove only the local key")
+	if config.Sets(root, config.Project, path) || !config.Sets(root, config.Global, path) {
+		t.Fatal("the first x should remove only the project key")
 	}
-	if m.snap.Board.WorktreesDir != ".shared-wt" || m.configSrc[m.configSel] != "shared" {
+	if m.snap.Board.WorktreesDir != ".global-wt" || m.configSrc[m.configSel] != "global" {
 		t.Errorf("worktreesDir=%q label=%q", m.snap.Board.WorktreesDir, m.configSrc[m.configSel])
 	}
 
 	m = pressConfig(t, m, key("x"))
-	if config.Sets(root, config.Shared, path) || m.configSrc[m.configSel] != "default" {
-		t.Errorf("the second x should remove the shared key: label=%q", m.configSrc[m.configSel])
+	if config.Sets(root, config.Global, path) || m.configSrc[m.configSel] != "default" {
+		t.Errorf("the second x should remove the global key: label=%q", m.configSrc[m.configSel])
 	}
 }
 
@@ -383,37 +370,41 @@ func TestConfigEmptyPrompt(t *testing.T) {
 		setup      func(t *testing.T, root string)
 		input      string
 		flash      string
-		wantShared bool
+		wantGlobal bool
+		tab        bool
 	}{
 		{"removes the key from the chosen layer", func(t *testing.T, root string) {
-			if err := config.Set(root, config.Local, path, "develop"); err != nil {
+			if err := config.Set(root, config.Project, path, "develop"); err != nil {
 				t.Fatal(err)
 			}
-		}, "", "Reset", false},
-		{"where nothing is set says so", func(t *testing.T, root string) {
-			if err := config.Default().Save(root); err != nil {
+		}, "", "Reset", false, false},
+		{"where nothing is set says so, after tab to the other layer", func(t *testing.T, root string) {
+			if err := config.WriteDefaultBoard(root, config.Global); err != nil {
 				t.Fatal(err)
 			}
-			if err := config.Set(root, config.Shared, path, "main"); err != nil {
+			if err := config.Set(root, config.Global, path, "main"); err != nil {
 				t.Fatal(err)
 			}
-		}, "  ", "is not set in drover.local.json", true},
+		}, "  ", "is not set in the project config", true, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := newRoot(t)
 			tt.setup(t, root)
 			m := configModel(t, root)
 			m = selectOption(t, m, "Default base branch")
 
 			m = pressConfig(t, m, keyPress("enter"))
+			if tt.tab {
+				m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyTab})
+			}
 			m.configInput.SetValue(tt.input)
 			m = pressConfig(t, m, keyPress("enter"))
-			if config.Sets(root, config.Local, path) {
-				t.Error("an empty prompt left the local key")
+			if config.Sets(root, config.Project, path) {
+				t.Error("an empty prompt left the project key")
 			}
-			if config.Sets(root, config.Shared, path) != tt.wantShared {
-				t.Errorf("shared key set = %v, want %v", !tt.wantShared, tt.wantShared)
+			if config.Sets(root, config.Global, path) != tt.wantGlobal {
+				t.Errorf("global key set = %v, want %v", !tt.wantGlobal, tt.wantGlobal)
 			}
 			if !strings.Contains(m.flash, tt.flash) {
 				t.Errorf("flash=%q", m.flash)
@@ -423,7 +414,7 @@ func TestConfigEmptyPrompt(t *testing.T) {
 }
 
 func TestConfigListKeysAreTextInsideThePrompt(t *testing.T) {
-	m := configModel(t, t.TempDir())
+	m := configModel(t, newRoot(t))
 	m = selectOption(t, m, "Default base branch")
 	m.mode = modeConfig
 
@@ -438,11 +429,11 @@ func TestConfigListKeysAreTextInsideThePrompt(t *testing.T) {
 }
 
 func TestConfigRejectedTextValueShowsTheErrorAndKeepsTheFile(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
+	root := newRoot(t)
+	if err := config.WriteDefaultBoard(root, config.Global); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := os.ReadFile(filepath.Join(root, config.FileName))
+	before, _ := os.ReadFile(config.GlobalPath())
 	m := configModel(t, root)
 	m = selectOption(t, m, "Archive Done after")
 
@@ -452,14 +443,14 @@ func TestConfigRejectedTextValueShowsTheErrorAndKeepsTheFile(t *testing.T) {
 	if !strings.HasPrefix(m.flash, "Error:") {
 		t.Errorf("flash=%q", m.flash)
 	}
-	after, _ := os.ReadFile(filepath.Join(root, config.FileName))
+	after, _ := os.ReadFile(config.GlobalPath())
 	if string(before) != string(after) {
-		t.Errorf("drover.json changed after a rejected value:\n%s", after)
+		t.Errorf("the global config changed after a rejected value:\n%s", after)
 	}
 }
 
 func TestConfigMaxConcurrentNeedsAtLeastOne(t *testing.T) {
-	root := t.TempDir()
+	root := newRoot(t)
 	m := configModel(t, root)
 	m = selectOption(t, m, "Max concurrent agents")
 
@@ -469,17 +460,17 @@ func TestConfigMaxConcurrentNeedsAtLeastOne(t *testing.T) {
 	if !strings.Contains(m.flash, "at least 1") {
 		t.Errorf("flash=%q", m.flash)
 	}
-	if config.Sets(root, config.Local, []string{"maxConcurrent"}) {
+	if config.Sets(root, config.Global, []string{"maxConcurrent"}) {
 		t.Error("0 was saved as the concurrency limit")
 	}
 }
 
-func TestConfigWarnsWhenTheLocalFileOverridesASharedSave(t *testing.T) {
-	root := t.TempDir()
-	if err := config.Default().Save(root); err != nil {
+func TestConfigWarnsWhenTheProjectConfigOverridesAGlobalSave(t *testing.T) {
+	root := newRoot(t)
+	if err := config.WriteDefaultBoard(root, config.Global); err != nil {
 		t.Fatal(err)
 	}
-	if err := config.Set(root, config.Local, []string{"worktreesDir"}, ".local-wt"); err != nil {
+	if err := config.Set(root, config.Project, []string{"worktreesDir"}, ".project-wt"); err != nil {
 		t.Fatal(err)
 	}
 	m := configModel(t, root)
@@ -487,15 +478,15 @@ func TestConfigWarnsWhenTheLocalFileOverridesASharedSave(t *testing.T) {
 
 	m = pressConfig(t, m, keyPress("enter"))
 	m = pressConfig(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	m.configInput.SetValue(".shared-wt")
+	m.configInput.SetValue(".global-wt")
 	m = pressConfig(t, m, keyPress("enter"))
-	if !strings.Contains(m.flash, "overridden by drover.local.json") {
+	if !strings.Contains(m.flash, "overridden by project") {
 		t.Errorf("flash=%q", m.flash)
 	}
 }
 
 func TestConfigFooterAndRows(t *testing.T) {
-	m := configModel(t, t.TempDir())
+	m := configModel(t, newRoot(t))
 	m.width, m.height = 120, 40
 	next, _ := m.updateBoard(key("o"))
 	m = next.(Model)
@@ -503,9 +494,23 @@ func TestConfigFooterAndRows(t *testing.T) {
 		t.Errorf("footer=%q", m.renderFooter())
 	}
 	out := m.renderConfig()
-	for _, want := range []string{"Auto-name cards", "Archive Done after", "drover.json only", "default"} {
+	for _, want := range []string{"Auto-name cards", "Archive Done after", "in the config that holds the columns", "default"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("view is missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestConfigBoardOptionFollowsAProjectFlow(t *testing.T) {
+	root := newRoot(t)
+	if err := config.WriteDefaultBoard(root, config.Global); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Set(root, config.Project, []string{"prFlow"}, map[string]string{"opened": "in-review"}); err != nil {
+		t.Fatal(err)
+	}
+	opt := configOptions[optionIndex(t, "PR review fix mode")]
+	if got := defaultConfigLayer(root, opt); got != config.Project {
+		t.Errorf("layer = %v, want the project config whose prFlow replaces the global one", got)
 	}
 }

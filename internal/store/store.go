@@ -284,13 +284,18 @@ func Driver(tasks []*Task, owner *Task) *Task {
 
 // Dir is the project's state directory, keyed by its root path.
 func Dir(root string) string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if !filepath.IsAbs(base) {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".local", "state")
-	}
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(base, "drover", filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
+	return filepath.Join(XDGDir("XDG_STATE_HOME", ".local", "state"), "drover", filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
+}
+
+// XDGDir is the directory named by the environment variable when it is an
+// absolute path, else fallback under the home directory.
+func XDGDir(env string, fallback ...string) string {
+	if base := os.Getenv(env); filepath.IsAbs(base) {
+		return base
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(append([]string{home}, fallback...)...)
 }
 
 func stateFile(dir string) string { return filepath.Join(dir, "state.json") }

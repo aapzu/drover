@@ -51,6 +51,7 @@ func TestParseNumber(t *testing.T) {
 
 func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	os.MkdirAll(root, 0o755)
 	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: "a", Number: 1, ColumnID: "planning"}}}
@@ -224,6 +225,7 @@ func TestAsk(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			calls := fakeAsk(t)
 			withStdin(t, tc.stdin)
 			var err error
@@ -243,6 +245,7 @@ func TestAsk(t *testing.T) {
 
 func TestAskNewAloneForgetsTheConversation(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := t.TempDir()
 	calls := fakeAsk(t)
 	file := filepath.Join(store.Dir(root), "assistant-session")
@@ -301,6 +304,7 @@ func withStdin(t *testing.T, s string) {
 func project(t *testing.T) string {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	os.MkdirAll(root, 0o755)
 	state := &store.State{NextNumber: 3, Tasks: []*store.Task{
@@ -535,9 +539,10 @@ func TestListJSON(t *testing.T) {
 
 func TestListFailsOnABadBoard(t *testing.T) {
 	root := project(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte("{"), 0o644)
-	if err := cmdList(root, nil); err == nil || !strings.Contains(err.Error(), "drover.json") {
-		t.Errorf("err = %v, want a drover.json parse error", err)
+	os.MkdirAll(filepath.Dir(config.ProjectPath(root)), 0o755)
+	os.WriteFile(config.ProjectPath(root), []byte("{"), 0o644)
+	if err := cmdList(root, nil); err == nil || !strings.Contains(err.Error(), config.FileName) {
+		t.Errorf("err = %v, want a %s parse error", err, config.FileName)
 	}
 	if err := cmdList(t.TempDir(), []string{"--nope"}); err == nil {
 		t.Error("an unknown flag was accepted")

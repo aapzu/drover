@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/store"
 )
@@ -706,7 +706,7 @@ func TestInitEnablesTheMouseUnlessItIsOff(t *testing.T) {
 
 func TestNewWithoutABoardFileSaysWhere(t *testing.T) {
 	m := New(realModel(t).eng)
-	if !strings.Contains(m.flash, "No drover.json found") {
+	if !strings.Contains(m.flash, "No board configured") {
 		t.Errorf("flash = %q", m.flash)
 	}
 }
@@ -721,10 +721,10 @@ func TestPreviewForACardWithoutAnAgentExplainsWhy(t *testing.T) {
 func TestWriteDefaultBoardKey(t *testing.T) {
 	m := realModel(t, "a")
 	m, _ = update(m, key("W"))
-	if m.flash != "Wrote drover.json" {
+	if m.flash != "Wrote the default board to the project config" {
 		t.Fatalf("flash = %q", m.flash)
 	}
-	if _, err := os.Stat(filepath.Join(m.eng.Root, "drover.json")); err != nil {
+	if _, err := os.Stat(config.ProjectPath(m.eng.Root)); err != nil {
 		t.Error(err)
 	}
 }

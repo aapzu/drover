@@ -192,6 +192,7 @@ func TestUpdateFromBaseNeedsAnIdleWorktree(t *testing.T) {
 func TestUpdateFromBaseAsksYouToStartTheAgentWhenTheBranchDiverged(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	git := func(dir string, args ...string) {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)

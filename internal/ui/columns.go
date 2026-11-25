@@ -16,7 +16,6 @@ type columnOption struct {
 	name     string
 	key      string
 	kind     optKind
-	local    bool
 	required bool
 	values   []string
 	get      func(config.Column) any
@@ -25,13 +24,13 @@ type columnOption struct {
 var columnOptions = []columnOption{
 	{name: "Name", key: "name", kind: optText, required: true,
 		get: func(c config.Column) any { return c.Name }},
-	{name: "Color", key: "color", kind: optText, local: true,
+	{name: "Color", key: "color", kind: optText,
 		get: func(c config.Column) any { return c.Color }},
-	{name: "Permission mode", key: "permissionMode", kind: optText, local: true, values: claude.PermissionModes(),
+	{name: "Permission mode", key: "permissionMode", kind: optText, values: claude.PermissionModes(),
 		get: func(c config.Column) any { return c.PermissionMode }},
-	{name: "Model", key: "modelOverride", kind: optText, local: true,
+	{name: "Model", key: "modelOverride", kind: optText,
 		get: func(c config.Column) any { return c.ModelOverride }},
-	{name: "Effort", key: "effortOverride", kind: optText, local: true, values: claude.Efforts,
+	{name: "Effort", key: "effortOverride", kind: optText, values: claude.Efforts,
 		get: func(c config.Column) any { return c.EffortOverride }},
 	{name: "Run an agent", key: "autoSpawn", kind: optToggle,
 		get: func(c config.Column) any { return c.AutoSpawn }},
@@ -43,29 +42,19 @@ var columnOptions = []columnOption{
 		get: func(c config.Column) any { return c.NoWorktree }},
 }
 
-func defaultColumnLayer(opt columnOption) config.Layer {
-	if opt.local {
-		return config.Local
-	}
-	return config.Shared
-}
-
+// columnSourceLayer is the config that holds the columns, and whether it sets
+// the option.
 func columnSourceLayer(root, id string, opt columnOption) (config.Layer, bool) {
-	path := config.ColumnPath(id, opt.key)
-	if opt.local && config.Sets(root, config.Local, path) {
-		return config.Local, true
-	}
-	if config.Sets(root, config.Shared, path) {
-		return config.Shared, true
-	}
-	return 0, false
+	layer := config.ColumnLayer(root)
+	return layer, config.Sets(root, layer, config.ColumnPath(id, opt.key))
 }
 
 // columnSources labels where each of the column's settings comes from.
 func columnSources(root, id string) []string {
 	sources := make([]string, len(columnOptions))
+	layer := config.ColumnLayer(root)
 	for i, opt := range columnOptions {
-		sources[i] = sourceLabel(columnSourceLayer(root, id, opt))
+		sources[i] = sourceLabel(layer, config.Sets(root, layer, config.ColumnPath(id, opt.key)))
 	}
 	return sources
 }
@@ -159,11 +148,11 @@ func (m Model) beginColumnEdit(col config.Column) (tea.Model, tea.Cmd) {
 	opt := columnOptions[m.columnOptSel]
 	if opt.kind == optToggle {
 		on, _ := opt.get(col).(bool)
-		m, _ = m.saveColumn(col, opt, defaultColumnLayer(opt), !on)
+		m, _ = m.saveColumn(col, opt, config.ColumnLayer(m.eng.Root), !on)
 		return m, nil
 	}
 	m.columnEditing = true
-	m.configLayer = defaultColumnLayer(opt)
+	m.configLayer = config.ColumnLayer(m.eng.Root)
 	m.configInput.SetValue(configText(opt.get(col)))
 	m.configInput.CursorEnd()
 	return m, m.configInput.Focus()
@@ -183,11 +172,6 @@ func (m Model) updateColumnInput(msg tea.KeyMsg, col config.Column) (tea.Model, 
 			m.configInput.Blur()
 		}
 		return m, nil
-	case "tab":
-		if opt.local {
-			m.configLayer = otherLayer(m.configLayer)
-		}
-		return m, nil
 	}
 	var cmd tea.Cmd
 	m.configInput, cmd = m.configInput.Update(msg)
@@ -202,7 +186,7 @@ func (m Model) commitColumn(col config.Column, opt columnOption) (Model, bool) {
 		m.setFlash(opt.name + " can't be empty")
 	case text == "":
 		if !config.Sets(m.eng.Root, m.configLayer, config.ColumnPath(col.ID, opt.key)) {
-			m.setFlash(fmt.Sprintf("%s is not set in %s", opt.name, m.configLayer.FileName()))
+			m.setFlash(fmt.Sprintf("%s is not set in the %s config", opt.name, m.configLayer))
 			break
 		}
 		return m.saveColumn(col, opt, m.configLayer, nil)
@@ -235,20 +219,17 @@ func (m Model) saveColumn(col config.Column, opt columnOption, layer config.Laye
 	if on, ok := value.(bool); ok && !on {
 		value = nil
 	}
-	m, err := m.writeSetting(layer, config.ColumnPath(col.ID, opt.key), value, "this view")
+	m, err := m.writeSetting(layer, config.ColumnPath(col.ID, opt.key), value)
 	if err != nil {
 		m.setFlash("Error: " + err.Error())
 		return m, false
 	}
 	m.columnSrc = columnSources(m.eng.Root, col.ID)
-	done := "Saved %s of %s to %s"
+	done := "Saved %s of %s to the %s config"
 	if value == nil {
-		done = "Reset %s of %s in %s"
+		done = "Reset %s of %s in the %s config"
 	}
-	msg := fmt.Sprintf(done, opt.name, col.Name, layer.FileName())
-	if src, ok := columnSourceLayer(m.eng.Root, col.ID, opt); value != nil && ok && src != layer {
-		msg += fmt.Sprintf(" (overridden by %s)", src.FileName())
-	}
+	msg := fmt.Sprintf(done, opt.name, col.Name, layer)
 	if opt.key == "name" && namedByTargets(m.snap.Board, col.Name) {
 		msg += fmt.Sprintf("; planExitTarget or automations still name %q", col.Name)
 	}
@@ -274,8 +255,6 @@ func namedByTargets(b *config.Board, name string) bool {
 
 func (m Model) columnsHint() string {
 	switch {
-	case m.columnEditing && columnOptions[m.columnOptSel].local:
-		return "enter save  tab drover.json / drover.local.json  esc cancel"
 	case m.columnEditing:
 		return "enter save  esc cancel"
 	case m.columnOpen:
@@ -311,10 +290,10 @@ func (m Model) renderColumns() string {
 		value, note := fmt.Sprintf("%-14s", columnValue(opt, col)), dim.Render(m.columnSrc[i])
 		if i == m.columnOptSel && m.columnEditing {
 			value = m.configInput.View()
-			note = dim.Render("→ " + m.configLayer.FileName())
+			note = dim.Render("→ " + m.configLayer.String())
 		}
 		lines = append(lines, prefix+name+value+"  "+note)
 	}
-	lines = append(lines, "", dim.Render("Flows and automations live in drover.json only."))
+	lines = append(lines, "", dim.Render("Flows and automations live in the config that holds the columns."))
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

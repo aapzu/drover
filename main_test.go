@@ -81,7 +81,7 @@ func runMain(t *testing.T, args string) (stdout, stderr string, exit int) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestMainProcess$")
 	cmd.Dir = t.TempDir()
-	cmd.Env = []string{"DROVER_TEST_ARGS=" + args, "XDG_STATE_HOME=" + t.TempDir(), "PATH=" + t.TempDir()}
+	cmd.Env = []string{"DROVER_TEST_ARGS=" + args, "XDG_STATE_HOME=" + t.TempDir(), "XDG_CONFIG_HOME=" + t.TempDir(), "PATH=" + t.TempDir()}
 	var out, errOut strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errOut
 	err := cmd.Run()

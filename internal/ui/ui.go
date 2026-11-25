@@ -200,7 +200,7 @@ func New(eng *engine.Engine) Model {
 		configInput:  textinput.New(),
 	}
 	if !m.snap.BoardFound {
-		m.setFlash("No drover.json found, using the default board (press W to write it)")
+		m.setFlash("No board configured, using the default (press W to write it to the project config)")
 	}
 	return m
 }
@@ -382,7 +382,7 @@ func (m Model) tasksForColumn(i int) []*store.Task {
 
 // columnCards is the cards shown in column i, and how many cards each one
 // stands for beyond itself when the column is folded to one card per session.
-// Orphans are tasks whose column no longer exists in drover.json; they are
+// Orphans are tasks whose column no longer exists in the config; they are
 // shown in the first column so they can be moved somewhere valid.
 func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	col := m.columns()[i]
@@ -1297,7 +1297,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.savePrefs()
 	case "R":
 		if !m.hasReviewLane() {
-			m.setFlash(`No review lane: give columns "lane": "review" in drover.json, or W writes the default board`)
+			m.setFlash(`No review lane: give columns "lane": "review" in your config, or W writes the default board`)
 			break
 		}
 		shown := !m.reviewLaneShown()
@@ -1315,7 +1315,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setFlash("Error: " + err.Error())
 		} else {
 			m.snap = m.eng.Snapshot()
-			m.setFlash("Wrote drover.json")
+			m.setFlash("Wrote the default board to the project config")
 		}
 	}
 	return m, nil
