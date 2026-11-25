@@ -13,6 +13,7 @@ import (
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/shortcuts"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -178,6 +179,15 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 	}
 	if SessionID(root) != "" {
 		t.Error("a corrupt session file should start a new conversation")
+	}
+}
+
+func TestPromptListsTheBoardsShortcuts(t *testing.T) {
+	got := systemPrompt("/bin/drover", "/work/my-app", &config.Board{})
+	for _, want := range []string{shortcuts.Text(), "say a key isn't listed instead of guessing"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, got)
+		}
 	}
 }
 

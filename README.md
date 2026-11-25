@@ -581,7 +581,7 @@ drover ask "which cards are waiting on review?"
 interface as the board's assistant. It knows the repo, the board's columns, and
 every card's column, branch, worktree, agent state and pull request state, and
 can move, add, edit and delete cards when you tell it to, and answer questions
-about the code and its history. When a card in the column your PRs wait in (In
+about the code and its history, and the board's shortcuts (the ones `?` lists). When a card in the column your PRs wait in (In
 review by default) has a merged or closed pull request of its own, it offers to move the
 card on, to the merged column of your `prFlow` or to Done, and waits for you to
 agree. It runs the commands above, so changes go through the open board like
