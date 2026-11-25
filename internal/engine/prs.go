@@ -29,7 +29,7 @@ func (e *Engine) pollPRs() []func() {
 	var open, merged []string
 	for _, t := range e.state.Tasks {
 		col, _, _ := e.board.Column(t.ColumnID)
-		if t.PR == nil || col.IsDone() {
+		if t.PR == nil || col.IsDone() && !reviewedOpen(t) {
 			continue
 		}
 		switch t.PR.State {
@@ -88,6 +88,12 @@ func (e *Engine) pollPRs() []func() {
 			e.checkRelease(id, ref)
 		}
 	}}
+}
+
+// reviewedOpen reports whether t is a review you submitted on a PR that is
+// still open, which a new push or review request can bring back from Done.
+func reviewedOpen(t *store.Task) bool {
+	return t.PR.IsReview() && t.PR.State == "OPEN" && t.PR.ReviewedSHA != "" && !t.Archived
 }
 
 // strandedMerged reports whether t's merged PR left it in the prFlow's opened
@@ -283,8 +289,8 @@ func (e *Engine) refreshPR(id string) {
 		pr.Title, pr.Branch, pr.State = info.Title, info.Branch, info.State
 		pr.ReviewDecision, pr.MergeCommit, pr.HeadSHA = info.ReviewDecision, info.MergeOID(), info.HeadSHA
 		pr.InMergeQueue = queued
+		pr.Author = info.Author.Login
 		if pr.Review {
-			pr.Author = info.Author.Login
 			confirmed = info.State == "OPEN"
 			if card.Title == "" && info.Title != "" {
 				card.Title = "Review: " + info.Title
@@ -449,8 +455,11 @@ func (e *Engine) login() (string, error) {
 
 // reviewStep records what changed on a PR you review and returns the move it
 // calls for, if any. A review you submit moves the card to reviewFlow.reviewed
-// from any column. New commits after it are logged and notified, and move a
-// card in reviewFlow.reviewed to reviewFlow.updated. A review already on the PR
+// from any column, or to reviewFlow.approved when it approves the PR. A new
+// request for your review after it moves a card in reviewFlow.reviewed or
+// reviewFlow.approved to reviewFlow.requested, and new commits move it to
+// reviewFlow.updated; both are logged and notified. So does a dismissed approval
+// of yours or merge conflicts appearing after it. A review already on the PR
 // when drover first looks is only recorded, so it moves nothing; a merge or
 // close still moves the card to reviewFlow.done. Called with mu held.
 func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string, info gh.PR, me string) prMove {
@@ -461,6 +470,9 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 	}
 	first := prevState == ""
 	mine := info.ReviewedBy(me)
+	asked := info.RequestedFrom(me)
+	reasked := asked && !pr.ReviewRequested
+	pr.ReviewRequested = asked
 	// Moving the card would stop an agent that is still writing, so a review
 	// is picked up at the first poll after its turn.
 	reviewed := mine.SubmittedAt.After(pr.MyReviewAt) && (first || agentIdle(owner))
@@ -469,6 +481,20 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 		if pr.ReviewedSHA == "" {
 			pr.ReviewedSHA = info.HeadSHA
 		}
+	}
+	dismissed := pr.MyReview == "APPROVED" && (mine.State == "DISMISSED" || mine.SubmittedAt.IsZero())
+	if dismissed {
+		pr.MyReview = "DISMISSED"
+	}
+	stale := ""
+	switch {
+	case dismissed:
+		stale = "your approval was dismissed"
+	case pr.MyReview == "APPROVED" && info.Mergeable == "CONFLICTING" && pr.Mergeable == "MERGEABLE":
+		stale = "merge conflicts since your approval"
+	}
+	if info.Mergeable == "CONFLICTING" || info.Mergeable == "MERGEABLE" {
+		pr.Mergeable = info.Mergeable
 	}
 	if first {
 		return prMove{}
@@ -482,15 +508,34 @@ func (e *Engine) reviewStep(card, owner *store.Task, prevState, prevHead string,
 		e.notify("#%d: PR #%d was closed", card.Number, pr.Number)
 		return prMove{to: e.flowColumn(flow.Done)}
 	case info.State != "OPEN":
+		return prMove{}
 	case reviewed:
 		card.AddLog(fmt.Sprintf("You reviewed PR #%d: %s", pr.Number, strings.ToLower(mine.State)))
-		return prMove{to: e.flowColumn(flow.Reviewed)}
-	case info.HeadSHA != prevHead && pr.ReviewedSHA != "":
+		ref := flow.Reviewed
+		if mine.State == "APPROVED" && flow.Approved != "" {
+			ref = flow.Approved
+		}
+		return prMove{to: e.flowColumn(ref)}
+	}
+	waiting := e.inColumn(card, flow.Reviewed) || e.inColumn(card, flow.Approved)
+	if reasked && pr.ReviewedSHA != "" {
+		card.AddLog(fmt.Sprintf("Your review was requested again on PR #%d", pr.Number))
+		e.notify("#%d: your review was requested again on PR #%d", card.Number, pr.Number)
+		if to := e.flowColumn(flow.Requested); to.ID != "" && waiting {
+			return prMove{to: to}
+		}
+	}
+	if info.HeadSHA != prevHead && pr.ReviewedSHA != "" {
 		card.AddLog(fmt.Sprintf("New commits on PR #%d since your review", pr.Number))
 		e.notify("#%d: new commits on PR #%d since your review", card.Number, pr.Number)
-		if e.inColumn(card, flow.Reviewed) {
+		if waiting {
 			return prMove{to: e.flowColumn(flow.Updated)}
 		}
+	}
+	if stale != "" && waiting {
+		card.AddLog(fmt.Sprintf("PR #%d: %s", pr.Number, stale))
+		e.notify("#%d: PR #%d: %s", card.Number, pr.Number, stale)
+		return prMove{to: e.flowColumn(flow.Updated)}
 	}
 	return prMove{}
 }

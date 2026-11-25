@@ -66,11 +66,19 @@ func TestStartPicksFirstStartedState(t *testing.T) {
 	if err != nil || state != "In Progress" || len(updates) != 1 || updates[0] != "s-progress" {
 		t.Fatalf("Start = %q, %v, updates %v", state, err, updates)
 	}
+}
 
-	updates = nil
-	c = fakeLinear(t, "started", &updates)
-	if state, err := c.Start(context.Background(), "i1"); err != nil || state != "" || len(updates) != 0 {
-		t.Errorf("already started issue was changed: %q %v %v", state, err, updates)
+func TestStartOnlyMovesIssuesThatHaveNotStarted(t *testing.T) {
+	for stateType, wantUpdates := range map[string]int{
+		"triage": 1, "backlog": 1, "unstarted": 1,
+		"started": 0, "completed": 0, "canceled": 0,
+	} {
+		var updates []string
+		c := fakeLinear(t, stateType, &updates)
+		state, err := c.Start(context.Background(), "i1")
+		if err != nil || (state != "") != (wantUpdates == 1) || len(updates) != wantUpdates {
+			t.Errorf("%s issue: Start = %q, %v, updates %v, want %d updates", stateType, state, err, updates, wantUpdates)
+		}
 	}
 }
 
@@ -79,13 +87,20 @@ func TestParseKey(t *testing.T) {
 		"DX-123": "DX-123",
 		" dx-7 ": "DX-7",
 		"https://linear.app/hoxhunt/issue/DX-1234/foo-bar": "DX-1234",
+		"https://linear.app/hoxhunt/issue/DX-1234":         "DX-1234",
+		"https://linear.app/hoxhunt/issue/dx-9?x=1":        "DX-9",
+		"https://linear.app/my-team-2/issue/DX-1":          "DX-1",
+		"https://linear.app/team2/issue/ab12-5/slug-3":     "AB12-5",
+		"linear.app/my-team-2/issue/DX-1":                  "DX-1",
 	} {
 		if got, ok := ParseKey(in); !ok || got != want {
-			t.Errorf("ParseKey(%q) = %q, %v", in, got, ok)
+			t.Errorf("ParseKey(%q) = %q, %v, want %q", in, got, ok, want)
 		}
 	}
-	if _, ok := ParseKey("not an issue"); ok {
-		t.Errorf("ParseKey accepted junk")
+	for _, in := range []string{"", "not an issue", "DX", "DX-", "-12", "https://linear.app/my-team-2/projects", "https://linear.app/hoxhunt/issue/foo", "linear.app/my-team-2/projects", "see DX-1 please"} {
+		if got, ok := ParseKey(in); ok {
+			t.Errorf("ParseKey(%q) = %q, want it rejected", in, got)
+		}
 	}
 }
 
@@ -125,10 +140,9 @@ func TestDoErrors(t *testing.T) {
 		wantErr string
 	}{
 		{"GraphQL errors win over the data", 200, `{"data":{"issue":null},"errors":[{"message":"Entity not found"},{"message":"second"}]}`, "linear: Entity not found"},
-		{"GraphQL errors on a failing status", 400, `{"errors":[{"message":"bad query"}]}`, "linear: bad query"},
+		{"GraphQL errors on a failing status", 401, `{"errors":[{"message":"Authentication required"}]}`, "linear: Authentication required"},
 		{"a non-200 status", 502, `{"data":{}}`, "linear: HTTP 502"},
 		{"an unreadable body", 500, `<html>oops</html>`, "linear: HTTP 500"},
-		{"a missing key", 401, `{"errors":[{"message":"Authentication required"}]}`, "linear: Authentication required"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := clientFor(t, func(w http.ResponseWriter, r *http.Request) {

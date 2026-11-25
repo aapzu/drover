@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -254,7 +257,7 @@ func TestConditionScriptSeesAgentReply(t *testing.T) {
 
 func TestRunShellTimeout(t *testing.T) {
 	start := time.Now()
-	err := runShell(context.Background(), t.TempDir(), "sleep 30 & sleep 30", nil, 200*time.Millisecond)
+	err := runShell(context.Background(), t.TempDir(), "sleep 30 & sleep 30", nil, 200*time.Millisecond, shellWaitDelay)
 	if err == nil || !strings.Contains(err.Error(), "timed out after 200ms") {
 		t.Errorf("err = %v", err)
 	}
@@ -264,41 +267,34 @@ func TestRunShellTimeout(t *testing.T) {
 }
 
 func TestRunShellSucceedsWithBackgroundChild(t *testing.T) {
-	if err := runShell(context.Background(), t.TempDir(), "sleep 8 & exit 0", nil, time.Minute); err != nil {
-		t.Errorf("err = %v", err)
-	}
-}
-
-func TestRunShellErrorWithoutOutput(t *testing.T) {
-	err := runShell(context.Background(), t.TempDir(), "exit 3", nil, time.Minute)
-	if err == nil || err.Error() != "exit status 3" {
-		t.Errorf("err = %v", err)
-	}
-}
-
-func TestInitialPromptKeepsGatedMessageRow(t *testing.T) {
-	e := &Engine{}
-	for _, row := range []config.Automation{
-		{Type: "send_message", Message: "/code-review", ConditionScript: "true"},
-		{Type: "send_message", Message: "/code-review", Condition: "The work is done"},
-	} {
-		prompt, rest := e.initialPrompt(&store.Task{Title: "Do the work"}, []config.Automation{row}, groupContext{})
-		if prompt != "Do the work" || len(rest) != 1 || rest[0] != row {
-			t.Errorf("prompt = %q, rest = %v", prompt, rest)
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	t.Cleanup(func() {
+		if pid, err := os.ReadFile(pidFile); err == nil {
+			exec.Command("kill", strings.TrimSpace(string(pid))).Run()
 		}
+	})
+	if err := runShell(context.Background(), t.TempDir(), "sleep 8 & echo $! > "+pidFile+"; exit 0", nil, time.Minute, 100*time.Millisecond); err != nil {
+		t.Errorf("err = %v", err)
 	}
 }
 
-func TestRowName(t *testing.T) {
-	for name, tc := range map[string]struct {
-		row  config.Automation
-		want string
-	}{
-		"named":   {config.Automation{Name: "Review", Type: "send_message"}, "Review"},
-		"unnamed": {config.Automation{Type: "run_shell"}, "run_shell"},
-	} {
-		if got := rowName(tc.row); got != tc.want {
-			t.Errorf("%s: rowName = %q, want %q", name, got, tc.want)
+func TestRunShellFailureCarriesTheExitCodeAndTheScriptsOutput(t *testing.T) {
+	err := runShell(context.Background(), t.TempDir(), "exit 3", nil, time.Minute, shellWaitDelay)
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 {
+		t.Errorf("err = %v, want an exit error with code 3", err)
+	}
+
+	err = runShell(context.Background(), t.TempDir(), "echo boom >&2; exit 1", nil, time.Minute, shellWaitDelay)
+	if !errors.As(err, &exit) || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("err = %v, want the script's output in it", err)
+	}
+}
+
+func TestShellTimeout(t *testing.T) {
+	for minutes, want := range map[int]time.Duration{0: 10 * time.Minute, 5: 5 * time.Minute, 500: 2 * time.Hour} {
+		if got := shellTimeout(minutes); got != want {
+			t.Errorf("shellTimeout(%d) = %s, want %s", minutes, got, want)
 		}
 	}
 }
@@ -378,6 +374,132 @@ func TestVarsFallBackWithoutAWorktreePRorBase(t *testing.T) {
 		v := e.vars(card, groupContext{})
 		if v["worktreePath"] != "/repo" || v["branchName"] != "own-branch" || v["baseBranch"] != tc.base || v["prUrl"] != "" || v["prNumber"] != "" || v["issueKey"] != "" {
 			t.Errorf("%s: vars = %v", name, v)
+		}
+	}
+}
+
+const turnEndBoard = `{"columns":[
+  {"id":"plan","name":"Planning"},
+  {"id":"exec","name":"Executing","autoSpawn":true,"automations":{"onTurnEnd":[%s]}},
+  {"id":"review","name":"Review"},
+  {"id":"done","name":"Done","role":"done"}]}`
+
+// turnEndEngine is an engine with one card in Executing whose idle agent
+// has a message queued, so what a turn end did to the queue is visible.
+func turnEndEngine(t *testing.T, rows string) (*Engine, *store.Task) {
+	t.Helper()
+	e := boardEngine(t, fmt.Sprintf(turnEndBoard, rows))
+	card := withQueued(agentCard("a", 1, "exec", 0))
+	card.Visit = 1
+	e.state.Tasks = []*store.Task{card}
+	return e, card
+}
+
+func TestRunTurnEnd(t *testing.T) {
+	move := func(target string) string {
+		return fmt.Sprintf(`{"name":"Go","type":"move_to_column","targetColumn":%q}`, target)
+	}
+	for name, tc := range map[string]struct {
+		rows       string
+		fixing     bool
+		visit      int
+		wantColumn string
+		wantLog    string
+		wantQueued int
+	}{
+		"moves to the named column":             {rows: move("Review"), visit: 1, wantColumn: "review", wantLog: `Automation "Go": moving to Review`},
+		"an empty target is the next column":    {rows: move(""), visit: 1, wantColumn: "review", wantLog: `Automation "Go": moving to Review`},
+		"an unknown column leaves the card":     {rows: move("Nowhere"), visit: 1, wantColumn: "exec", wantLog: `Automation "Go": no column "Nowhere"`},
+		"no move while fixing review comments":  {rows: move("Review"), fixing: true, visit: 1, wantColumn: "exec", wantLog: `Automation "Go" skipped: fixing review comments`},
+		"no rows just delivers the queue":       {rows: "", visit: 1, wantColumn: "exec"},
+		"a turn of an earlier visit is ignored": {rows: move("Review"), visit: 0, wantColumn: "exec", wantQueued: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			e, card := turnEndEngine(t, tc.rows)
+			if tc.fixing {
+				card.PR = &store.PR{FixFrom: "reviewer"}
+			}
+			e.runTurnEnd(card.ID, store.MainSession, tc.visit, "done")
+
+			if card.ColumnID != tc.wantColumn {
+				t.Errorf("column = %q, want %q", card.ColumnID, tc.wantColumn)
+			}
+			if tc.wantLog != "" && !hasLog(card, tc.wantLog) {
+				t.Errorf("log = %v, want %q", card.Log, tc.wantLog)
+			}
+			if pending := len(card.Sessions[store.MainSession].Pending); pending != tc.wantQueued {
+				t.Errorf("%d messages still queued, want %d", pending, tc.wantQueued)
+			}
+		})
+	}
+}
+
+func TestFailedTurnEndMoveStillDeliversTheQueue(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e, card := turnEndEngine(t, `{"name":"Finish","type":"move_to_column","targetColumn":"Done"}`)
+	card.Sessions["bg"] = &store.Session{Key: "bg", Status: store.StatusExternal, Imported: true, PID: os.Getpid()}
+
+	e.runTurnEnd(card.ID, store.MainSession, 1, "done")
+
+	if card.ColumnID != "exec" || !hasLog(card, `Automation "Finish": move to Done failed`) {
+		t.Errorf("column %q, log %v: the move should have been refused", card.ColumnID, card.Log)
+	}
+	if n := len(card.Sessions[store.MainSession].Pending); n != 0 {
+		t.Errorf("%d messages still queued after the failed move", n)
+	}
+}
+
+func TestExecuteLogsWhatTheRowDid(t *testing.T) {
+	e := boardEngine(t, `{"columns":[{"id":"plan","name":"Planning"},{"id":"done","name":"Done","role":"done"}]}`)
+	card := &store.Task{ID: "a", Number: 7, Title: "Ship the tracker", ColumnID: "plan"}
+	e.state.Tasks = []*store.Task{card}
+	gc := groupContext{from: e.board.Columns[0], to: e.board.Columns[1]}
+
+	e.execute(card, config.Automation{Name: "Odd", Type: "explode"}, gc)
+	if !hasLog(card, `Automation "Odd" failed: unsupported automation type "explode"`) {
+		t.Errorf("log = %v", card.Log)
+	}
+
+	e.execute(card, config.Automation{Name: "Ping", Type: "notify"}, gc)
+	if got := desktopNotified("Ship the tracker:"); len(got) != 1 || got[0] != "Ship the tracker: Done" {
+		t.Errorf("a notify row with no title or body sent %q, want the card title and the column", got)
+	}
+	if !hasLog(card, `Automation "Ping" ran`) {
+		t.Errorf("log = %v", card.Log)
+	}
+
+	e.execute(card, config.Automation{Name: "Fail", Type: "run_script", Script: "exit 4"}, gc)
+	if !hasLog(card, `Automation "Fail" failed`) {
+		t.Errorf("a failing script was not logged as failed: %v", card.Log)
+	}
+}
+
+func TestInitialPrompt(t *testing.T) {
+	review := config.Automation{Name: "Review", Type: "send_message", Message: "/code-review {{baseBranch}}"}
+	script := config.Automation{Name: "Mark", Type: "run_script", Script: "true"}
+	gatedByScript := config.Automation{Type: "send_message", Message: "/code-review", ConditionScript: "true"}
+	gatedByAgent := config.Automation{Type: "send_message", Message: "/code-review", Condition: "The work is done"}
+	for name, tc := range map[string]struct {
+		task       store.Task
+		enter      []config.Automation
+		wantPrompt string
+		wantRest   int
+	}{
+		"no prompt is the title":                    {store.Task{Title: "Fix login"}, nil, "Fix login", 0},
+		"a prompt continuing the title stands":      {store.Task{Title: "Fix login", Prompt: "Fix login on Safari"}, nil, "Fix login on Safari", 0},
+		"a separate prompt follows the title":       {store.Task{Title: "Fix login", Prompt: "It fails on Safari"}, nil, "Fix login\n\nIt fails on Safari", 0},
+		"a leading message row replaces the prompt": {store.Task{Title: "Fix login", Prompt: "ignored"}, []config.Automation{review, script}, "/code-review main", 1},
+		"a later message row is left to run":        {store.Task{Title: "Fix login"}, []config.Automation{script, review}, "Fix login", 2},
+		"a message row gated by a script is kept":   {store.Task{Title: "Fix login"}, []config.Automation{gatedByScript}, "Fix login", 1},
+		"a message row gated by the agent is kept":  {store.Task{Title: "Fix login"}, []config.Automation{gatedByAgent}, "Fix login", 1},
+	} {
+		e := bareEngine(t)
+		task := tc.task
+		e.state.Tasks = []*store.Task{&task}
+		prompt, rest := e.initialPrompt(&task, tc.enter, groupContext{})
+		if prompt != tc.wantPrompt || len(rest) != tc.wantRest {
+			t.Errorf("%s: prompt %q with %d rows left, want %q with %d", name, prompt, len(rest), tc.wantPrompt, tc.wantRest)
 		}
 	}
 }
