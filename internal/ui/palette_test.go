@@ -9,6 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/aapzu/drover/internal/store"
 )
 
 func paletteModel() Model {
@@ -345,24 +347,74 @@ func TestPaletteSearchSkipsArchivedCardsInDoneColumn(t *testing.T) {
 	}
 }
 
-func TestPaletteSearchSkipsCardsInAHiddenReviewLane(t *testing.T) {
-	m := searchModel(t, "fix login")
+// reviewLaneCard moves the first card into the review lane and returns it.
+func reviewLaneCard(t *testing.T, m Model) *store.Task {
+	t.Helper()
 	for _, c := range m.columns() {
 		if c.InReviewLane() {
 			m.snap.Tasks[0].ColumnID = c.ID
+			return m.snap.Tasks[0]
 		}
 	}
-	if m.snap.Tasks[0].ColumnID == m.columns()[0].ID {
-		t.Fatal("the default board has no review lane column")
-	}
+	t.Fatal("the default board has no review lane column")
+	return nil
+}
+
+func TestPaletteSearchFindsCardsInAHiddenReviewLane(t *testing.T) {
+	m := searchModel(t, "fix login")
+	card := reviewLaneCard(t, m)
 	shown := false
 	m.prefs.ReviewLane = &shown
 	m = typeInPalette(m, "fix")
-	if got := m.paletteCards(); len(got) != 0 {
-		t.Fatalf("matched %v, want cards in a hidden review lane left out", got)
+	if got := m.paletteCards(); len(got) != 1 || got[0] != card {
+		t.Fatalf("matched %v, want the card in the hidden review lane", got)
 	}
-	shown = true
-	if got := m.paletteCards(); len(got) != 1 {
-		t.Errorf("matched %d cards with the review lane shown, want 1", len(got))
+	card.Hidden = true
+	if got := m.paletteCards(); len(got) != 0 {
+		t.Errorf("matched %v, want hidden cards in that lane still left out", got)
+	}
+}
+
+func TestPaletteSearchFindsCardsInAHiddenMainLane(t *testing.T) {
+	m := searchModel(t, "fix login", "fix review")
+	reviewLaneCard(t, m)
+	m.prefs.HideMainLane = true
+	m = typeInPalette(m, "fix")
+	if got := m.paletteCards(); len(got) != 2 {
+		t.Errorf("matched %d cards with the main lane hidden, want 2", len(got))
+	}
+}
+
+func TestPaletteEnterOnAHiddenReviewLaneCardShowsTheLane(t *testing.T) {
+	m := searchModel(t, "one", "two")
+	card := reviewLaneCard(t, m)
+	shown := false
+	m.prefs.ReviewLane = &shown
+	m = withLive(m, card.ID)
+	m = typeInPalette(m, card.Title)
+	next, _ := m.updatePalette(special(tea.KeyEnter))
+	got := next.(Model)
+	if !got.reviewLaneShown() || got.attached != card.ID {
+		t.Errorf("lane shown %v, attached %q, want the lane shown and %q attached", got.reviewLaneShown(), got.attached, card.ID)
+	}
+	if cur := got.current(); cur == nil || cur.ID != card.ID {
+		t.Errorf("current = %v, want the review lane card", cur)
+	}
+}
+
+func TestPaletteEnterOnAHiddenMainLaneCardShowsTheLane(t *testing.T) {
+	m := searchModel(t, "one", "two")
+	reviewLaneCard(t, m)
+	target := m.snap.Tasks[1]
+	m.prefs.HideMainLane = true
+	m = withLive(m, target.ID)
+	m = typeInPalette(m, target.Title)
+	next, _ := m.updatePalette(special(tea.KeyEnter))
+	got := next.(Model)
+	if got.mainLaneHidden() || got.attached != target.ID {
+		t.Errorf("main lane hidden %v, attached %q, want the lane shown and %q attached", got.mainLaneHidden(), got.attached, target.ID)
+	}
+	if cur := got.current(); cur == nil || cur.ID != target.ID {
+		t.Errorf("current = %v, want the main lane card", cur)
 	}
 }
