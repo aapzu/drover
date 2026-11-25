@@ -26,18 +26,15 @@ import (
 )
 
 const (
-	// EnvDisable turns the check off when set to anything.
 	EnvDisable = "DROVER_NO_UPDATE_CHECK"
 
-	checkEvery = 24 * time.Hour
-	// maxDownload bounds the release archive and checksums we read.
+	checkEvery  = 24 * time.Hour
 	maxDownload = 128 << 20
 )
 
 // Client talks to a GitHub-shaped release host. The zero value uses github.com.
 type Client struct {
-	HTTP *http.Client
-	// API is the REST API base and Downloads the release asset base.
+	HTTP           *http.Client
 	API, Downloads string
 }
 
@@ -150,20 +147,21 @@ func (c *Client) Check(ctx context.Context, current string) (string, bool) {
 	if os.Getenv(EnvDisable) != "" || !Releasable(current) {
 		return "", false
 	}
+	path := cachePath()
 	var cached cache
-	if data, err := os.ReadFile(cachePath()); err == nil {
+	if data, err := os.ReadFile(path); err == nil {
 		json.Unmarshal(data, &cached)
 	}
 	latest := cached.Latest
-	if time.Since(cached.CheckedAt) > checkEvery || cached.CheckedAt.After(time.Now()) {
+	if age := time.Since(cached.CheckedAt); age > checkEvery || age < 0 {
 		tag, err := c.Latest(ctx)
 		if err != nil {
 			return "", false
 		}
 		latest = tag
 		if data, err := json.Marshal(cache{CheckedAt: time.Now(), Latest: tag}); err == nil {
-			os.MkdirAll(filepath.Dir(cachePath()), 0o755)
-			os.WriteFile(cachePath(), data, 0o644)
+			os.MkdirAll(filepath.Dir(path), 0o755)
+			os.WriteFile(path, data, 0o644)
 		}
 	}
 	return latest, Newer(current, latest)
@@ -185,11 +183,11 @@ func (c *Client) Install(ctx context.Context, tag, exe string) error {
 		return fmt.Errorf("unexpected release tag %q", tag)
 	}
 	asset := fmt.Sprintf("drover_%s_%s_%s.tar.gz", strings.TrimPrefix(tag, "v"), runtime.GOOS, runtime.GOARCH)
-	archive, err := c.fetch(ctx, tag, asset)
+	sums, err := c.fetch(ctx, tag, "checksums.txt")
 	if err != nil {
 		return err
 	}
-	sums, err := c.fetch(ctx, tag, "checksums.txt")
+	archive, err := c.fetch(ctx, tag, asset)
 	if err != nil {
 		return err
 	}
@@ -209,12 +207,16 @@ func (c *Client) fetch(ctx context.Context, tag, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownload+1))
+	return readCapped(resp.Body, name)
+}
+
+func readCapped(r io.Reader, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxDownload+1))
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > maxDownload {
-		return nil, fmt.Errorf("%s is larger than %d MB", name, maxDownload>>20)
+		return nil, fmt.Errorf("%s is larger than %d MB", what, maxDownload>>20)
 	}
 	return data, nil
 }
@@ -251,14 +253,7 @@ func extract(archive []byte) ([]byte, error) {
 		if hdr.Typeflag != tar.TypeReg || filepath.Base(hdr.Name) != "drover" {
 			continue
 		}
-		bin, err := io.ReadAll(io.LimitReader(tr, maxDownload+1))
-		if err != nil {
-			return nil, err
-		}
-		if len(bin) > maxDownload {
-			return nil, errors.New("the drover binary in the release archive is too large")
-		}
-		return bin, nil
+		return readCapped(tr, "the drover binary")
 	}
 }
 
@@ -271,6 +266,10 @@ func replace(exe string, bin []byte) error {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(bin); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err
 	}

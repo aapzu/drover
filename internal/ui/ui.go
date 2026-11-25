@@ -127,8 +127,8 @@ type Model struct {
 	flash   string
 	flashAt time.Time
 
-	// version is the running release; updateTag is a newer one, once found.
 	version, updateTag string
+	updating           bool
 
 	// form
 	editingID   string
@@ -671,7 +671,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateTag = string(msg)
 		return m, nil
 	case updatingMsg:
-		m.setFlash("Updating drover…")
+		m.updating = true
+		m.flash = ""
 		return m, nil
 	case updateDoneMsg:
 		return m.updateFinished(msg), nil

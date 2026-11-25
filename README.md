@@ -42,7 +42,7 @@ and says so in the footer. Press `U` to download it, verify its checksum and
 replace the binary, then restart the board to use it. `drover update` does the
 same from the shell, and `drover update --check` only reports.
 
-Local builds and `go install` of a commit never check. Turn the check off with
+Local builds and `go install` of a commit never check; `go install ...@latest` does, and `U` replaces that binary too. Turn the check off with
 `disableUpdateCheck` or `DROVER_NO_UPDATE_CHECK=1`.
 
 ## Use

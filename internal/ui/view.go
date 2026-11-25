@@ -175,7 +175,9 @@ func (m Model) renderFooter() string {
 // two keys that lead to every other command.
 func (m Model) boardFooter() string {
 	right := dim.Render("ctrl+k commands · ? help") + " "
-	if m.updateTag != "" {
+	if m.updating {
+		right = bold.Render("updating drover…") + dim.Render(" · ") + right
+	} else if m.updateTag != "" {
 		right = bold.Render(m.updateTag+" available: U") + dim.Render(" · ") + right
 	}
 	var parts []string

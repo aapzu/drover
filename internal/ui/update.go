@@ -10,7 +10,6 @@ import (
 	selfupdate "github.com/aapzu/drover/internal/update"
 )
 
-// The update check and install are replaced in tests.
 var (
 	checkUpdate = func(ctx context.Context, current string) (string, bool) {
 		return (&selfupdate.Client{}).Check(ctx, current)
@@ -54,6 +53,10 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 }
 
 func (m *Model) confirmUpdate() {
+	if m.updating {
+		m.setFlash("Already updating drover…")
+		return
+	}
 	if m.updateTag == "" {
 		m.setFlash("drover is up to date")
 		return
@@ -67,11 +70,12 @@ func (m *Model) confirmUpdate() {
 			defer cancel()
 			return updateDoneMsg{tag: tag, err: installUpdate(ctx, tag)}
 		}
-		return tea.Batch(func() tea.Msg { return updatingMsg{} }, install)
+		return tea.Sequence(func() tea.Msg { return updatingMsg{} }, install)
 	}
 }
 
 func (m Model) updateFinished(msg updateDoneMsg) Model {
+	m.updating = false
 	if msg.err != nil {
 		m.setFlash("Update failed: " + msg.err.Error())
 		return m

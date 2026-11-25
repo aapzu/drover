@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -82,18 +83,19 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	if len(*installs) != 0 {
 		t.Fatal("installed before the command ran")
 	}
-	var done updateDoneMsg
-	for _, msg := range runBatch(cmd) {
-		switch msg := msg.(type) {
-		case updatingMsg:
-			m = send(m, msg)
-			if !strings.Contains(m.flash, "Updating") {
-				t.Errorf("flash = %q", m.flash)
-			}
-		case updateDoneMsg:
-			done = msg
-		}
+	msgs := runSequence(cmd)
+	if _, ok := msgs[0].(updatingMsg); !ok || len(msgs) != 2 {
+		t.Fatalf("messages = %#v, want updatingMsg first, then the result", msgs)
 	}
+	m = send(m, msgs[0])
+	if !strings.Contains(m.renderFooter(), "updating drover") {
+		t.Errorf("footer = %q", m.renderFooter())
+	}
+	again, _ := m.updateBoard(keyPress("U"))
+	if got := again.(Model); got.mode != modeBoard || !strings.Contains(got.flash, "Already updating") {
+		t.Errorf("U during an install: mode %v, flash %q", got.mode, got.flash)
+	}
+	done := msgs[1].(updateDoneMsg)
 	if len(*installs) != 1 || (*installs)[0] != "v1.1.0" {
 		t.Fatalf("installs = %v", *installs)
 	}
@@ -128,19 +130,13 @@ func TestUpdateKeyWithoutAnUpdateSaysSo(t *testing.T) {
 	}
 }
 
-// runBatch runs the commands of a tea.Batch and returns what they sent.
-func runBatch(cmd tea.Cmd) []tea.Msg {
-	if cmd == nil {
-		return nil
+// runSequence runs the commands of a tea.Sequence in order and returns what
+// they sent. bubbletea keeps the sequence message unexported, hence reflection.
+func runSequence(cmd tea.Cmd) []tea.Msg {
+	seq := reflect.ValueOf(cmd())
+	var out []tea.Msg
+	for i := range seq.Len() {
+		out = append(out, seq.Index(i).Interface().(tea.Cmd)())
 	}
-	switch msg := cmd().(type) {
-	case tea.BatchMsg:
-		var out []tea.Msg
-		for _, c := range msg {
-			out = append(out, runBatch(c)...)
-		}
-		return out
-	default:
-		return []tea.Msg{msg}
-	}
+	return out
 }

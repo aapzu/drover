@@ -200,3 +200,36 @@ func TestCheckIsQuietWhenOffline(t *testing.T) {
 		t.Error("offered an update with no network")
 	}
 }
+
+func TestInstallRejectsUnusableReleases(t *testing.T) {
+	good := tarball(t, map[string]string{"drover": "new binary"})
+	r := &release{tag: "v1.2.3", archive: good}
+	c := serve(t, r)
+	exe := filepath.Join(t.TempDir(), "drover")
+	os.WriteFile(exe, []byte("old binary"), 0o755)
+
+	// No assets are published for this tag.
+	if err := c.Install(context.Background(), "v1.2.4", exe); err == nil || !strings.Contains(err.Error(), "404") {
+		t.Errorf("missing assets: err = %v", err)
+	}
+	if err := verify(good, []byte(strings.Repeat("0", 64)+"  other.tar.gz\n"), r.asset()); err == nil || !strings.Contains(err.Error(), "no checksum") {
+		t.Errorf("asset missing from checksums: err = %v", err)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != "old binary" {
+		t.Errorf("binary changed to %q", got)
+	}
+}
+
+func TestCheckIgnoresACacheFromTheFuture(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv(EnvDisable, "")
+	r := &release{tag: "v1.2.3"}
+	c := serve(t, r)
+	future, _ := json.Marshal(cache{CheckedAt: time.Now().Add(48 * time.Hour), Latest: "v1.0.1"})
+	os.MkdirAll(filepath.Dir(cachePath()), 0o755)
+	os.WriteFile(cachePath(), future, 0o644)
+
+	if tag, ok := c.Check(context.Background(), "v1.0.0"); !ok || tag != "v1.2.3" {
+		t.Errorf("Check = %q, %t, want the fresh v1.2.3", tag, ok)
+	}
+}

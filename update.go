@@ -10,7 +10,6 @@ import (
 	"github.com/aapzu/drover/internal/update"
 )
 
-// updateClient is replaced in tests.
 var updateClient = &update.Client{}
 
 // cmdUpdate installs the newest release over this binary. With --check it only
