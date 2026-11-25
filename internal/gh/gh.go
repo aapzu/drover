@@ -1,4 +1,4 @@
-// Package gh looks up pull requests with the GitHub CLI.
+// Package gh looks up pull requests and issues with the GitHub CLI.
 package gh
 
 import (
@@ -147,4 +147,60 @@ func Number(url string) int {
 	}
 	n, _ := strconv.Atoi(m[1])
 	return n
+}
+
+// Issue is a GitHub issue as `gh issue` reports it.
+type Issue struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	URL    string `json:"url"`
+	State  string `json:"state"`
+}
+
+var issueURL = regexp.MustCompile(`^https?://[^/]+/([^/]+/[^/]+)/issues/\d+$`)
+
+// ID names the issue across repositories, such as acme/widgets#42.
+func (i Issue) ID() string {
+	if m := issueURL.FindStringSubmatch(i.URL); m != nil {
+		return m[1] + "#" + strconv.Itoa(i.Number)
+	}
+	return "#" + strconv.Itoa(i.Number)
+}
+
+const issueFields = "number,title,body,url,state"
+
+// Issues lists the open issues in dir's repository that are assigned to you,
+// most recently updated first.
+func Issues(dir string) ([]Issue, error) {
+	out, err := run(dir, "gh issue list", "issue", "list", "--assignee", "@me", "--state", "open", "--limit", "100", "--json", issueFields)
+	if err != nil {
+		return nil, err
+	}
+	var issues []Issue
+	err = json.Unmarshal(out, &issues)
+	return issues, err
+}
+
+// IssueView fetches the issue ref names; see ParseIssueRef.
+func IssueView(dir, ref string) (Issue, error) {
+	out, err := run(dir, "gh issue view", "issue", "view", ref, "--json", issueFields)
+	if err != nil {
+		return Issue{}, err
+	}
+	var issue Issue
+	err = json.Unmarshal(out, &issue)
+	return issue, err
+}
+
+var issueNumber = regexp.MustCompile(`^#?(\d+)$`)
+
+// ParseIssueRef accepts an issue number (42 or #42) or an issue URL and
+// returns what `gh issue view` takes.
+func ParseIssueRef(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if m := issueNumber.FindStringSubmatch(s); m != nil {
+		return m[1], true
+	}
+	return s, issueURL.MatchString(s)
 }

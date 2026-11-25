@@ -13,14 +13,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/claude"
-	"github.com/aapzu/drover/internal/linear"
+	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/engine"
 )
 
 var activeTab = lipgloss.NewStyle().Bold(true).Background(accent).Foreground(lipgloss.Color("#ffffff")).Padding(0, 1)
 
 const (
 	sourceClaude = iota
-	sourceLinear
+	sourceIssues
 )
 
 const importPageSize = 40
@@ -29,7 +30,7 @@ const importPageSize = 40
 // one directory.
 type importItem struct {
 	session  *claude.Found
-	issue    *linear.Issue
+	issue    *engine.Issue
 	selected bool
 	header   string
 }
@@ -57,15 +58,28 @@ type sessionsLoadedMsg struct {
 }
 type issuesLoadedMsg struct {
 	gen    int
-	issues []linear.Issue
+	issues []engine.Issue
 	err    error
 	single bool
 }
 
 func newImportState() importState {
-	ki := textinput.New()
-	ki.Placeholder = "DX-123 or a linear.app issue URL"
-	return importState{keyInput: ki, limit: importPageSize}
+	return importState{keyInput: textinput.New(), limit: importPageSize}
+}
+
+// issueSetup says what the tracker needs before its issues can be listed.
+func issueSetup(tracker string) string {
+	if tracker == config.TrackerGitHub {
+		return "Install the GitHub CLI and sign in with `gh auth login`."
+	}
+	return "Set LINEAR_API_KEY (linear.app → Settings → Security & access → Personal API keys) and restart."
+}
+
+func issuePlaceholder(tracker string) string {
+	if tracker == config.TrackerGitHub {
+		return "123 or a github.com issue URL"
+	}
+	return "DX-123 or a linear.app issue URL"
 }
 
 func (m *Model) openImport(source int) tea.Cmd {
@@ -79,15 +93,15 @@ func (m *Model) openImport(source int) tea.Cmd {
 	m.imp.loading = true
 	m.imp.gen++
 	gen, eng := m.imp.gen, m.eng
-	if !eng.HasLinear() {
+	if !eng.TrackerReady() {
 		m.imp.loading = false
-		m.imp.err = "Set LINEAR_API_KEY (linear.app → Settings → Security & access → Personal API keys) and restart."
+		m.imp.err = issueSetup(eng.Tracker())
 		return nil
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		issues, err := eng.LinearIssues(ctx)
+		issues, err := eng.IssueList(ctx)
 		return issuesLoadedMsg{gen: gen, issues: issues, err: err}
 	}
 }
@@ -210,11 +224,11 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 				defer cancel()
-				issue, err := eng.LinearIssue(ctx, ref)
+				issue, err := eng.IssueByRef(ctx, ref)
 				if err != nil {
 					return issuesLoadedMsg{gen: gen, err: err}
 				}
-				return issuesLoadedMsg{gen: gen, issues: []linear.Issue{issue}, single: true}
+				return issuesLoadedMsg{gen: gen, issues: []engine.Issue{issue}, single: true}
 			}
 		}
 		var cmd tea.Cmd
@@ -257,15 +271,16 @@ func (m Model) updateImport(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case "/":
-		if imp.source == sourceLinear && m.eng.HasLinear() {
+		if imp.source == sourceIssues && m.eng.TrackerReady() {
 			imp.keyEntry = true
+			imp.keyInput.Placeholder = issuePlaceholder(m.eng.Tracker())
 			imp.keyInput.Reset()
 			cmd := imp.keyInput.Focus()
 			return m, cmd
 		}
 	case "enter":
 		var sessions []claude.Found
-		var issues []linear.Issue
+		var issues []engine.Issue
 		for i, it := range imp.items {
 			if !it.selected && i != imp.cursor {
 				continue
@@ -327,7 +342,7 @@ func (m Model) renderImport(height int) string {
 		return dim.Render(" " + name + " ")
 	}
 	lines := []string{
-		tab("Claude sessions", imp.source == sourceClaude) + "  " + tab("Linear", imp.source == sourceLinear),
+		tab("Claude sessions", imp.source == sourceClaude) + "  " + tab(m.eng.TrackerName(), imp.source == sourceIssues),
 		"",
 	}
 	switch {
@@ -383,8 +398,8 @@ func (m Model) renderImport(height int) string {
 			label = s.Title
 			detail = state + dim.Render("  "+s.Branch)
 		} else if is := it.issue; is != nil {
-			label = bold.Render(is.Identifier) + " " + is.Title
-			detail = dim.Render(is.State.Name + "  " + is.BranchName)
+			label = bold.Render(is.Key) + " " + is.Title
+			detail = dim.Render(strings.TrimSpace(is.State + "  " + is.Branch))
 		}
 		line := pointer + check + " " + label
 		if i == imp.cursor {
@@ -403,7 +418,7 @@ func (m Model) renderImport(height int) string {
 	if imp.more {
 		hint = "space select · a all · m load more · enter import · tab switch · esc close"
 	}
-	if imp.source == sourceLinear {
+	if imp.source == sourceIssues {
 		hint = "space select · a all · / fetch by key · enter import · tab switch · esc close"
 	}
 	lines = append(lines, "", dim.Render(hint))

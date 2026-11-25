@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aapzu/drover/internal/claude"
-	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -19,7 +18,7 @@ import (
 func TestNewCardsLandInTheFirstColumnWithoutAnAgent(t *testing.T) {
 	e := newEngineWithClaudeDir(t)
 	e.CreateTask("By hand", "")
-	e.ImportIssues([]linear.Issue{{ID: "i1", Identifier: "DX-1", Title: "Speed up CI", URL: "https://linear.app/x/issue/DX-1"}})
+	e.ImportIssues([]Issue{{Provider: "linear", ID: "i1", Key: "DX-1", Title: "Speed up CI", URL: "https://linear.app/x/issue/DX-1"}})
 	e.ImportSessions([]claude.Found{{SessionID: "abcdef12-past", Cwd: e.Root, Title: "Past work", FirstPrompt: "Past work"}})
 
 	snap := e.Snapshot()

@@ -538,6 +538,24 @@ func TestLocalOverlay(t *testing.T) {
 					t.Error("local disableMouse:true does not override the shared file")
 				}
 			}},
+		{"issue tracker is Linear by default", "", "",
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerLinear {
+					t.Errorf("default tracker = %q", b.Tracker())
+				}
+			}},
+		{"shared issueTracker github", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerGitHub {
+					t.Errorf("tracker = %q", b.Tracker())
+				}
+			}},
+		{"local issueTracker overrides the shared file", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"issueTracker":"linear"}`,
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerLinear {
+					t.Errorf("tracker = %q", b.Tracker())
+				}
+			}},
 		{"local column overrides apply by id",
 			`{"defaultModel":"sonnet","columns":[{"id":"a","name":"A","color":"#111","permissionMode":"plan","modelOverride":"haiku"},{"id":"b","name":"B"}]}`,
 			`{"columns":[{"id":"a","color":"#222","permissionMode":"auto","modelOverride":"opus","effortOverride":"high"},{"id":"gone","modelOverride":"opus"}]}`,
@@ -671,6 +689,7 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
 		{"unknown lane", `{"columns":[{"id":"a","name":"A"},{"id":"b","name":"B","lane":"side"}]}`, `unknown lane "side"`},
 		{"first column in the review lane", `{"columns":[{"id":"a","name":"A","lane":"review"}]}`, "first column must not be in the review lane"},
+		{"unknown issueTracker", `{"issueTracker":"jira","columns":[{"id":"a","name":"A"}]}`, `issueTracker must be "linear" or "github"`},
 		{"unknown prFlow column", `{"columns":[{"id":"a","name":"A"}],"prFlow":{"merged":"nowhere"}}`, `unknown column "nowhere"`},
 	}
 	for _, tc := range cases {

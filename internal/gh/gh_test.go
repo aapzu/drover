@@ -152,3 +152,66 @@ func TestRunWithoutGhInstalled(t *testing.T) {
 		t.Error("Me succeeded without gh on PATH")
 	}
 }
+
+func TestIssuesListsYourOpenIssues(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	t.Setenv("FAKE_ARGS", args)
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+echo '[{"number":7,"title":"Crash","body":"It breaks","url":"https://github.com/acme/widgets/issues/7","state":"OPEN"}]'`)
+	issues, err := Issues(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Number != 7 || issues[0].Title != "Crash" || issues[0].Body != "It breaks" || issues[0].ID() != "acme/widgets#7" {
+		t.Errorf("issues = %+v", issues)
+	}
+	got, _ := os.ReadFile(args)
+	for _, want := range []string{"issue list", "--assignee @me", "--state open", "--json number,title,body,url,state"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("gh args %q lack %q", got, want)
+		}
+	}
+}
+
+func TestIssueViewFetchesOneIssue(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	t.Setenv("FAKE_ARGS", args)
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+echo '{"number":9,"title":"Slow","body":"","url":"https://ghe.example.com/acme/widgets/issues/9","state":"OPEN"}'`)
+	issue, err := IssueView(dir, "9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue.Number != 9 || issue.ID() != "acme/widgets#9" {
+		t.Errorf("issue = %+v", issue)
+	}
+	if got, _ := os.ReadFile(args); !strings.Contains(string(got), "issue view 9") {
+		t.Errorf("gh args %q", got)
+	}
+}
+
+func TestIssueIDWithoutAURL(t *testing.T) {
+	if got := (Issue{Number: 3}).ID(); got != "#3" {
+		t.Errorf("ID = %q", got)
+	}
+}
+
+func TestParseIssueRef(t *testing.T) {
+	for in, want := range map[string]string{
+		"42":    "42",
+		" #42 ": "42",
+		"https://github.com/acme/widgets/issues/42": "https://github.com/acme/widgets/issues/42",
+		"https://ghe.example.com/a/b/issues/7":      "https://ghe.example.com/a/b/issues/7",
+	} {
+		if got, ok := ParseIssueRef(in); !ok || got != want {
+			t.Errorf("ParseIssueRef(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "DX-1", "https://github.com/acme/widgets/pull/42", "https://github.com/acme/widgets/issues/42/x", "#"} {
+		if _, ok := ParseIssueRef(in); ok {
+			t.Errorf("ParseIssueRef(%q) accepted", in)
+		}
+	}
+}

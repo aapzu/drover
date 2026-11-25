@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gh"
 	"github.com/aapzu/drover/internal/gitx"
 	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
@@ -234,33 +236,113 @@ func (e *Engine) pollExternal() []func() {
 	return out
 }
 
-// LinearIssues lists the user's open Linear issues that are not on the board.
-func (e *Engine) LinearIssues(ctx context.Context) ([]linear.Issue, error) {
-	if e.linear == nil {
-		return nil, errors.New("set LINEAR_API_KEY to import Linear issues")
+// Issue is a tracker issue that can become a card.
+type Issue struct {
+	Provider    string
+	ID          string
+	Key         string
+	Title       string
+	Description string
+	URL         string
+	Branch      string
+	State       string
+	TeamID      string
+}
+
+func fromLinear(i linear.Issue) Issue {
+	return Issue{
+		Provider: config.TrackerLinear, ID: i.ID, Key: i.Identifier, Title: i.Title, Description: i.Description,
+		URL: i.URL, Branch: i.BranchName, State: i.State.Name, TeamID: i.Team.ID,
 	}
-	issues, err := e.linear.MyIssues(ctx)
-	if err != nil {
-		return nil, err
+}
+
+func fromGitHub(i gh.Issue) Issue {
+	return Issue{
+		Provider: config.TrackerGitHub, ID: i.ID(), Key: fmt.Sprintf("GH-%d", i.Number), Title: i.Title,
+		Description: i.Body, URL: i.URL, State: strings.ToLower(i.State),
+	}
+}
+
+// Tracker is the issue tracker the board imports from, per its settings.
+func (e *Engine) Tracker() string { return e.Board().Tracker() }
+
+// TrackerName is Tracker as the import view labels it.
+func (e *Engine) TrackerName() string {
+	if e.Tracker() == config.TrackerGitHub {
+		return "GitHub issues"
+	}
+	return "Linear"
+}
+
+// TrackerReady reports whether the tracker's credentials or tooling are there.
+func (e *Engine) TrackerReady() bool {
+	if e.Tracker() == config.TrackerGitHub {
+		_, err := exec.LookPath("gh")
+		return err == nil
+	}
+	return e.linear != nil
+}
+
+// IssueList lists your open issues in the board's tracker that are not on the
+// board.
+func (e *Engine) IssueList(ctx context.Context) ([]Issue, error) {
+	var issues []Issue
+	if e.Tracker() == config.TrackerGitHub {
+		found, err := gh.Issues(e.Root)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range found {
+			issues = append(issues, fromGitHub(i))
+		}
+	} else {
+		if e.linear == nil {
+			return nil, errors.New("set LINEAR_API_KEY to import Linear issues")
+		}
+		found, err := e.linear.MyIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range found {
+			issues = append(issues, fromLinear(i))
+		}
 	}
 	return e.withoutImported(issues), nil
 }
 
-// LinearIssue fetches one issue by key or URL.
-func (e *Engine) LinearIssue(ctx context.Context, ref string) (linear.Issue, error) {
+// IssueByRef fetches one issue of the board's tracker by key, number or URL.
+func (e *Engine) IssueByRef(ctx context.Context, ref string) (Issue, error) {
+	if e.Tracker() != config.TrackerGitHub {
+		return e.LinearIssue(ctx, ref)
+	}
+	arg, ok := gh.ParseIssueRef(ref)
+	if !ok {
+		return Issue{}, fmt.Errorf("%q is not a GitHub issue number or URL", ref)
+	}
+	issue, err := gh.IssueView(e.Root, arg)
+	if err != nil {
+		return Issue{}, err
+	}
+	return fromGitHub(issue), nil
+}
+
+// LinearIssue fetches one Linear issue by key or URL.
+func (e *Engine) LinearIssue(ctx context.Context, ref string) (Issue, error) {
 	if e.linear == nil {
-		return linear.Issue{}, errors.New("set LINEAR_API_KEY to import Linear issues")
+		return Issue{}, errors.New("set LINEAR_API_KEY to import Linear issues")
 	}
 	key, ok := linear.ParseKey(ref)
 	if !ok {
-		return linear.Issue{}, fmt.Errorf("%q is not a Linear issue key or URL", ref)
+		return Issue{}, fmt.Errorf("%q is not a Linear issue key or URL", ref)
 	}
-	return e.linear.Issue(ctx, key)
+	issue, err := e.linear.Issue(ctx, key)
+	if err != nil {
+		return Issue{}, err
+	}
+	return fromLinear(issue), nil
 }
 
-func (e *Engine) HasLinear() bool { return e.linear != nil }
-
-func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
+func (e *Engine) withoutImported(issues []Issue) []Issue {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	have := map[string]bool{}
@@ -269,7 +351,7 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 			have[t.Issue.ID] = true
 		}
 	}
-	var out []linear.Issue
+	var out []Issue
 	for _, i := range issues {
 		if !have[i.ID] {
 			out = append(out, i)
@@ -278,9 +360,16 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 	return out
 }
 
+func providerName(provider string) string {
+	if provider == config.TrackerGitHub {
+		return "GitHub"
+	}
+	return "Linear"
+}
+
 // ImportIssues adds a card per issue not already on the board, in the first
 // column without an agent, and returns the cards it added.
-func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
+func (e *Engine) ImportIssues(issues []Issue) []*store.Task {
 	var added []*store.Task
 	for _, i := range issues {
 		e.with(func() {
@@ -294,23 +383,24 @@ func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
 			if prompt != "" {
 				prompt += "\n\n"
 			}
-			prompt += fmt.Sprintf("Linear issue %s: %s", i.Identifier, i.URL)
+			name := providerName(i.Provider)
+			prompt += fmt.Sprintf("%s issue %s: %s", name, i.Key, i.URL)
 			t := &store.Task{
 				ID:        uuid.NewString(),
 				Number:    e.state.NextNumber,
 				Title:     i.Title,
 				Prompt:    prompt,
 				ColumnID:  e.board.FirstColumn().ID,
-				Branch:    i.BranchName,
+				Branch:    i.Branch,
 				CreatedAt: now,
 				UpdatedAt: now,
 				Issue: &store.Issue{
-					Provider: "linear", ID: i.ID, Key: i.Identifier, URL: i.URL,
-					TeamID: i.Team.ID, State: i.State.Name,
+					Provider: i.Provider, ID: i.ID, Key: i.Key, URL: i.URL,
+					TeamID: i.TeamID, State: i.State,
 				},
 			}
 			e.state.NextNumber++
-			t.AddLog(fmt.Sprintf("Imported Linear issue %s", i.Identifier))
+			t.AddLog(fmt.Sprintf("Imported %s issue %s", name, i.Key))
 			e.state.Tasks = append(e.state.Tasks, t)
 			added = append(added, t)
 		})

@@ -97,7 +97,7 @@ Every column is one of three kinds:
   run after each of its turns. A move never removes a worktree or resets the
   conversation; deleting or archiving a card does.
 - **The first column** is where new cards land: `drover add`, the assistant,
-  Linear issues and imported past sessions. They start no agent. In the default
+  Linear or GitHub issues and imported past sessions. They start no agent. In the default
   board that is Planning, where a card reads `○ not started` until you press
   `enter` or `r` on it, or move it to another agent column. A card whose agent
   was stopped reads `⏸ suspended` or `■ exited` instead, and resumes its
@@ -283,6 +283,9 @@ These settings work in `drover.json` and, for you alone, in
 - **`disableMouse`** (default `false`) starts agents and the assistant with
   `CLAUDE_CODE_DISABLE_MOUSE=1`, so Claude Code leaves the mouse to tmux and
   your terminal. It applies to sessions started or resumed after you change it.
+- **`issueTracker`** (`"linear"`, the default, or `"github"`) picks the issue
+  tracker the import view lists. See [Linear](#linear) and
+  [GitHub issues](#github-issues).
 
 ## Automations
 
@@ -532,6 +535,20 @@ fetches any issue by key or URL.
 - With `DROVER_LINEAR_SYNC=1`, starting an agent on an unstarted issue
   moves it to the team's first "started" state, such as In Progress.
 
+## GitHub issues
+
+Set `issueTracker` to `"github"` (in the settings view, `o`, or in
+`drover.json` or `drover.local.json`) to import GitHub issues instead of
+Linear ones. It needs the GitHub CLI signed in (`gh auth login`). Then `I`,
+followed by `tab`, lists the open issues in this repository that are assigned
+to you. `/` fetches any issue by number (`123` or `#123`) or URL.
+
+- Imported issues land in the first column, with no agent. The issue body becomes the prompt.
+- The card shows the issue as `GH-123`, which `{{issueKey}}` also gives in
+  automations along with `{{issueUrl}}`.
+- The branch is named from the title, as for any card, and nothing is synced
+  back to the issue.
+
 ## Command line
 
 Scripts, hooks and agents can change the board from a shell. Run these from
@@ -658,7 +675,7 @@ drover ask --new "start over: what's in Planning?"
   running after you quit; the session the panel opened does not, once that
   board quits or its terminal closes. Automations only run while the board is
   open. Events that arrive while it's closed are processed when you reopen it.
-- Only Claude Code is supported. Issues import from Linear only.
+- Only Claude Code is supported. Issues import from Linear or GitHub, as `issueTracker` says.
 
 ## Releases
 

@@ -42,6 +42,7 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	IssueTracker          string        `json:"issueTracker,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -86,6 +87,12 @@ type PRFlow struct {
 	Released                string `json:"released,omitempty"`
 	ReleaseBranch           string `json:"releaseBranch,omitempty"`
 }
+
+// Issue trackers the import view can list issues from.
+const (
+	TrackerLinear = "linear"
+	TrackerGitHub = "github"
+)
 
 const (
 	ChangesModePropose = "propose"
@@ -291,6 +298,7 @@ func (b *Board) applyLocal(root string) error {
 		AutoName           *bool           `json:"autoName"`
 		SplitByPR          *bool           `json:"splitByPR"`
 		DisableMouse       *bool           `json:"disableMouse"`
+		IssueTracker       string          `json:"issueTracker"`
 		Notifications      json.RawMessage `json:"notifications"`
 		Columns            []localColumn   `json:"columns"`
 	}
@@ -317,6 +325,9 @@ func (b *Board) applyLocal(root string) error {
 	}
 	if local.DisableMouse != nil {
 		b.DisableMouse = *local.DisableMouse
+	}
+	if local.IssueTracker != "" {
+		b.IssueTracker = local.IssueTracker
 	}
 	if local.Notifications != nil {
 		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
@@ -360,6 +371,15 @@ func Stamp(root string) string {
 }
 
 // Limit is how many agents may run at once.
+// Tracker is the issue tracker the import view lists issues from: Linear
+// unless the board asks for GitHub.
+func (b *Board) Tracker() string {
+	if b != nil && b.IssueTracker == TrackerGitHub {
+		return TrackerGitHub
+	}
+	return TrackerLinear
+}
+
 func (b *Board) Limit() int {
 	if b.MaxConcurrent > 0 {
 		return b.MaxConcurrent
@@ -420,6 +440,9 @@ func (b *Board) validate() error {
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
 			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
 		}
+	}
+	if t := b.IssueTracker; t != "" && t != TrackerLinear && t != TrackerGitHub {
+		return fmt.Errorf("%s: issueTracker must be %q or %q, not %q", FileName, TrackerLinear, TrackerGitHub, t)
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {

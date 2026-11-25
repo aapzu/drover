@@ -743,7 +743,7 @@ func (m Model) renderHelp() string {
 		{"opt/shift+drag", "select text anywhere (opt on macOS, shift elsewhere)"},
 		{"M", "toggle mouse (off lets the terminal select text)"},
 		{"i", "task details and automation log"},
-		{"I", "import running Claude Code agents, past sessions or Linear issues"},
+		{"I", "import running Claude Code agents, past sessions or Linear or GitHub issues"},
 		{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 		{"B", "show or hide hidden cards"},
 		{"A", "archive or restore a card in Done"},
