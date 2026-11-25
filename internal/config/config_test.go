@@ -460,6 +460,44 @@ func TestExecutingWaitsForYou(t *testing.T) {
 	}
 }
 
+func TestReviewingTriages(t *testing.T) {
+	const columns = `{"id":"first","name":"First"},
+	  {"id":"triage","name":"Triage findings","lane":"review","autoSpawn":true},`
+	const reviewing = `{"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true`
+	cases := []struct {
+		name, board, wantRow, wantTarget string
+	}{
+		{"unset gets the row", `{"columns":[` + columns + reviewing + `}],"reviewFlow":{"started":"triage","updated":"reviewing"}}`, "Triage", "triage"},
+		{"names resolve to ids", `{"columns":[` + columns + reviewing + `}],"reviewFlow":{"started":"Triage findings","updated":"Reviewing"}}`, "Triage", "triage"},
+		{"opted out", `{"columns":[` + columns + reviewing + `,"automations":{"onTurnEnd":[]}}],"reviewFlow":{"started":"triage","updated":"reviewing"}}`, "", ""},
+		{"custom rows", `{"columns":[` + columns + reviewing + `,"automations":{"onTurnEnd":[{"name":"Mine","type":"send_message","message":"x"}]}}],"reviewFlow":{"started":"triage","updated":"reviewing"}}`, "Mine", ""},
+		{"updated is started", `{"columns":[` + columns + reviewing + `}],"reviewFlow":{"started":"reviewing","updated":"reviewing"}}`, "", ""},
+		{"no started", `{"columns":[` + columns + reviewing + `}],"reviewFlow":{"updated":"reviewing"}}`, "", ""},
+		{"no reviewFlow", `{"columns":[` + columns + reviewing + `}]}`, "", ""},
+		{"plain updated column", `{"columns":[` + columns + `{"id":"reviewing","name":"Reviewing","lane":"review"}],"reviewFlow":{"started":"triage","updated":"reviewing"}}`, "", ""},
+	}
+	for _, tc := range cases {
+		board, err := loadJSON(t, tc.board, "")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		col, _, _ := board.Column("reviewing")
+		rows := col.Automations.OnTurnEnd
+		if tc.wantRow == "" {
+			if len(rows) != 0 {
+				t.Errorf("%s: turn-end rows = %+v, want none", tc.name, rows)
+			}
+			continue
+		}
+		if len(rows) != 1 || rows[0].Name != tc.wantRow {
+			t.Fatalf("%s: turn-end rows = %+v, want one %q", tc.name, rows, tc.wantRow)
+		}
+		if tc.wantTarget != "" && (rows[0].TargetColumn != tc.wantTarget || rows[0].ConditionScript != afterReview) {
+			t.Errorf("%s: row = %+v, want a move to %q after a review", tc.name, rows[0], tc.wantTarget)
+		}
+	}
+}
+
 func TestLayers(t *testing.T) {
 	const done = `{"columns":[{"id":"done","name":"Done","role":"done"}]}`
 	cases := []struct {

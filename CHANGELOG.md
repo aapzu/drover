@@ -4,6 +4,7 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- Review cards sent back to Reviewing move on to Triage findings after the re-review, also on boards saved before that existed
 - Import GitHub issues from the import view; the new Issue tracker setting switches it between Linear and GitHub
 - The board checks for a newer release when it opens and offers to install it with `U`; `drover update` does the same from the shell
 - Settings now live in `~/.config/drover/config.json` and a per-repo config in the state directory instead of `drover.json` and `drover.local.json`; old repo files are imported once
