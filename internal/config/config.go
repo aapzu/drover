@@ -237,6 +237,7 @@ func Load(root string) (board *Board, found bool, err error) {
 	}
 	board.defaultModel()
 	board.defaultWaitingForYou()
+	board.defaultTriage()
 	return board, found, nil
 }
 
@@ -333,6 +334,29 @@ func (b *Board) defaultWaitingForYou() {
 			return
 		}
 	}
+}
+
+// defaultTriage gives the reviewFlow's updated column with no onTurnEnd key the
+// row that moves a re-reviewed card on to the started column, so a board saved
+// before that row existed still triages. An explicit "onTurnEnd": [] keeps it off.
+func (b *Board) defaultTriage() {
+	f := b.ReviewFlow
+	if f == nil {
+		return
+	}
+	updated, ok := b.Find(f.Updated)
+	started, startedOK := b.Find(f.Started)
+	if !ok || !startedOK || updated.ID == started.ID || !updated.IsAgent() || updated.Automations.OnTurnEnd != nil {
+		return
+	}
+	_, i, _ := b.Column(updated.ID)
+	b.Columns[i].Automations.OnTurnEnd = []Automation{triageAfterReview(started.ID)}
+}
+
+// triageAfterReview is the turn-end row that moves a card on to target once
+// the agent has re-reviewed a PR you already reviewed.
+func triageAfterReview(target string) Automation {
+	return Automation{Name: "Triage", Type: "move_to_column", TargetColumn: target, ConditionScript: afterReview}
 }
 
 // waitingForYou is the turn-end row that moves an Executing card to the column
@@ -597,7 +621,7 @@ func Default() *Board {
 			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
 				Automations: Automations{
 					OnEnter:   []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: afterReview}},
-					OnTurnEnd: []Automation{{Name: "Triage", Type: "move_to_column", TargetColumn: "triage", ConditionScript: afterReview}},
+					OnTurnEnd: []Automation{triageAfterReview("triage")},
 				}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},

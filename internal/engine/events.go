@@ -136,6 +136,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking
+			firstTurn := !s.Started
 			s.Started = true
 			s.TurnInVisit = true
 			prompt := strings.TrimSpace(ev.Prompt)
@@ -152,6 +153,8 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
 				e.addPRs(t, urls, true)
+			} else if firstTurn && claude.IsReviewCommand(ev.Prompt) {
+				out = append(out, func() { e.reviewRequested(taskID, visit) })
 			}
 		case "PreToolUse":
 			s.HookStops = 0
@@ -620,6 +623,46 @@ func (e *Engine) prRequested(taskID string, visit int) {
 	e.logf(card, "PR requested, moving to %s", target.Name)
 	if err := e.moveLocked(card.ID, target.ID, MoveOptions{skipEnter: true}); err != nil {
 		e.logf(card, "PR-request move failed: %v", err)
+		return
+	}
+	e.claimTurn(t, taskID)
+}
+
+// reviewRequested moves a card still in the first column to the review lane
+// when its agent's first prompt tells it to review with a command that names
+// no PR: to the reviewFlow's started column, else the lane's first column.
+func (e *Engine) reviewRequested(taskID string, visit int) {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	if t == nil || t.Visit != visit {
+		e.mu.Unlock()
+		return
+	}
+	card := store.Driver(e.state.Tasks, t)
+	var target config.Column
+	found := false
+	if f := e.board.ReviewFlow; f != nil {
+		target, found = e.board.Find(f.Started)
+	}
+	if !found {
+		for _, c := range e.board.Columns {
+			if c.InReviewLane() {
+				target, found = c, true
+				break
+			}
+		}
+	}
+	col, _, _ := e.board.Column(card.ColumnID)
+	first := card.ColumnID == e.board.FirstColumn().ID
+	e.mu.Unlock()
+	if !found || !first || card.PR != nil || !isAgentColumn(col) || target.ID == card.ColumnID {
+		return
+	}
+	e.logf(card, "Review requested, moving to %s", target.Name)
+	if err := e.moveLocked(card.ID, target.ID, MoveOptions{skipEnter: true}); err != nil {
+		e.logf(card, "Review-request move failed: %v", err)
 		return
 	}
 	e.claimTurn(t, taskID)

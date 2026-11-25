@@ -575,6 +575,20 @@ func (m Model) selectedIndex() int {
 	return 0
 }
 
+// revealColumn makes the board draw column i by showing its lane.
+func (m *Model) revealColumn(i int) {
+	if m.visibleColumn(i) {
+		return
+	}
+	if m.columns()[i].InReviewLane() {
+		shown := true
+		m.prefs.ReviewLane = &shown
+	} else {
+		m.prefs.HideMainLane = false
+	}
+	m.savePrefs()
+}
+
 func (m *Model) selectTask(t *store.Task) {
 	if t == nil {
 		return

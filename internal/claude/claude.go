@@ -295,6 +295,13 @@ func negatedBefore(prompt string, at int) bool {
 	return prNegated.MatchString(prompt[max(0, at-64):at])
 }
 
+// IsReviewCommand reports whether the prompt is a slash command with "review"
+// in its name, like `/code-review` or `/pr-review-toolkit:review-pr`.
+func IsReviewCommand(prompt string) bool {
+	command, _, _ := strings.Cut(strings.TrimSpace(prompt), " ")
+	return strings.HasPrefix(command, "/") && strings.Contains(strings.ToLower(command), "review")
+}
+
 // ReviewedPRs returns the pull request URLs in a prompt that asks for a
 // review: any URL after a slash command with "review" in its name, like
 // `/code-review`, or a URL that follows the word "review" or "reviewing"
@@ -307,11 +314,8 @@ func ReviewedPRs(prompt string) []string {
 		return nil
 	}
 	slash := strings.HasPrefix(prompt, "/")
-	if slash {
-		command, _, _ := strings.Cut(prompt, " ")
-		if !strings.Contains(strings.ToLower(command), "review") {
-			return nil
-		}
+	if slash && !IsReviewCommand(prompt) {
+		return nil
 	}
 	var anchors []int
 	if !slash {
