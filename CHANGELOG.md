@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+## [0.19.1](https://github.com/aapzu/drover/compare/v0.19.0...v0.19.1) - 2026-11-25
+
 - ctrl+k card search also finds cards in a lane the board is not showing, and opens that lane when you pick one
 - Review cards sent back to Reviewing move on to Triage findings after the re-review, also on boards saved before that existed
 - Import GitHub issues from the import view; the new Issue tracker setting switches it between Linear and GitHub
