@@ -813,5 +813,6 @@ Every pull request merged to `main` publishes a release with binaries. Label
 each PR with exactly one of `patch`, `minor`, `major` or `no-release` (a CI
 check requires it); `no-release` skips the release.
 
-Each release also adds a section to [CHANGELOG.md](CHANGELOG.md), built from
-the titles of the merged pull requests, so write PR titles for readers.
+Add a bullet under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) in each PR.
+The release moves it under the new version; if Unreleased is empty it lists the
+merged pull request titles instead, so write PR titles for readers.
