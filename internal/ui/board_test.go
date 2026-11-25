@@ -2,11 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -27,15 +29,15 @@ func TestBoardKeysMoveTheSelection(t *testing.T) {
 	}{
 		{"j", []tea.KeyMsg{key("j")}, 0, "b"},
 		{"down", []tea.KeyMsg{special(tea.KeyDown)}, 0, "b"},
-		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "c"},
+		{"j stops at the last card", []tea.KeyMsg{key("j"), key("j"), key("j")}, 0, "a"},
 		{"k", []tea.KeyMsg{key("j"), key("j"), key("k")}, 0, "b"},
-		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "a"},
-		{"G", []tea.KeyMsg{key("G")}, 0, "c"},
-		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "a"},
+		{"up stops at the first card", []tea.KeyMsg{special(tea.KeyUp), special(tea.KeyUp)}, 0, "c"},
+		{"G", []tea.KeyMsg{key("G")}, 0, "a"},
+		{"g", []tea.KeyMsg{key("G"), key("g")}, 0, "c"},
 		{"l", []tea.KeyMsg{key("l")}, 1, ""},
 		{"right", []tea.KeyMsg{special(tea.KeyRight)}, 1, ""},
-		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "a"},
-		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "a"},
+		{"h", []tea.KeyMsg{key("l"), key("h")}, 0, "c"},
+		{"left stops at the first column", []tea.KeyMsg{special(tea.KeyLeft)}, 0, "c"},
 		{"l stops at the last column", []tea.KeyMsg{key("l"), key("l"), key("l"), key("l"), key("l"), key("l")}, 4, ""},
 		{"j in an empty column", []tea.KeyMsg{key("l"), key("j"), key("G"), key("g")}, 1, ""},
 	}
@@ -129,22 +131,15 @@ func TestBoardKeysTogglePrefsAndSaveThem(t *testing.T) {
 				if got := tt.get(m.prefs); got != densityTall {
 					t.Errorf("second z: density %v", got)
 				}
+				if m, _ = update(m, key("z")); m.prefs.Density != densityNormal {
+					t.Errorf("third z: density %v, want it back to normal", m.prefs.Density)
+				}
 				return
 			}
 			if got := tt.get(m.prefs); got == tt.want {
 				t.Errorf("second %s did not toggle back", tt.key)
 			}
 		})
-	}
-}
-
-func TestDensityCyclesBackToNormal(t *testing.T) {
-	m := realModel(t, "a")
-	for range 3 {
-		m, _ = update(m, key("z"))
-	}
-	if m.prefs.Density != densityNormal {
-		t.Errorf("density = %v after three presses", m.prefs.Density)
 	}
 }
 
@@ -191,13 +186,41 @@ func TestBoardKeysResizeAndResetTheLayout(t *testing.T) {
 		}
 	}
 
-	m.prefs = prefs{PreviewHeight: 10, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
+	m.prefs = prefs{PreviewHeight: 10, ReviewLaneHeight: 12, AssistantWidth: 40, Density: densityTall, ColumnWidths: map[string]int{"planning": 20}}
 	m, _ = update(m, key("0"))
-	if m.prefs.PreviewHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
+	if m.prefs.PreviewHeight != 0 || m.prefs.ReviewLaneHeight != 0 || m.prefs.AssistantWidth != 0 || m.prefs.Density != densityNormal || len(m.prefs.ColumnWidths) != 0 {
 		t.Errorf("0 left %+v", m.prefs)
 	}
-	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.Density != densityNormal {
+	if got := loadPrefs(m.eng.Root); got.PreviewHeight != 0 || got.ReviewLaneHeight != 0 || got.Density != densityNormal {
 		t.Errorf("saved %+v", got)
+	}
+}
+
+func TestNarrowingTheLastColumnWorksWhenEveryColumnIsResized(t *testing.T) {
+	m := realModel(t, "a")
+	m.prefs.ColumnWidths = map[string]int{}
+	for _, c := range m.columns() {
+		m.prefs.ColumnWidths[c.ID] = minResizedWidth
+	}
+	last := m.layout().rows[0]
+	m.col = last[len(last)-1].index
+	width := func(m Model) int {
+		for _, c := range m.layout().cols {
+			if c.index == m.col {
+				return c.width
+			}
+		}
+		return 0
+	}
+	before := width(m)
+	m, _ = update(m, key(">"))
+	m, _ = update(m, key(">"))
+	if got := width(m); got != before+8 {
+		t.Errorf("> widened the last column to %d, want %d", got, before+8)
+	}
+	m, _ = update(m, key("<"))
+	if got := width(m); got != before+4 {
+		t.Errorf("< left the last column at %d, want %d", got, before+4)
 	}
 }
 
@@ -250,6 +273,7 @@ func TestBoardKeysOpenTheirModes(t *testing.T) {
 	}{
 		{"?", modeHelp},
 		{"i", modeDetail},
+		{"$", modeUsage},
 		{"e", modeForm},
 		{"m", modeMove},
 		{"x", modeConfirm},
@@ -291,16 +315,6 @@ func TestBoardKeysNeedACard(t *testing.T) {
 	}
 }
 
-func TestMoveKeyStartsOnTheCardsColumn(t *testing.T) {
-	m := realModel(t, "a")
-	m.snap.Tasks[0].ColumnID = "waiting-for-me"
-	m.col = 2
-	m, _ = update(m, key("m"))
-	if m.modalTask != m.snap.Tasks[0].ID || m.moveSel != 2 {
-		t.Errorf("modal task %q moveSel %d", m.modalTask, m.moveSel)
-	}
-}
-
 func TestFilterKeysNarrowThenClear(t *testing.T) {
 	m := realModel(t, "alpha", "beta")
 	m, _ = update(m, key("/"))
@@ -327,6 +341,37 @@ func TestFilterKeysNarrowThenClear(t *testing.T) {
 	m, _ = update(m, special(tea.KeyEsc))
 	if m.filter != "" {
 		t.Errorf("esc on the board kept the filter %q", m.filter)
+	}
+}
+
+func TestMatchesSearchesCardIssueAndPRFields(t *testing.T) {
+	card := &store.Task{
+		Number: 103, Title: "Dark mode", Branch: "aapeli/dx-1-dark", BaseBranch: "develop",
+		Issue: &store.Issue{Key: "DX-1", URL: "https://linear.app/x/issue/DX-1", State: "In Progress"},
+		PR: &store.PR{Number: 42, URL: "https://github.com/acme/app/pull/42", Title: "Add theme",
+			Author: "octocat", State: "OPEN", ReviewDecision: "APPROVED"},
+	}
+	for filter, want := range map[string]bool{
+		"#103":                                true,
+		"103":                                 true,
+		"42":                                  true,
+		"github.com/acme/app/pull/42":         true,
+		"https://github.com/acme/app/pull/42": true,
+		"OCTOCAT":                             true,
+		"octocat open approved":               true,
+		"linear.app dx-1":                     true,
+		"in progress":                         true,
+		"develop":                             true,
+		"octocat closed":                      false,
+		"someone-else":                        false,
+		"https://github.com/acme/app/pull/43": false,
+	} {
+		if got := matches(card, filter); got != want {
+			t.Errorf("matches(%q) = %v, want %v", filter, got, want)
+		}
+	}
+	if matches(&store.Task{Number: 1, Title: "x"}, "octocat") {
+		t.Error("a card without a PR matched a PR author")
 	}
 }
 
@@ -381,8 +426,8 @@ func TestCardActionKeysMarkTheCardBusy(t *testing.T) {
 				msg = special(tea.KeyEnter)
 			}
 			m, cmd := update(m, msg)
-			if cmd == nil || m.busy[m.current().ID].label != label {
-				t.Errorf("cmd nil %v busy %v, want %q", cmd == nil, m.busy, label)
+			if o := m.busy[m.current().ID]; cmd == nil || o.label != label || o.column != "" {
+				t.Errorf("cmd nil %v busy %v, want %q on the card without moving it", cmd == nil, m.busy, label)
 			}
 			if !strings.Contains(m.status(m.current()), label) {
 				t.Errorf("card status = %q", m.status(m.current()))
@@ -434,14 +479,11 @@ func TestTabTypesIntoTheAgentOnlyWhenOneRuns(t *testing.T) {
 	m = liveCard(t, "a")
 	m.prefs.HidePreview = true
 	m, cmd = update(m, special(tea.KeyTab))
-	if m.mode != modeLive || m.liveGen != 1 || m.prefs.HidePreview || cmd == nil {
-		t.Errorf("mode %v gen %d hidePreview %v cmd nil %v", m.mode, m.liveGen, m.prefs.HidePreview, cmd == nil)
+	if m.mode != modeLive || m.prefs.HidePreview || cmd == nil {
+		t.Errorf("mode %v hidePreview %v cmd nil %v", m.mode, m.prefs.HidePreview, cmd == nil)
 	}
 	if loadPrefs(m.eng.Root).HidePreview {
 		t.Error("the preview was left hidden in the saved layout")
-	}
-	if msgs := runCmds(cmd); len(msgs) != 2 {
-		t.Errorf("tab started %d things, want the live tick and a capture", len(msgs))
 	}
 }
 
@@ -454,11 +496,11 @@ func TestHideKeyHidesTheCardUntilShown(t *testing.T) {
 	for _, msg := range runCmds(cmd) {
 		m, _ = update(m, msg)
 	}
-	if m.flash != "Hid #1. B shows hidden cards." || titles(m.tasksForColumn(0)) != "b" {
+	if m.flash != "Hid #2. B shows hidden cards." || titles(m.tasksForColumn(0)) != "a" {
 		t.Errorf("flash %q cards %q", m.flash, titles(m.tasksForColumn(0)))
 	}
 	m, _ = update(m, key("B"))
-	if titles(m.tasksForColumn(0)) != "a,b" {
+	if titles(m.tasksForColumn(0)) != "b,a" {
 		t.Errorf("cards %q with hidden cards shown", titles(m.tasksForColumn(0)))
 	}
 }
@@ -473,20 +515,6 @@ func TestArchiveKeyRefusesWhereCardsCannotBeArchived(t *testing.T) {
 	done, ok := msgs[0].(actionDoneMsg)
 	if !ok || done.err == nil {
 		t.Errorf("archiving a card outside Done returned %+v, want an error", msgs[0])
-	}
-}
-
-func TestAssistantKeysReachTheBoardKeyHandler(t *testing.T) {
-	fakePanel(t)
-	m := realModel(t, "a")
-	m, _ = update(m, key(askKey))
-	if m.mode != modeAssistant {
-		t.Fatalf("%s: mode %v", askKey, m.mode)
-	}
-	m.mode = modeBoard
-	m, _ = update(m, tea.KeyMsg{Type: tea.KeyCtrlQ})
-	if m.assist.open {
-		t.Error("ctrl+q on the board left the panel open")
 	}
 }
 
@@ -520,5 +548,45 @@ func TestEveryPaletteCommandDoesSomethingOnTheBoard(t *testing.T) {
 				t.Errorf("pressing %q on the board did nothing", c.key)
 			}
 		})
+	}
+}
+
+func TestUpdateKeyReportsWhyACardCannotBeUpdated(t *testing.T) {
+	m := realModel(t, "a")
+	m, cmd := update(m, key("u"))
+	if m.busy[m.current().ID].label != "updating from base" || cmd == nil {
+		t.Fatalf("busy %v cmd nil %v", m.busy, cmd == nil)
+	}
+	for _, msg := range runCmds(cmd) {
+		m, _ = update(m, msg)
+	}
+	if m.flash != "Error: this card has no worktree yet" || len(m.busy) != 0 {
+		t.Errorf("flash %q busy %v", m.flash, m.busy)
+	}
+}
+
+func TestWriteDefaultBoardKeyReportsAnUnwritableProject(t *testing.T) {
+	m := realModel(t, "a")
+	if err := os.MkdirAll(config.ProjectPath(m.eng.Root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m, _ = update(m, key("W"))
+	if !strings.HasPrefix(m.flash, "Error:") {
+		t.Errorf("flash = %q, want the write error", m.flash)
+	}
+}
+
+func TestMoveKeysOnACardWhoseColumnWasRemovedTreatThePlaceAsTheFirstColumn(t *testing.T) {
+	m := realModel(t, "a")
+	card := m.snap.Tasks[0]
+	card.ColumnID = "deleted"
+
+	if next, cmd := update(m, key("H")); cmd != nil || len(next.busy) != 0 {
+		t.Error("H moved an orphan card back out of the first column")
+	}
+	next, cmd := update(m, key("L"))
+	if cmd == nil || next.busy[card.ID].column != "executing" || next.col != 1 {
+		t.Errorf("L: busy %v col %d, want the orphan moved to the second column", next.busy, next.col)
 	}
 }

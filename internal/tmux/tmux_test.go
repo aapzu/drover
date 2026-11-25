@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func waitFor(t *testing.T, name, want string) string {
 	t.Helper()
 	var out string
 	for range 50 {
-		out, _, _, _ = Capture(name, 0)
+		out, _, _, _, _ = Capture(name, 0)
 		if strings.Contains(out, want) {
 			return out
 		}
@@ -26,18 +27,49 @@ func waitFor(t *testing.T, name, want string) string {
 	return ""
 }
 
+// noServer skips the test where tmux can't run, such as a sandbox that blocks
+// tmux's socket. On CI that is a failure, so a broken tmux can't turn the
+// whole suite green.
+func noServer(t *testing.T, format string, args ...any) {
+	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Fatalf(format, args...)
+	}
+	t.Skipf(format, args...)
+}
+
+// requireTmux skips the test where tmux isn't installed. On CI that is a
+// failure too.
+func requireTmux(t *testing.T) {
+	t.Helper()
+	if Available() != nil {
+		noServer(t, "tmux not installed")
+	}
+}
+
 // useSocket gives the test its own tmux server, so one test's server shutting
 // down can't break the next test's startup.
 func useSocket(t *testing.T) {
 	t.Helper()
+	requireTmux(t)
 	Socket = fmt.Sprintf("kt-tmux-test-%d-%s", os.Getpid(), SafeName(t.Name()))
 	t.Cleanup(func() { exec.Command("tmux", "-L", Socket, "kill-server").Run() })
+	if err := NewSession("probe", t.TempDir(), []string{"cat"}, nil); err != nil || !Has("probe") {
+		noServer(t, "cannot start a tmux server here (%v)", err)
+	}
+	Kill("probe")
+	// Killing the last session shuts the server down asynchronously, and a
+	// new-session sent meanwhile fails with "server exited unexpectedly".
+	for range 100 {
+		if _, err := run("list-sessions"); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	noServer(t, "tmux server did not shut down after the probe")
 }
 
 func TestTypingIntoDetachedSession(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "typing"
@@ -72,9 +104,6 @@ func TestTypingIntoDetachedSession(t *testing.T) {
 }
 
 func TestResizeWaitsForDetach(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "attached"
@@ -134,9 +163,6 @@ func TestStatusRight(t *testing.T) {
 }
 
 func TestAttachShowsFilterInStatusBar(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "filtered"
@@ -171,9 +197,6 @@ func TestAttachShowsFilterInStatusBar(t *testing.T) {
 }
 
 func TestCaptureReturnsHistory(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "history"
@@ -184,7 +207,7 @@ func TestCaptureReturnsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, name, "100")
-	out, history, _, err := Capture(name, 30)
+	out, history, _, _, err := Capture(name, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,10 +219,33 @@ func TestCaptureReturnsHistory(t *testing.T) {
 	}
 }
 
-func TestCaptureSizedResizesOnce(t *testing.T) {
+func TestCaptureReturnsCursorWithinCapturedLines(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
+	useSocket(t)
+
+	name := "cursor"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "seq 1 100; printf hi; cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Resize(name, 40, 10); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "hi")
+	for _, scrollback := range []int{0, 30, 500} {
+		out, _, _, cur, err := Capture(name, scrollback)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+		if !cur.Visible || cur.X != 2 || cur.Line >= len(lines) || ansi.Strip(lines[cur.Line]) != "hi" {
+			t.Fatalf("scrollback %d: cursor %+v, want it visible after the \"hi\" line of %q", scrollback, cur, lines)
+		}
+	}
+}
+
+func TestCaptureSizedResizesOnce(t *testing.T) {
 	useSocket(t)
 
 	name := "sized"
@@ -208,7 +254,7 @@ func TestCaptureSizedResizesOnce(t *testing.T) {
 	}
 	waitFor(t, name, "100")
 	for range 2 {
-		out, history, _, err := CaptureSized(name, 40, 10, 30)
+		out, history, _, _, err := CaptureSized(name, 40, 10, 30)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -222,9 +268,6 @@ func TestCaptureSizedResizesOnce(t *testing.T) {
 }
 
 func TestCaptureSizedLeavesAttachedSessionAlone(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "attached-sized"
@@ -240,7 +283,7 @@ func TestCaptureSizedLeavesAttachedSessionAlone(t *testing.T) {
 		delete(attached, name)
 		attachedMu.Unlock()
 	})
-	if _, _, _, err := CaptureSized(name, 40, 10, 0); err != nil {
+	if _, _, _, _, err := CaptureSized(name, 40, 10, 0); err != nil {
 		t.Fatal(err)
 	}
 	size, err := run("display-message", "-p", "-t", "="+name+":", "#{window_width}x#{window_height}")
@@ -250,20 +293,14 @@ func TestCaptureSizedLeavesAttachedSessionAlone(t *testing.T) {
 }
 
 func TestCaptureMissingSessionFails(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
-	if out, _, _, err := CaptureSized("nope", 40, 10, 0); err == nil || out != "" {
+	if out, _, _, _, err := CaptureSized("nope", 40, 10, 0); err == nil || out != "" {
 		t.Fatalf("got %q, %v; want an error and no output", out, err)
 	}
 }
 
 func TestCaptureReportsMouseTracking(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	cases := []struct {
@@ -282,17 +319,38 @@ func TestCaptureReportsMouseTracking(t *testing.T) {
 			}
 			t.Cleanup(func() { Kill(c.name) })
 			waitFor(t, c.name, "ready")
-			if _, _, mouse, err := Capture(c.name, 0); err != nil || mouse != c.want {
+			if _, _, mouse, _, err := Capture(c.name, 0); err != nil || mouse != c.want {
 				t.Fatalf("mouse is %v (err %v), want %v", mouse, err, c.want)
 			}
 		})
 	}
 }
 
-func TestPaneOfFindsPaneByAncestor(t *testing.T) {
+func TestDisableMouseAffectsOnlyThatSession(t *testing.T) {
 	if Available() != nil {
 		t.Skip("tmux not installed")
 	}
+	useSocket(t)
+
+	for _, name := range []string{"quiet", "loud"} {
+		if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "cat"}, nil); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { Kill(name) })
+	}
+	if err := DisableMouse("quiet"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"quiet": "off", "loud": "on"} {
+		got, err := run("show-options", "-Av", "-t", name, "mouse")
+		if err != nil || strings.TrimSpace(got) != want {
+			t.Errorf("%s: mouse is %q (err %v), want %q", name, got, err, want)
+		}
+	}
+}
+
+func TestPaneOfFindsPaneByAncestor(t *testing.T) {
+	requireTmux(t)
 	socket := fmt.Sprintf("kt-tmux-user-%d", os.Getpid())
 	UserServer = []string{"-L", socket, "-f", "/dev/null"}
 	t.Cleanup(func() {
@@ -300,11 +358,11 @@ func TestPaneOfFindsPaneByAncestor(t *testing.T) {
 		exec.Command("tmux", "-L", socket, "kill-server").Run()
 	})
 	if err := userCommand("new-session", "-d", "--", "sh", "-c", "sleep 60; true").Run(); err != nil {
-		t.Fatal(err)
+		noServer(t, "cannot start a tmux server here: %v", err)
 	}
 	out, err := userCommand("list-panes", "-a", "-F", "#{pane_pid} #{pane_id}").Output()
 	if err != nil {
-		t.Fatal(err)
+		noServer(t, "cannot reach the tmux server here: %v", err)
 	}
 	var shell int
 	var want string
@@ -396,9 +454,6 @@ func TestAttachPaneCommand(t *testing.T) {
 }
 
 func TestListStopAndKill(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	if got := List(); len(got) != 0 {
@@ -427,9 +482,6 @@ func TestListStopAndKill(t *testing.T) {
 }
 
 func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	if err := NewSession("stubborn", t.TempDir(), []string{"sh", "-c", "trap '' INT; while :; do sleep 1; done"}, nil); err != nil {
@@ -442,9 +494,6 @@ func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
 }
 
 func TestSendTextAndScreen(t *testing.T) {
-	if Available() != nil {
-		t.Skip("tmux not installed")
-	}
 	useSocket(t)
 
 	name := "send"
@@ -474,5 +523,148 @@ func TestSendTextAndScreen(t *testing.T) {
 	}
 	if err := SendText("missing", strings.Repeat("x", 300)); err == nil {
 		t.Error("pasting into a missing session is not an error")
+	}
+}
+
+func TestNewSessionStartsInDirWithEnv(t *testing.T) {
+	useSocket(t)
+
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `echo "dir=$(pwd) foo=$FOO"; cat`
+	if err := NewSession("env", dir, []string{"sh", "-c", script}, map[string]string{"FOO": "bar baz"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "env", "dir="+dir+" foo=bar baz")
+}
+
+func TestSessionNamesMatchExactly(t *testing.T) {
+	useSocket(t)
+
+	if err := NewSession("one-two", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if Has("one") {
+		t.Error("Has(one) matched the session one-two")
+	}
+	Stop("one")
+	if err := Kill("one"); err != nil {
+		t.Errorf("killing a session that doesn't exist: %v", err)
+	}
+	if !Has("one-two") {
+		t.Error("stopping or killing one took one-two down with it")
+	}
+}
+
+func TestSendLiteralTypesKeyNamesAndFlagsAsText(t *testing.T) {
+	useSocket(t)
+
+	if err := NewSession("literal", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"-n", "Enter", "C-c"} {
+		if err := SendLiteral("literal", text); err != nil {
+			t.Fatalf("SendLiteral(%q): %v", text, err)
+		}
+		if err := SendKey("literal", "Enter"); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "literal", text+"\n"+text)
+	}
+	if !Has("literal") {
+		t.Error("typing the text C-c interrupted the session")
+	}
+}
+
+func TestSendKeyInterrupts(t *testing.T) {
+	useSocket(t)
+
+	if err := NewSession("interrupt", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SendKey("interrupt", "C-c"); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if !Has("interrupt") {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("C-c did not end cat")
+}
+
+func TestSendTextPastesWhatCouldSubmitEarly(t *testing.T) {
+	useSocket(t)
+
+	const bracketedPasteStart = "^[[200~"
+	script := `printf '\033[?2004h'; echo ready; cat -v`
+	for _, c := range []struct {
+		name, text string
+		pasted     bool
+	}{
+		{"a short line is typed", "short line", false},
+		{"several lines are pasted", "first\nsecond", true},
+		{"a long line is pasted", strings.Repeat("a", 210), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			name := SafeName(c.name)
+			if err := NewSession(name, t.TempDir(), []string{"sh", "-c", script}, nil); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { Kill(name) })
+			waitFor(t, name, "ready")
+			if err := SendText(name, c.text); err != nil {
+				t.Fatal(err)
+			}
+			if c.pasted {
+				waitFor(t, name, bracketedPasteStart)
+				return
+			}
+			out := waitFor(t, name, c.text+"\n"+c.text)
+			if strings.Contains(out, bracketedPasteStart) {
+				t.Errorf("a short single line was pasted:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestCaptureRejectsOutputItCannotParse(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "tmux"), []byte("#!/bin/sh\necho not-a-size\n"), 0o755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	if out, _, _, _, err := Capture("x", 0); err == nil || out != "" || !strings.Contains(err.Error(), "unexpected output") {
+		t.Errorf("Capture = %q, %v; want an error and no output", out, err)
+	}
+}
+
+func TestWaitStable(t *testing.T) {
+	if Available() != nil {
+		t.Skip("tmux not installed")
+	}
+	useSocket(t)
+
+	name := "stable"
+	if err := NewSession(name, t.TempDir(), []string{"sh", "-c", "echo first; for i in 1 2 3 4 5 6; do sleep 0.1; echo $i; done; echo second; sleep 30"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, name, "first")
+	start := time.Now()
+	if err := WaitStable(name, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 600*time.Millisecond {
+		t.Errorf("returned after %v while the screen was about to change", time.Since(start))
+	}
+	if screen, _ := Screen(name); !strings.Contains(screen, "second") {
+		t.Errorf("returned before the screen settled:\n%s", screen)
+	}
+	if err := WaitStable("missing", time.Second); err == nil {
+		t.Error("WaitStable on a missing session is not an error")
 	}
 }

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,19 @@ import (
 
 func idleAgent(tmuxName string, idleFor time.Duration) *store.Session {
 	return &store.Session{Status: store.StatusRunning, Activity: store.ActivityIdle, Started: true, Tmux: tmuxName, UpdatedAt: time.Now().Add(-idleFor)}
+}
+
+// agentCard is a card in column whose main session is an idle running agent.
+func agentCard(id string, number int, column string, idleFor time.Duration) *store.Task {
+	s := idleAgent(fmt.Sprintf("repo-%d-gone", number), idleFor)
+	s.Key = store.MainSession
+	return &store.Task{ID: id, Number: number, Title: fmt.Sprintf("Card %d", number), ColumnID: column, Sessions: map[string]*store.Session{store.MainSession: s}}
+}
+
+// withQueued gives the card's agent a message waiting to be typed.
+func withQueued(card *store.Task) *store.Task {
+	card.Sessions[store.MainSession].Pending = []store.Pending{{Text: "queued"}}
+	return card
 }
 
 func slotEngine(t *testing.T, limit int, tasks ...*store.Task) *Engine {
