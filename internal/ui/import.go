@@ -419,8 +419,8 @@ func ago(t time.Time) string {
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 }
 
-// height is the lines an item takes: a header one, anything else a label over
-// a detail.
+// height is how many lines itemLines renders for the item: 1 for a header, 2
+// (label and detail) otherwise.
 func (it importItem) height() int {
 	if it.isHeader() {
 		return 1
@@ -489,9 +489,9 @@ func (s importState) itemLines(i, inner int) []string {
 	return []string{ansi.Truncate(indent+line, inner, "…"), indent + "      " + ansi.Truncate(detail, inner-6-len(indent), "…")}
 }
 
-// window picks the items [start, end) that fit in budget lines with the cursor
-// in view, keeping about half of them above it and filling any slack at the
-// ends of the list.
+// window picks the items [start, end) that fit in budget lines, always
+// including the cursor item. It puts about half the budget above the cursor and
+// uses any leftover lines at either end of the list.
 func (s importState) window(budget int) (start, end int) {
 	n := len(s.items)
 	if n == 0 {
@@ -572,11 +572,15 @@ func (m Model) renderImport(height int) string {
 		tail = append(tail, dim.Render("No agent starts; enter on a card, or moving it to an agent column, reviews the PR."))
 	}
 
+	// Wrap what the modal would wrap, so the lines are counted as rendered.
+	wrap := func(lines []string) string { return ansi.Wordwrap(strings.Join(lines, "\n"), width-4, " ") }
+	headText, tailText := wrap(head), wrap(tail)
 	// The modal's border and padding take 4 lines.
-	budget := height - 4 - lipgloss.Height(strings.Join(head, "\n")) - lipgloss.Height(strings.Join(tail, "\n"))
+	budget := height - 4 - lipgloss.Height(headText) - lipgloss.Height(tailText)
 	start, end := imp.window(budget)
 	var more string
 	if start > 0 || end < len(imp.items) {
+		// Take a line off the budget for the indicator.
 		start, end = imp.window(budget - 1)
 		var parts []string
 		if start > 0 {
@@ -588,13 +592,13 @@ func (m Model) renderImport(height int) string {
 		more = dim.Render(strings.Join(parts, " · "))
 	}
 
-	lines := head
+	lines := []string{headText}
 	for i := start; i < end; i++ {
 		lines = append(lines, imp.itemLines(i, inner)...)
 	}
 	if more != "" {
 		lines = append(lines, more)
 	}
-	lines = append(lines, tail...)
+	lines = append(lines, tailText)
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
 }

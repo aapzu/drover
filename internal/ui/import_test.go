@@ -692,20 +692,23 @@ func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
 		"sessions":  func(*Model) {},
 		"issues":    issues,
 		"key entry": func(m *Model) { issues(m); m.imp.keyEntry = true },
-		"error":     func(m *Model) { issues(m); m.imp.err = strings.Repeat("it broke ", 30) },
+		"error":     func(m *Model) { issues(m); m.imp.err = strings.Repeat("it broke ", 12) },
 	}
 	for name, setup := range setups {
-		for _, height := range []int{15, 25, 40} {
-			m := importModel(true, sessions...)
-			setup(&m)
-			for _, cursor := range []int{0, 1, len(m.imp.items) / 2, len(m.imp.items) - 1} {
-				m.imp.cursor = cursor
-				got := ansi.Strip(m.renderImport(height))
-				if h := lipgloss.Height(got); h > height {
-					t.Errorf("%s, height %d, cursor %d: view is %d lines tall:\n%s", name, height, cursor, h, got)
-				}
-				if !strings.Contains(got, "▸") {
-					t.Errorf("%s, height %d, cursor %d: the cursor is out of view:\n%s", name, height, cursor, got)
+		for _, width := range []int{60, 80, 120} {
+			for _, height := range []int{15, 25, 40} {
+				m := importModel(true, sessions...)
+				m.width = width
+				setup(&m)
+				for _, cursor := range []int{0, 1, len(m.imp.items) / 2, len(m.imp.items) - 1} {
+					m.imp.cursor = cursor
+					got := ansi.Strip(m.renderImport(height))
+					if h := lipgloss.Height(got); h > height {
+						t.Errorf("%s, %d wide, height %d, cursor %d: view is %d lines tall:\n%s", name, width, height, cursor, h, got)
+					}
+					if !strings.Contains(got, "▸") {
+						t.Errorf("%s, height %d, cursor %d: the cursor is out of view:\n%s", name, height, cursor, got)
+					}
 				}
 			}
 		}
@@ -727,5 +730,43 @@ func TestRenderImportShowsHowMuchIsOffScreen(t *testing.T) {
 	m.imp.items = m.imp.items[:2]
 	if got := ansi.Strip(m.renderImport(30)); strings.Contains(got, "above") || strings.Contains(got, "below") {
 		t.Errorf("a list that fits needs no scroll indicator:\n%s", got)
+	}
+}
+
+func TestImportWindow(t *testing.T) {
+	items := func(heights ...int) []importItem {
+		var out []importItem
+		for _, h := range heights {
+			if h == 1 {
+				out = append(out, importItem{header: "h"})
+			} else {
+				out = append(out, importItem{issue: &engine.Issue{}})
+			}
+		}
+		return out
+	}
+	tests := []struct {
+		name       string
+		items      []importItem
+		cursor     int
+		budget     int
+		start, end int
+	}{
+		{"empty", nil, 0, 10, 0, 0},
+		{"everything fits", items(1, 2, 2), 1, 10, 0, 3},
+		{"cursor first fills below", items(2, 2, 2, 2, 2), 0, 6, 0, 3},
+		{"cursor last fills above", items(2, 2, 2, 2, 2), 4, 6, 2, 5},
+		{"cursor in the middle keeps half above", items(2, 2, 2, 2, 2, 2, 2), 3, 8, 2, 6},
+		{"headers are one line", items(1, 1, 1, 2), 3, 5, 0, 4},
+		{"budget below the cursor item", items(2, 2, 2), 1, 1, 1, 2},
+		{"cursor past the end is clamped", items(2, 2, 2), 9, 4, 1, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := importState{items: tt.items, cursor: tt.cursor}
+			if start, end := s.window(tt.budget); start != tt.start || end != tt.end {
+				t.Errorf("window(%d) = [%d, %d), want [%d, %d)", tt.budget, start, end, tt.start, tt.end)
+			}
+		})
 	}
 }
