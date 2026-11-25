@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+## [0.19.2](https://github.com/aapzu/drover/compare/v0.19.1...v0.19.2) - 2026-11-25
+
 - Fix the import view overflowing the screen when there are many sessions, issues or PRs; it now scrolls with the cursor
 
 ## [0.19.1](https://github.com/aapzu/drover/compare/v0.19.0...v0.19.1) - 2026-11-25
