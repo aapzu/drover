@@ -8,6 +8,7 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 - Import GitHub issues from the import view; the new Issue tracker setting switches it between Linear and GitHub
 - The board checks for a newer release when it opens and offers to install it with `U`; `drover update` does the same from the shell
 - Settings now live in `~/.config/drover/config.json` and a per-repo config in the state directory instead of `drover.json` and `drover.local.json`; old repo files are imported once
+- A new card whose first prompt is a review command with no PR, like `/code-review`, moves to the review lane
 
 ## [0.15.3](https://github.com/aapzu/drover/compare/v0.15.2...v0.15.3) - 2026-11-24
 
