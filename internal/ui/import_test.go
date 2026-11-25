@@ -675,6 +675,27 @@ func TestRenderReviews(t *testing.T) {
 	}
 }
 
+func issueItems(n int) []importItem {
+	items := make([]importItem, n)
+	for i := range items {
+		is := issue(fmt.Sprintf("DX-%d", i))
+		items[i] = importItem{issue: &is}
+	}
+	return items
+}
+
+func TestItemLinesMatchHeight(t *testing.T) {
+	m := importModel(false, claude.Found{SessionID: "a", Cwd: "/repo/x", Title: "t"})
+	m.imp.items = append(m.imp.items, issueItems(1)...)
+	r := reviewPR(1, false)
+	m.imp.items = append(m.imp.items, importItem{review: &r})
+	for i, it := range m.imp.items {
+		if got := len(m.imp.itemLines(i, 80)); got != it.height() {
+			t.Errorf("item %d renders %d lines, height() says %d", i, got, it.height())
+		}
+	}
+}
+
 func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
 	var sessions []claude.Found
 	for i := range 60 {
@@ -682,11 +703,7 @@ func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
 	}
 	issues := func(m *Model) {
 		m.imp.source = sourceIssues
-		m.imp.items = nil
-		for i := range 100 {
-			is := issue(fmt.Sprintf("DX-%d", i))
-			m.imp.items = append(m.imp.items, importItem{issue: &is})
-		}
+		m.imp.items = issueItems(100)
 	}
 	setups := map[string]func(*Model){
 		"sessions":  func(*Model) {},
@@ -707,7 +724,7 @@ func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
 						t.Errorf("%s, %d wide, height %d, cursor %d: view is %d lines tall:\n%s", name, width, height, cursor, h, got)
 					}
 					if !strings.Contains(got, "▸") {
-						t.Errorf("%s, height %d, cursor %d: the cursor is out of view:\n%s", name, height, cursor, got)
+						t.Errorf("%s, %d wide, height %d, cursor %d: the cursor is out of view:\n%s", name, width, height, cursor, got)
 					}
 				}
 			}
@@ -718,10 +735,7 @@ func TestRenderImportFitsTheScreenWithManyItems(t *testing.T) {
 func TestRenderImportShowsHowMuchIsOffScreen(t *testing.T) {
 	m := importModel(false)
 	m.imp.source = sourceIssues
-	for i := range 50 {
-		is := issue(fmt.Sprintf("DX-%d", i))
-		m.imp.items = append(m.imp.items, importItem{issue: &is})
-	}
+	m.imp.items = issueItems(50)
 	m.imp.cursor = 25
 	got := ansi.Strip(m.renderImport(30))
 	if !strings.Contains(got, "↑") || !strings.Contains(got, "↓") || !strings.Contains(got, "DX-26") {

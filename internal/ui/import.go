@@ -457,16 +457,16 @@ func (s importState) itemLines(i, inner int) []string {
 		return []string{ansi.Truncate(line, inner, "…")}
 	}
 	var label, detail string
-	if s := it.session; s != nil {
-		state := dim.Render(ago(s.Updated))
-		if s.Running {
+	if sess := it.session; sess != nil {
+		state := dim.Render(ago(sess.Updated))
+		if sess.Running {
 			state = thinking.Render("● running")
-			if !s.Busy {
+			if !sess.Busy {
 				state = idle.Render("● running · idle")
 			}
 		}
-		label = s.Title
-		detail = state + dim.Render("  "+s.Branch)
+		label = sess.Title
+		detail = state + dim.Render("  "+sess.Branch)
 	} else if is := it.issue; is != nil {
 		label = bold.Render(is.Key) + " " + is.Title
 		detail = dim.Render(strings.TrimSpace(is.State + "  " + is.Branch))
@@ -572,15 +572,14 @@ func (m Model) renderImport(height int) string {
 		tail = append(tail, dim.Render("No agent starts; enter on a card, or moving it to an agent column, reviews the PR."))
 	}
 
-	// Wrap what the modal would wrap, so the lines are counted as rendered.
-	wrap := func(lines []string) string { return ansi.Wordwrap(strings.Join(lines, "\n"), width-4, " ") }
+	wrap := func(lines []string) string {
+		return ansi.Wordwrap(strings.Join(lines, "\n"), width-modalStyle.GetHorizontalPadding(), " ")
+	}
 	headText, tailText := wrap(head), wrap(tail)
-	// The modal's border and padding take 4 lines.
-	budget := height - 4 - lipgloss.Height(headText) - lipgloss.Height(tailText)
+	budget := height - modalStyle.GetVerticalFrameSize() - lipgloss.Height(headText) - lipgloss.Height(tailText)
 	start, end := imp.window(budget)
-	var more string
+	var indicator string
 	if start > 0 || end < len(imp.items) {
-		// Take a line off the budget for the indicator.
 		start, end = imp.window(budget - 1)
 		var parts []string
 		if start > 0 {
@@ -589,15 +588,15 @@ func (m Model) renderImport(height int) string {
 		if end < len(imp.items) {
 			parts = append(parts, fmt.Sprintf("↓ %d below", len(imp.items)-end))
 		}
-		more = dim.Render(strings.Join(parts, " · "))
+		indicator = dim.Render(strings.Join(parts, " · "))
 	}
 
 	lines := []string{headText}
 	for i := start; i < end; i++ {
 		lines = append(lines, imp.itemLines(i, inner)...)
 	}
-	if more != "" {
-		lines = append(lines, more)
+	if indicator != "" {
+		lines = append(lines, indicator)
 	}
 	lines = append(lines, tailText)
 	return modalStyle.Width(width).Render(strings.Join(lines, "\n"))
