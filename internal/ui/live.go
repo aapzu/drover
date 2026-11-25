@@ -10,8 +10,7 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
-// liveExitKey is the only key live mode and the assistant panel keep; it matches
-// tmux.DetachKey.
+// liveExitKey leaves live mode and the assistant panel; it matches tmux.DetachKey.
 // Option chords can't be reserved: macOS types them as characters such as å.
 const liveExitKey = "ctrl+q"
 
@@ -92,6 +91,13 @@ func wheelJob(session string, up bool, x, y int) keyJob {
 	return sgrMouseJob(session, code, x, y, true)
 }
 
+func pageJob(session string, up bool) keyJob {
+	if up {
+		return keyJob{session: session, key: tmuxKeyNames["pgup"]}
+	}
+	return keyJob{session: session, key: tmuxKeyNames["pgdown"]}
+}
+
 // mouseJob reports a click, release or drag to the agent as an SGR mouse
 // sequence at pane cell (x, y), 1-based.
 func mouseJob(session string, msg tea.MouseMsg, x, y int) keyJob {
@@ -134,19 +140,37 @@ type keyJob struct {
 // keySender sends keystrokes to tmux one at a time, in order, merging runs
 // of typed text into one send-keys call.
 type keySender struct {
-	jobs chan keyJob
-	errs chan error
+	jobs    chan keyJob
+	errs    chan error
+	deliver func(keyJob) error
 }
 
 func newKeySender() *keySender {
-	s := &keySender{jobs: make(chan keyJob, 512), errs: make(chan error, 1)}
+	s := newKeySenderWith(deliverToTmux)
 	go s.loop()
 	return s
+}
+
+func newKeySenderWith(deliver func(keyJob) error) *keySender {
+	return &keySender{jobs: make(chan keyJob, 512), errs: make(chan error, 1), deliver: deliver}
+}
+
+func deliverToTmux(j keyJob) error {
+	switch {
+	case j.paste != "":
+		return tmux.Paste(j.session, j.paste)
+	case j.literal != "":
+		return tmux.SendLiteral(j.session, j.literal)
+	}
+	return tmux.SendKey(j.session, j.key)
 }
 
 func (s *keySender) send(j keyJob) { s.jobs <- j }
 
 func (s *keySender) loop() {
+	if s.deliver == nil {
+		s.deliver = deliverToTmux
+	}
 	var next *keyJob
 	for {
 		var j keyJob
@@ -169,16 +193,7 @@ func (s *keySender) loop() {
 				break merge
 			}
 		}
-		var err error
-		switch {
-		case j.paste != "":
-			err = tmux.Paste(j.session, j.paste)
-		case j.literal != "":
-			err = tmux.SendLiteral(j.session, j.literal)
-		default:
-			err = tmux.SendKey(j.session, j.key)
-		}
-		if err != nil {
+		if err := s.deliver(j); err != nil {
 			select {
 			case s.errs <- err:
 			default:
@@ -229,13 +244,20 @@ func (m Model) startLive() (Model, tea.Cmd) {
 	return m, tea.Batch(liveTick(m.liveGen), cmd)
 }
 
+func (m Model) leaveLiveCmd() tea.Cmd {
+	if t := m.current(); t != nil {
+		return m.discardSilent(t.ID)
+	}
+	return nil
+}
+
 func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == liveExitKey {
+	switch msg.String() {
+	case liveExitKey, "esc":
 		m.mode = modeBoard
-		if t := m.current(); t != nil {
-			return m, m.discardSilent(t.ID)
-		}
-		return m, nil
+		return m, m.leaveLiveCmd()
+	case paletteKey:
+		return m, tea.Batch(m.leaveLiveCmd(), m.openPalette())
 	}
 	if msg.Type == tea.KeyCtrlZ {
 		return m, nil
@@ -246,7 +268,7 @@ func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	name, ok := m.liveSession(t.ID)
 	if !ok {
-		m.setFlash("No running agent here. Ctrl-q returns to the board.")
+		m.setFlash("No running agent here. Ctrl-q or esc returns to the board.")
 		return m, nil
 	}
 	job, ok := keyJobFor(name, msg)

@@ -17,6 +17,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,3 +73,38 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  changelog:
+    needs: release
+    if: needs.release.outputs.tag != '' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.CHANGELOG_APP_ID }}
+          private-key: ${{ secrets.CHANGELOG_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Add the release to the changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch origin main "refs/tags/$TAG:refs/tags/$TAG"
+            git checkout -B main origin/main
+            scripts/changelog.sh "$TAG"
+            if [ -z "$(git status --porcelain CHANGELOG.md)" ]; then
+              exit 0
+            fi
+            git commit -m "Update changelog for $TAG [skip ci]" CHANGELOG.md
+            git push origin main && exit 0
+          done
+          echo "::error::Could not push the changelog for $TAG."
+          exit 1

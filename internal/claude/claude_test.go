@@ -14,16 +14,24 @@ import (
 	"time"
 )
 
-func TestWriteSettingsAllowsEnterWorktree(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := WriteSettings(path, "/bin/drover", "/tmp/events.jsonl"); err != nil {
+func TestWriteSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "settings.json")
+	if err := WriteSettings(path, "/bin/it's drover", "/state/main/events.jsonl"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	type hook struct {
+		Command string `json:"command"`
+		Timeout int    `json:"timeout"`
+	}
 	var got struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []hook `json:"hooks"`
+		} `json:"hooks"`
 		Permissions struct {
 			Allow []string `json:"allow"`
 		} `json:"permissions"`
@@ -31,54 +39,44 @@ func TestWriteSettingsAllowsEnterWorktree(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(got.Permissions.Allow, "EnterWorktree") {
-		t.Errorf("allow = %v, want EnterWorktree", got.Permissions.Allow)
-	}
-}
 
-func TestWriteSettingsHoldsTheAgentAfterExitPlanMode(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := WriteSettings(path, "/bin/drover", "/state/main/events.jsonl"); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Hooks struct {
-			PostToolUse []struct {
-				Matcher string `json:"matcher"`
-				Hooks   []struct {
-					Command string `json:"command"`
-					Timeout int    `json:"timeout"`
-				} `json:"hooks"`
-			} `json:"PostToolUse"`
-		} `json:"hooks"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	var gates, recorders int
-	for _, entry := range got.Hooks.PostToolUse {
-		for _, h := range entry.Hooks {
-			if strings.HasSuffix(h.Command, " hook '/state/main/events.jsonl'") && entry.Matcher == "*" {
+	const recorder = `'/bin/it'\''s drover' hook '/state/main/events.jsonl'`
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Notification", "PermissionRequest", "Stop", "StopFailure"} {
+		var recorders int
+		for _, entry := range got.Hooks[event] {
+			for _, h := range entry.Hooks {
+				if h.Command != recorder {
+					continue
+				}
 				recorders++
+				if event == "PostToolUse" && entry.Matcher != "*" {
+					t.Errorf("PostToolUse recorder matcher = %q, want * so every tool is recorded", entry.Matcher)
+				}
 			}
+		}
+		if recorders != 1 {
+			t.Errorf("%s has %d recorders, want exactly 1 (hooks: %+v)", event, recorders, got.Hooks[event])
+		}
+	}
+
+	var gates int
+	for _, entry := range got.Hooks["PostToolUse"] {
+		for _, h := range entry.Hooks {
 			if !strings.Contains(h.Command, " hook-gate ") {
 				continue
 			}
 			gates++
-			if entry.Matcher != "ExitPlanMode" || !strings.HasSuffix(h.Command, "'/state/main/plan-gate'") || h.Timeout <= 10 {
-				t.Errorf("gate hook = matcher %q, %+v", entry.Matcher, h)
+			if entry.Matcher != "ExitPlanMode" || !strings.HasSuffix(h.Command, " hook-gate '/state/main/plan-gate'") || h.Timeout <= 10 {
+				t.Errorf("gate hook = matcher %q, %+v; it must run only after ExitPlanMode and outlast the recorder's 10s timeout", entry.Matcher, h)
 			}
 		}
 	}
 	if gates != 1 {
 		t.Errorf("%d gate hooks, want 1", gates)
 	}
-	if recorders != 1 {
-		t.Errorf("%d recording hooks on PostToolUse, want 1", recorders)
+
+	if !slices.Contains(got.Permissions.Allow, "EnterWorktree") {
+		t.Errorf("allow = %v, want EnterWorktree", got.Permissions.Allow)
 	}
 }
 
@@ -162,26 +160,6 @@ func TestWaitPlanGateGivesUpAfterTheTimeout(t *testing.T) {
 	}
 	if PlanGateHeld(gate, 20*time.Millisecond) {
 		t.Error("still held after giving up")
-	}
-}
-
-func TestWriteSettingsRegistersStopFailure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := WriteSettings(path, "/bin/drover", "/tmp/events.jsonl"); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got struct {
-		Hooks map[string]any `json:"hooks"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.Hooks["StopFailure"]; !ok {
-		t.Errorf("hooks = %v, want StopFailure", got.Hooks)
 	}
 }
 
@@ -374,6 +352,8 @@ func TestAsksForPR(t *testing.T) {
 		"Don’t open a PR yet":                        false,
 		"Do not, under any circumstances, open a PR": false,
 		"Wait before you open a PR":                  false,
+		"<task-notification>\n<result>OPEN PRs are polled</result>\n</task-notification>": false,
+		"<task-notification>\n<result>Now open a PR</result>\n</task-notification>":       false,
 	} {
 		if got := AsksForPR(prompt); got != want {
 			t.Errorf("AsksForPR(%q) = %v, want %v", prompt, got, want)
@@ -425,14 +405,34 @@ func TestReviewedPRs(t *testing.T) {
 }
 
 func TestScreenMode(t *testing.T) {
-	for screen, want := range map[string]string{
-		"> fix it\n\n  plan mode is great\n" + strings.Repeat("\n", 8) + "────\n> \n────\n  ⏸ plan mode on (shift+tab to cycle)\n\n": "plan",
-		"────\n> \n────\n  ⏵⏵ accept edits on (shift+tab to cycle)":                                                                  "acceptEdits",
-		"────\n> \n────\n  ⏸ manual mode on · ? for shortcuts":                                                                       "default",
-		"we discussed auto mode earlier\n" + strings.Repeat("line\n", 10) + "────\n> \n────\n  ? for shortcuts":                      "",
+	footer := func(status string) string {
+		return "────\n> \n────\n  " + status + " (shift+tab to cycle)\n\n"
+	}
+	byMode := map[string]string{
+		"plan":              footer("⏸ plan mode on"),
+		"acceptEdits":       footer("⏵⏵ accept edits on"),
+		"auto":              footer("⏵⏵ auto mode on"),
+		"bypassPermissions": footer("⏵⏵ bypass permissions on"),
+		"dontAsk":           footer("⏵⏵ don't ask on"),
+		"default":           footer("⏸ manual mode on"),
+	}
+	for _, mode := range PermissionModes() {
+		if screen, ok := byMode[mode]; !ok {
+			t.Errorf("no screen for permission mode %q: add one so ScreenMode is checked against it", mode)
+		} else if got := ScreenMode(screen); got != mode {
+			t.Errorf("ScreenMode(%q) = %q, want %q", screen, got, mode)
+		}
+	}
+
+	history := "we discussed auto mode earlier\n" + strings.Repeat("line\n", 10)
+	for name, c := range map[string]struct{ screen, want string }{
+		"a mention far above the footer is not the mode": {history + "────\n> \n────\n  ? for shortcuts", ""},
+		"a mention near the footer is not skipped":       {"> fix it\n\n  plan mode is great\n" + footer("⏸ manual mode on"), "default"},
+		"the footer wins over earlier text":              {"auto mode\n" + footer("⏸ plan mode on"), "plan"},
+		"an empty screen":                                {"", ""},
 	} {
-		if got := ScreenMode(screen); got != want {
-			t.Errorf("ScreenMode(%q) = %q, want %q", screen, got, want)
+		if got := ScreenMode(c.screen); got != c.want {
+			t.Errorf("%s: ScreenMode = %q, want %q", name, got, c.want)
 		}
 	}
 }
@@ -548,5 +548,99 @@ func TestEvalConditionFailure(t *testing.T) {
 	got, _, err := EvalCondition(context.Background(), t.TempDir(), "c", "r")
 	if err == nil || got || !strings.Contains(err.Error(), "condition check failed") {
 		t.Errorf("got %v, err %v", got, err)
+	}
+}
+
+func TestRecordHookIgnoresWhatIsNotJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	for _, payload := range []string{"", "   ", "not json", `{"hook_event_name":"Stop"`} {
+		RecordHook(path, strings.NewReader(payload))
+	}
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		t.Errorf("garbage was recorded: %q", data)
+	}
+	RecordHook(filepath.Join(path, "below-a-file"), strings.NewReader(`{"hook_event_name":"Stop"}`))
+}
+
+func TestReadEvents(t *testing.T) {
+	dir := t.TempDir()
+
+	if events, offset, err := ReadEvents(filepath.Join(dir, "missing.jsonl"), 7); err != nil || len(events) != 0 || offset != 7 {
+		t.Errorf("a missing file = %v, %d, %v; want nothing read and the offset kept", events, offset, err)
+	}
+	if _, _, err := ReadEvents(dir, 0); err == nil {
+		t.Error("reading a directory is not an error")
+	}
+
+	path := filepath.Join(dir, "events.jsonl")
+	os.WriteFile(path, []byte(strings.Join([]string{
+		`{"hook_event_name":"SessionStart"}`,
+		`not json`,
+		`{"session_id":"no-name"}`,
+		`{"hook_event_name":"Stop"}`,
+		"",
+	}, "\n")), 0o644)
+	events, _, err := ReadEvents(path, 0)
+	if err != nil || len(events) != 2 || events[0].Name != "SessionStart" || events[1].Name != "Stop" {
+		t.Errorf("events = %+v, %v; want the two well-formed, named ones", events, err)
+	}
+}
+
+func TestEventReplyFallsBackToTheTranscript(t *testing.T) {
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(transcript, []byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"from transcript"}]}}`+"\n"), 0o644)
+
+	for name, c := range map[string]struct {
+		ev   Event
+		want string
+	}{
+		"the payload wins":           {Event{LastAssistantMessage: "from payload", TranscriptPath: transcript}, "from payload"},
+		"older payloads use the log": {Event{TranscriptPath: transcript}, "from transcript"},
+		"no transcript":              {Event{}, ""},
+		"unreadable transcript":      {Event{TranscriptPath: filepath.Join(t.TempDir(), "missing")}, ""},
+	} {
+		if got := c.ev.Reply(); got != c.want {
+			t.Errorf("%s: Reply = %q, want %q", name, got, c.want)
+		}
+	}
+}
+
+func TestCreatedPRsOnlyCountsWhatABashCommandCreated(t *testing.T) {
+	const url = "https://github.com/o/r/pull/12"
+	event := func(name, tool, command string) Event {
+		ev := Event{Name: name, ToolName: tool, ToolResponse: json.RawMessage(`{"stdout":"` + url + `"}`)}
+		ev.ToolInput = json.RawMessage(fmt.Sprintf(`{"command":%q}`, command))
+		return ev
+	}
+	for name, c := range map[string]struct {
+		ev   Event
+		want bool
+	}{
+		"created by Bash":        {event("PostToolUse", "Bash", "gh pr create --fill"), true},
+		"before the tool ran":    {event("PreToolUse", "Bash", "gh pr create --fill"), false},
+		"another tool":           {event("PostToolUse", "Edit", "gh pr create --fill"), false},
+		"only looked at":         {event("PostToolUse", "Bash", "gh pr view 12"), false},
+		"gh pr create in a word": {event("PostToolUse", "Bash", "ngh pr created"), false},
+	} {
+		if got := len(c.ev.CreatedPRs()) == 1; got != c.want {
+			t.Errorf("%s: CreatedPRs = %v, want a PR: %v", name, c.ev.CreatedPRs(), c.want)
+		}
+	}
+}
+
+func TestLastAssistantTextSkipsUnusableEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(path, []byte(strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"the answer"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"  \n"}]}}`,
+		`{"type":"assistant","message":{"content":"a plain string, not blocks"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"one"},{"type":"text","text":"two"}]}`,
+		`{"truncated`,
+	}, "\n")), 0o644)
+	if got := LastAssistantText(path); got != "the answer" {
+		t.Errorf("LastAssistantText = %q; blank, malformed and non-block entries should be skipped", got)
+	}
+	if got := LastAssistantText(""); got != "" {
+		t.Errorf("empty path = %q", got)
 	}
 }

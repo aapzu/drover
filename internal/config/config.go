@@ -1,8 +1,8 @@
-// Package config loads the board definition from drover.json at the repo root.
+// Package config loads the board definition and your settings from the global
+// and project config files, which live outside the repo.
 package config
 
 import (
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,16 +12,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/aapzu/drover/internal/store"
 )
 
-const FileName = "drover.json"
+// FileName is the name of both the global and the project config file.
+const FileName = "config.json"
 
 const (
-	LocalFileName        = "drover.local.json"
 	DefaultWorktreesDir  = ".drover/worktrees"
 	DefaultMaxConcurrent = 8
 	DefaultAgentModel    = "default"
 )
+
+// GlobalPath is the config file that applies to every repo.
+func GlobalPath() string {
+	return filepath.Join(store.XDGDir("XDG_CONFIG_HOME", ".config"), "drover", FileName)
+}
+
+// ProjectPath is the config file of one repo, kept in its state directory.
+func ProjectPath(root string) string {
+	return filepath.Join(store.Dir(root), FileName)
+}
 
 // maxArchiveDays keeps a day count inside what a Duration can hold.
 const maxArchiveDays = 100 * 365
@@ -42,6 +54,12 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	IssueTracker          string        `json:"issueTracker,omitempty"`
+	DisableUpdateCheck    bool          `json:"disableUpdateCheck,omitempty"`
+	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
+	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
+	AssistantPlugins      []string      `json:"assistantPlugins,omitempty"`
+	AssistantTools        []string      `json:"assistantTools,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -62,16 +80,19 @@ func DefaultNotifications() Notifications {
 	return Notifications{TurnDone: true, NeedsYou: true, PlanReady: true, Exited: true, CooldownSeconds: 10}
 }
 
-// ReviewFlow moves the cards of pull requests you review. Started is where a
-// card goes once the agent's first review turn ends, Reviewed once you have
-// submitted a review, Updated when the author pushes after it, and Done when
-// the PR merges or closes. Targets are column ids or names; an empty one
-// leaves cards where they are.
+// ReviewFlow moves the cards of pull requests you review. Requested is where
+// an imported PR awaiting your review lands, Started is where a card goes once
+// the agent's first review turn ends, Reviewed once you have submitted a
+// review (Approved instead when it approves the PR), Updated when the author
+// pushes after it, and Done when the PR merges or closes. Targets are column
+// ids or names; an empty one leaves cards where they are.
 type ReviewFlow struct {
-	Started  string `json:"started,omitempty"`
-	Reviewed string `json:"reviewed,omitempty"`
-	Updated  string `json:"updated,omitempty"`
-	Done     string `json:"done,omitempty"`
+	Requested string `json:"requested,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Reviewed  string `json:"reviewed,omitempty"`
+	Approved  string `json:"approved,omitempty"`
+	Updated   string `json:"updated,omitempty"`
+	Done      string `json:"done,omitempty"`
 }
 
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
@@ -87,6 +108,12 @@ type PRFlow struct {
 	ReleaseBranch           string `json:"releaseBranch,omitempty"`
 }
 
+// Issue trackers the import view can list issues from.
+const (
+	TrackerLinear = "linear"
+	TrackerGitHub = "github"
+)
+
 const (
 	ChangesModePropose = "propose"
 	ChangesModeFix     = "fix"
@@ -100,6 +127,8 @@ const (
 		"list each issue with the fix you would make, and ask me which to apply."
 	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
 )
+
+const afterReview = `test -n "$DROVER_PRREVIEWEDSHA"`
 
 const reReviewMessage = "Review PR #{{prNumber}} ({{prUrl}}) again. " +
 	"Look only at what changed since your last review, and list what is still open."
@@ -171,6 +200,9 @@ type Automation struct {
 // Conditional reports whether the row is gated.
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
 
+// OpensAgent reports whether the row can be the first prompt of a new agent.
+func (a Automation) OpensAgent() bool { return a.Type == "send_message" && !a.Conditional() }
+
 func (c Column) IsDone() bool { return c.Role == "done" }
 
 const LaneReview = "review"
@@ -181,24 +213,19 @@ func (c Column) InReviewLane() bool { return c.Lane == LaneReview }
 // IsAgent columns run an agent for the cards in them.
 func (c Column) IsAgent() bool { return c.AutoSpawn && !c.IsDone() }
 
-// Load reads drover.json and applies drover.local.json on top of it.
-// A missing drover.json yields the default board and found=false.
+// Load builds the board from the global config file, then the project one on
+// top of it. found is false when neither defines columns, and the default
+// board is used.
 func Load(root string) (board *Board, found bool, err error) {
-	data, err := os.ReadFile(filepath.Join(root, FileName))
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		board = Default()
-	case err != nil:
-		return nil, false, err
-	default:
-		found = true
-		board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
-		if err := json.Unmarshal(data, board); err != nil {
-			return nil, true, fmt.Errorf("parse %s: %w", FileName, err)
+	board = &Board{Notifications: DefaultNotifications(), AutoName: true, SplitByPR: true}
+	for _, layer := range []Layer{Global, Project} {
+		if err := board.applyLayer(layer.Path(root)); err != nil {
+			return nil, false, err
 		}
 	}
-	if err := board.applyLocal(root); err != nil {
-		return nil, found, err
+	found = board.Columns != nil
+	if !found {
+		board.useDefaultBoard()
 	}
 	board.dropTodo()
 	if err := board.validate(); err != nil {
@@ -213,8 +240,48 @@ func Load(root string) (board *Board, found bool, err error) {
 	return board, found, nil
 }
 
-// dropTodo removes columns with the "todo" role, which no longer exists, and
-// remembers their ids in LegacyTodo, plus "todo", the id the default board used.
+// applyLayer overlays the keys the file sets. A key it leaves out keeps the
+// value from the layer below, except that columns, prFlow and reviewFlow are
+// replaced whole.
+func (b *Board) applyLayer(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	columns, prFlow, reviewFlow := b.Columns, b.PRFlow, b.ReviewFlow
+	b.Columns, b.PRFlow, b.ReviewFlow = nil, nil, nil
+	if err := json.Unmarshal(data, b); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	if b.Columns == nil {
+		b.Columns = columns
+	}
+	if b.PRFlow == nil {
+		b.PRFlow = prFlow
+	}
+	if b.ReviewFlow == nil {
+		b.ReviewFlow = reviewFlow
+	}
+	return nil
+}
+
+// useDefaultBoard fills in the built-in board, keeping what the files set.
+func (b *Board) useDefaultBoard() {
+	def := Default()
+	b.Columns = def.Columns
+	if b.PRFlow == nil {
+		b.PRFlow = def.PRFlow
+	}
+	if b.ReviewFlow == nil {
+		b.ReviewFlow = def.ReviewFlow
+	}
+	if b.ArchiveDoneAfter == "" {
+		b.ArchiveDoneAfter = def.ArchiveDoneAfter
+	}
+}
+
 // ClaudeEnv is the environment drover adds to every claude session it starts.
 func (b *Board) ClaudeEnv() map[string]string {
 	if b != nil && b.DisableMouse {
@@ -223,6 +290,8 @@ func (b *Board) ClaudeEnv() map[string]string {
 	return nil
 }
 
+// dropTodo removes columns with the "todo" role, which no longer exists, and
+// remembers their ids in LegacyTodo, plus "todo", the id the default board used.
 func (b *Board) dropTodo() {
 	b.Columns = slices.DeleteFunc(b.Columns, func(c Column) bool {
 		if c.Role != "todo" {
@@ -275,88 +344,25 @@ func waitingForYou(target string) Automation {
 	}
 }
 
-// applyLocal overlays your personal settings from drover.local.json.
-func (b *Board) applyLocal(root string) error {
-	data, err := os.ReadFile(filepath.Join(root, LocalFileName))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	var local struct {
-		DefaultBaseBranch  string          `json:"defaultBaseBranch"`
-		WorktreesDir       string          `json:"worktreesDir"`
-		MaxConcurrent      *int            `json:"maxConcurrent"`
-		IdleTimeoutMinutes *int            `json:"idleTimeoutMinutes"`
-		AutoName           *bool           `json:"autoName"`
-		SplitByPR          *bool           `json:"splitByPR"`
-		DisableMouse       *bool           `json:"disableMouse"`
-		Notifications      json.RawMessage `json:"notifications"`
-		Columns            []localColumn   `json:"columns"`
-	}
-	if err := json.Unmarshal(data, &local); err != nil {
-		return fmt.Errorf("parse %s: %w", LocalFileName, err)
-	}
-	if local.DefaultBaseBranch != "" {
-		b.DefaultBaseBranch = local.DefaultBaseBranch
-	}
-	if local.WorktreesDir != "" {
-		b.WorktreesDir = local.WorktreesDir
-	}
-	if local.MaxConcurrent != nil {
-		b.MaxConcurrent = *local.MaxConcurrent
-	}
-	if local.IdleTimeoutMinutes != nil {
-		b.IdleTimeoutMinutes = *local.IdleTimeoutMinutes
-	}
-	if local.AutoName != nil {
-		b.AutoName = *local.AutoName
-	}
-	if local.SplitByPR != nil {
-		b.SplitByPR = *local.SplitByPR
-	}
-	if local.DisableMouse != nil {
-		b.DisableMouse = *local.DisableMouse
-	}
-	if local.Notifications != nil {
-		if err := json.Unmarshal(local.Notifications, &b.Notifications); err != nil {
-			return fmt.Errorf("parse %s: notifications: %w", LocalFileName, err)
-		}
-	}
-	for _, lc := range local.Columns {
-		if _, i, ok := b.Column(lc.ID); ok {
-			lc.applyTo(&b.Columns[i])
-		}
-	}
-	return nil
-}
-
-// localColumn is the part of a column that drover.local.json can override.
-type localColumn struct {
-	ID             string `json:"id"`
-	Color          string `json:"color"`
-	PermissionMode string `json:"permissionMode"`
-	ModelOverride  string `json:"modelOverride"`
-	EffortOverride string `json:"effortOverride"`
-}
-
-func (lc localColumn) applyTo(c *Column) {
-	c.Color = cmp.Or(lc.Color, c.Color)
-	c.PermissionMode = cmp.Or(lc.PermissionMode, c.PermissionMode)
-	c.ModelOverride = cmp.Or(lc.ModelOverride, c.ModelOverride)
-	c.EffortOverride = cmp.Or(lc.EffortOverride, c.EffortOverride)
-}
-
-// Stamp changes whenever drover.json or drover.local.json does.
+// Stamp changes whenever the global or the project config file does.
 func Stamp(root string) string {
 	var stamp string
-	for _, name := range []string{FileName, LocalFileName} {
-		if info, err := os.Stat(filepath.Join(root, name)); err == nil {
+	for _, layer := range []Layer{Global, Project} {
+		if info, err := os.Stat(layer.Path(root)); err == nil {
 			stamp += info.ModTime().String() + fmt.Sprint(info.Size())
 		}
 		stamp += "|"
 	}
 	return stamp
+}
+
+// Tracker is the issue tracker the import view lists issues from: Linear
+// unless the board asks for GitHub.
+func (b *Board) Tracker() string {
+	if b != nil && b.IssueTracker == TrackerGitHub {
+		return TrackerGitHub
+	}
+	return TrackerLinear
 }
 
 // Limit is how many agents may run at once.
@@ -395,45 +401,63 @@ func (b *Board) ArchiveAfter() time.Duration {
 
 func (b *Board) validate() error {
 	if len(b.Columns) == 0 {
-		return fmt.Errorf("%s has no columns", FileName)
+		return errors.New("config has no columns")
 	}
 	if b.ArchiveDoneAfter != "" {
 		if _, err := parseAge(b.ArchiveDoneAfter); err != nil {
-			return fmt.Errorf("%s: archiveDoneAfter %w", FileName, err)
+			return fmt.Errorf("config: archiveDoneAfter %w", err)
+		}
+	}
+	for _, id := range b.AssistantPlugins {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("config: assistantPlugins must not hold an empty id")
+		}
+	}
+	for _, r := range b.ReviewRepos {
+		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("config: reviewRepos entry %q must be owner/name", r)
+		}
+	}
+	for _, t := range b.AssistantTools {
+		if !strings.HasPrefix(t, "mcp__") || len(t) == len("mcp__") {
+			return fmt.Errorf("config: assistantTools entry %q must be an MCP tool pattern starting with mcp__", t)
 		}
 	}
 	if b.Columns[0].InReviewLane() {
-		return fmt.Errorf("%s: the first column must not be in the %s lane, since new cards land there", FileName, LaneReview)
+		return fmt.Errorf("config: the first column must not be in the %s lane, since new cards land there", LaneReview)
 	}
 	seen := map[string]bool{}
 	for _, c := range b.Columns {
 		if c.ID == "" || c.Name == "" {
-			return fmt.Errorf("%s: every column needs an id and a name", FileName)
+			return errors.New("config: every column needs an id and a name")
 		}
 		if seen[c.ID] {
-			return fmt.Errorf("%s: duplicate column id %s", FileName, c.ID)
+			return fmt.Errorf("config: duplicate column id %s", c.ID)
 		}
 		seen[c.ID] = true
 		if c.Lane != "" && !c.InReviewLane() {
-			return fmt.Errorf("%s: column %s has unknown lane %q, only %q is supported", FileName, c.ID, c.Lane, LaneReview)
+			return fmt.Errorf("config: column %s has unknown lane %q, only %q is supported", c.ID, c.Lane, LaneReview)
 		}
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
-			return fmt.Errorf("%s: keepAgent column %s must not be autoSpawn or Done", FileName, c.ID)
+			return fmt.Errorf("config: keepAgent column %s must not be autoSpawn or Done", c.ID)
 		}
+	}
+	if t := b.IssueTracker; t != "" && t != TrackerLinear && t != TrackerGitHub {
+		return fmt.Errorf("config: issueTracker must be %q or %q, not %q", TrackerLinear, TrackerGitHub, t)
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {
 			return err
 		}
 		if c, _ := b.Find(f.Requested); f.Requested != "" && !c.IsAgent() {
-			return fmt.Errorf("%s: prFlow.requested must be an autoSpawn column", FileName)
+			return errors.New("config: prFlow.requested must be an autoSpawn column")
 		}
 		if m := f.ChangesRequestedMode; m != "" && m != ChangesModePropose && m != ChangesModeFix && m != ChangesModeOff {
-			return fmt.Errorf("%s: prFlow.changesRequestedMode must be %q, %q or %q, not %q", FileName, ChangesModePropose, ChangesModeFix, ChangesModeOff, m)
+			return fmt.Errorf("config: prFlow.changesRequestedMode must be %q, %q or %q, not %q", ChangesModePropose, ChangesModeFix, ChangesModeOff, m)
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
-		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Updated, f.Done)
+		return b.checkColumns("reviewFlow", f.Requested, f.Started, f.Reviewed, f.Approved, f.Updated, f.Done)
 	}
 	return nil
 }
@@ -442,7 +466,7 @@ func (b *Board) validate() error {
 func (b *Board) checkColumns(flow string, refs ...string) error {
 	for _, ref := range refs {
 		if _, ok := b.Find(ref); ref != "" && !ok {
-			return fmt.Errorf("%s: %s names unknown column %q", FileName, flow, ref)
+			return fmt.Errorf("config: %s names unknown column %q", flow, ref)
 		}
 	}
 	return nil
@@ -459,14 +483,6 @@ func (b *Board) WorktreesPath(root string) string {
 		return filepath.Clean(dir)
 	}
 	return filepath.Join(root, dir)
-}
-
-func (b *Board) Save(root string) error {
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(root, FileName), append(data, '\n'), 0o644)
 }
 
 func (b *Board) Column(id string) (Column, int, bool) {
@@ -508,6 +524,52 @@ func (b *Board) PermissionMode(c Column) string {
 // FirstColumn is where new and imported cards land.
 func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
+// ErrNoReviewLane is what starting a review on a board without a review lane
+// reports.
+var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in your config`)
+
+// ReviewEntry is where a card you review starts: the review lane's first agent
+// column, else its first column. It reports false when the board has no review
+// lane.
+func (b *Board) ReviewEntry() (Column, bool) {
+	var first *Column
+	for i, c := range b.Columns {
+		switch {
+		case !c.InReviewLane():
+		case c.IsAgent():
+			return c, true
+		case first == nil:
+			first = &b.Columns[i]
+		}
+	}
+	if first == nil {
+		return Column{}, false
+	}
+	return *first, true
+}
+
+// ReviewImport is where an imported PR to review lands: the reviewFlow's
+// reviewed column once you have reviewed it, else its requested column.
+// Without that column it is the review lane's first column without an agent,
+// else the first column.
+func (b *Board) ReviewImport(reviewed bool) Column {
+	if f := b.ReviewFlow; f != nil {
+		ref := f.Requested
+		if reviewed {
+			ref = f.Reviewed
+		}
+		if c, ok := b.Find(ref); ok && ref != "" {
+			return c
+		}
+	}
+	for _, c := range b.Columns {
+		if c.InReviewLane() && !c.IsAgent() && !c.IsDone() {
+			return c
+		}
+	}
+	return b.FirstColumn()
+}
+
 // DoneColumn is the first column with the done role, or the zero Column.
 func (b *Board) DoneColumn() Column {
 	for _, c := range b.Columns {
@@ -531,16 +593,23 @@ func Default() *Board {
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+			{ID: "review-requested", Name: "Review requested", Lane: LaneReview, Color: "#a855f7"},
 			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
-				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+				Automations: Automations{
+					OnEnter:   []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: afterReview}},
+					OnTurnEnd: []Automation{{Name: "Triage", Type: "move_to_column", TargetColumn: "triage", ConditionScript: afterReview}},
+				}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
+			{ID: "review-done", Name: "Done", Role: "done", Lane: LaneReview, Color: "#10b981"},
 		},
 		ReviewFlow: &ReviewFlow{
-			Started:  "triage",
-			Reviewed: "waiting-on-author",
-			Updated:  "reviewing",
-			Done:     "done",
+			Requested: "review-requested",
+			Started:   "triage",
+			Reviewed:  "waiting-on-author",
+			Approved:  "review-done",
+			Updated:   "reviewing",
+			Done:      "review-done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",

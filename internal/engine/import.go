@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +16,7 @@ import (
 	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
+	"github.com/aapzu/drover/internal/gh"
 	"github.com/aapzu/drover/internal/gitx"
 	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
@@ -234,33 +239,115 @@ func (e *Engine) pollExternal() []func() {
 	return out
 }
 
-// LinearIssues lists the user's open Linear issues that are not on the board.
-func (e *Engine) LinearIssues(ctx context.Context) ([]linear.Issue, error) {
-	if e.linear == nil {
-		return nil, errors.New("set LINEAR_API_KEY to import Linear issues")
+var errNoLinear = errors.New("set LINEAR_API_KEY to import Linear issues")
+
+// Issue is a tracker issue that can become a card.
+type Issue struct {
+	Provider    string
+	ID          string
+	Key         string
+	Title       string
+	Description string
+	URL         string
+	Branch      string
+	State       string
+	TeamID      string
+}
+
+func fromLinear(i linear.Issue) Issue {
+	return Issue{
+		Provider: config.TrackerLinear, ID: i.ID, Key: i.Identifier, Title: i.Title, Description: i.Description,
+		URL: i.URL, Branch: i.BranchName, State: i.State.Name, TeamID: i.Team.ID,
 	}
-	issues, err := e.linear.MyIssues(ctx)
-	if err != nil {
-		return nil, err
+}
+
+func fromGitHub(i gh.Issue) Issue {
+	return Issue{
+		Provider: config.TrackerGitHub, ID: i.ID(), Key: fmt.Sprintf("GH-%d", i.Number), Title: i.Title,
+		Description: i.Body, URL: i.URL, State: strings.ToLower(i.State),
+	}
+}
+
+// Tracker is the issue tracker the board imports from, per its settings.
+func (e *Engine) Tracker() string { return e.Board().Tracker() }
+
+// TrackerName is Tracker as the import view labels it.
+func (e *Engine) TrackerName() string {
+	if e.Tracker() == config.TrackerGitHub {
+		return "GitHub issues"
+	}
+	return "Linear"
+}
+
+// TrackerReady reports whether the tracker's credentials or tooling are there.
+func (e *Engine) TrackerReady() bool {
+	if e.Tracker() == config.TrackerGitHub {
+		_, err := exec.LookPath("gh")
+		return err == nil
+	}
+	return e.linear != nil
+}
+
+// IssueList lists your open issues in the board's tracker that are not on the
+// board.
+func (e *Engine) IssueList(ctx context.Context) ([]Issue, error) {
+	var issues []Issue
+	if e.Tracker() == config.TrackerGitHub {
+		found, err := gh.Issues(e.Root)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range found {
+			issues = append(issues, fromGitHub(i))
+		}
+	} else {
+		if e.linear == nil {
+			return nil, errNoLinear
+		}
+		found, err := e.linear.MyIssues(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, i := range found {
+			issues = append(issues, fromLinear(i))
+		}
 	}
 	return e.withoutImported(issues), nil
 }
 
-// LinearIssue fetches one issue by key or URL.
-func (e *Engine) LinearIssue(ctx context.Context, ref string) (linear.Issue, error) {
+// IssueByRef fetches one issue of the board's tracker by key, number or URL.
+func (e *Engine) IssueByRef(ctx context.Context, ref string) (Issue, error) {
+	if e.Tracker() != config.TrackerGitHub {
+		return e.LinearIssue(ctx, ref)
+	}
+	arg, ok := gh.ParseIssueRef(ref)
+	if !ok {
+		return Issue{}, fmt.Errorf("%q is not a GitHub issue number or URL", ref)
+	}
+	issue, err := gh.IssueView(e.Root, arg)
+	if err != nil {
+		return Issue{}, err
+	}
+	return fromGitHub(issue), nil
+}
+
+// LinearIssue fetches one Linear issue by key or URL.
+func (e *Engine) LinearIssue(ctx context.Context, ref string) (Issue, error) {
 	if e.linear == nil {
-		return linear.Issue{}, errors.New("set LINEAR_API_KEY to import Linear issues")
+		return Issue{}, errNoLinear
 	}
 	key, ok := linear.ParseKey(ref)
 	if !ok {
-		return linear.Issue{}, fmt.Errorf("%q is not a Linear issue key or URL", ref)
+		return Issue{}, fmt.Errorf("%q is not a Linear issue key or URL", ref)
 	}
-	return e.linear.Issue(ctx, key)
+	issue, err := e.linear.Issue(ctx, key)
+	if err != nil {
+		return Issue{}, err
+	}
+	return fromLinear(issue), nil
 }
 
-func (e *Engine) HasLinear() bool { return e.linear != nil }
-
-func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
+func (e *Engine) withoutImported(issues []Issue) []Issue {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	have := map[string]bool{}
@@ -269,7 +356,7 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 			have[t.Issue.ID] = true
 		}
 	}
-	var out []linear.Issue
+	var out []Issue
 	for _, i := range issues {
 		if !have[i.ID] {
 			out = append(out, i)
@@ -278,9 +365,16 @@ func (e *Engine) withoutImported(issues []linear.Issue) []linear.Issue {
 	return out
 }
 
+func providerName(provider string) string {
+	if provider == config.TrackerGitHub {
+		return "GitHub"
+	}
+	return "Linear"
+}
+
 // ImportIssues adds a card per issue not already on the board, in the first
 // column without an agent, and returns the cards it added.
-func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
+func (e *Engine) ImportIssues(issues []Issue) []*store.Task {
 	var added []*store.Task
 	for _, i := range issues {
 		e.with(func() {
@@ -294,28 +388,191 @@ func (e *Engine) ImportIssues(issues []linear.Issue) []*store.Task {
 			if prompt != "" {
 				prompt += "\n\n"
 			}
-			prompt += fmt.Sprintf("Linear issue %s: %s", i.Identifier, i.URL)
+			name := providerName(i.Provider)
+			prompt += fmt.Sprintf("%s issue %s: %s", name, i.Key, i.URL)
 			t := &store.Task{
 				ID:        uuid.NewString(),
 				Number:    e.state.NextNumber,
 				Title:     i.Title,
 				Prompt:    prompt,
 				ColumnID:  e.board.FirstColumn().ID,
-				Branch:    i.BranchName,
+				Branch:    i.Branch,
 				CreatedAt: now,
 				UpdatedAt: now,
 				Issue: &store.Issue{
-					Provider: "linear", ID: i.ID, Key: i.Identifier, URL: i.URL,
-					TeamID: i.Team.ID, State: i.State.Name,
+					Provider: i.Provider, ID: i.ID, Key: i.Key, URL: i.URL,
+					TeamID: i.TeamID, State: i.State,
 				},
 			}
 			e.state.NextNumber++
-			t.AddLog(fmt.Sprintf("Imported Linear issue %s", i.Identifier))
+			t.AddLog(fmt.Sprintf("Imported %s issue %s", name, i.Key))
 			e.state.Tasks = append(e.state.Tasks, t)
 			added = append(added, t)
 		})
 	}
 	return added
+}
+
+// ReviewPR is an open pull request by someone else that you could import to
+// review. Reviewed is set when you have reviewed it and it doesn't await
+// your review again.
+type ReviewPR struct {
+	gh.Found
+	Reviewed bool
+}
+
+// ReviewPRs lists the open pull requests in this repo and reviewRepos that
+// await your review, then the ones you have reviewed, leaving out your own
+// and those on the board. With teamReviewRequests on, requests to your teams
+// count too.
+func (e *Engine) ReviewPRs() ([]ReviewPR, error) {
+	e.mu.Lock()
+	extra, teams := slices.Clone(e.board.ReviewRepos), e.board.TeamReviewRequests
+	e.mu.Unlock()
+	me, err := e.login()
+	if err != nil {
+		return nil, err
+	}
+	repo, err := gh.Repo(e.Root)
+	if err != nil {
+		return nil, err
+	}
+	repos := []string{repo}
+	for _, r := range extra {
+		if !slices.ContainsFunc(repos, func(have string) bool { return strings.EqualFold(have, r) }) {
+			repos = append(repos, r)
+		}
+	}
+	requested := []string{"user-review-requested:@me"}
+	if teams {
+		requested = []string{"--review-requested=@me"}
+	}
+	var asked, reviewed []gh.Found
+	var askErr, reviewErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { asked, askErr = gh.Search(e.Root, repos, requested...) })
+	wg.Go(func() { reviewed, reviewErr = gh.Search(e.Root, repos, "--reviewed-by=@me") })
+	wg.Wait()
+	if err := errors.Join(askErr, reviewErr); err != nil {
+		return nil, err
+	}
+	return e.withoutReviewing(me, asked, reviewed), nil
+}
+
+// withoutReviewing lists requested and then reviewed as ReviewPRs, once each
+// and without your own or those already on the board.
+func (e *Engine) withoutReviewing(me string, requested, reviewed []gh.Found) []ReviewPR {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	skip := map[string]bool{}
+	for _, t := range e.state.Tasks {
+		if t.PR != nil {
+			skip[t.PR.URL] = true
+		}
+	}
+	var out []ReviewPR
+	add := func(found []gh.Found, done bool) {
+		for _, f := range found {
+			if skip[f.URL] || strings.EqualFold(f.Author.Login, me) {
+				continue
+			}
+			skip[f.URL] = true
+			out = append(out, ReviewPR{Found: f, Reviewed: done})
+		}
+	}
+	add(requested, false)
+	add(reviewed, true)
+	return out
+}
+
+// ReviewPRByURL fetches one open pull request by someone else by its URL.
+func (e *Engine) ReviewPRByURL(ref string) (ReviewPR, error) {
+	url := strings.TrimSpace(ref)
+	if !gh.IsURL(url) {
+		return ReviewPR{}, fmt.Errorf("%q is not a pull request URL", ref)
+	}
+	me, err := e.login()
+	if err != nil {
+		return ReviewPR{}, err
+	}
+	info, err := gh.View(e.Root, url)
+	switch {
+	case err != nil:
+		return ReviewPR{}, err
+	case strings.EqualFold(info.Author.Login, me):
+		return ReviewPR{}, fmt.Errorf("PR #%d is yours", gh.Number(url))
+	case info.State != "OPEN":
+		return ReviewPR{}, fmt.Errorf("PR #%d is %s", gh.Number(url), strings.ToLower(info.State))
+	}
+	found := gh.Found{Number: gh.Number(url), Title: info.Title, URL: url, Author: info.Author}
+	return ReviewPR{Found: found, Reviewed: !info.ReviewedBy(me).SubmittedAt.IsZero()}, nil
+}
+
+// ImportReviews adds a review card per pull request not already on the board
+// and returns the cards it added. A PR awaiting your review lands in the
+// reviewFlow's requested column, one you have reviewed in its reviewed column.
+// No agent starts; the prompt reviews the PR once you start one. The PR's
+// state stays empty, so its first refresh only records a review already
+// there and moves nothing.
+func (e *Engine) ImportReviews(prs []ReviewPR) []*store.Task {
+	var added []*store.Task
+	for _, p := range prs {
+		e.with(func() {
+			for _, t := range e.state.Tasks {
+				if t.PR != nil && t.PR.URL == p.URL {
+					return
+				}
+			}
+			now := time.Now()
+			t := &store.Task{
+				ID:        uuid.NewString(),
+				Number:    e.state.NextNumber,
+				Title:     "Review: " + p.Title,
+				Prompt:    "/code-review " + p.URL,
+				ColumnID:  e.board.ReviewImport(p.Reviewed).ID,
+				PR:        &store.PR{URL: p.URL, Number: p.Number, Title: p.Title, Author: p.Author.Login, Review: true},
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+			e.state.NextNumber++
+			t.AddLog(fmt.Sprintf("Imported PR #%d to review", p.Number))
+			e.state.Tasks = append(e.state.Tasks, t)
+			added = append(added, t)
+		})
+	}
+	return added
+}
+
+// ReviewLevels are the levels /code-review takes before its target.
+var ReviewLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+var unleveledReview = regexp.MustCompile(`^/code-review (https?://\S+)$`)
+
+// UnleveledReview reports whether t is a review card whose agent never started
+// and whose prompt runs /code-review without a level, so starting it should
+// ask for one.
+func UnleveledReview(t *store.Task) bool {
+	return t.PR.IsReview() && t.GroupID == "" && len(t.Sessions) == 0 && unleveledReview.MatchString(t.Prompt)
+}
+
+// SetReviewLevel puts level into the /code-review prompt of an imported
+// review card that hasn't started.
+func (e *Engine) SetReviewLevel(id, level string) error {
+	if !slices.Contains(ReviewLevels, level) {
+		return fmt.Errorf("%q is not a review level", level)
+	}
+	var err error
+	e.with(func() {
+		t := e.find(id)
+		if t == nil || !UnleveledReview(t) {
+			err = errors.New("the review has started already")
+			return
+		}
+		url := unleveledReview.FindStringSubmatch(t.Prompt)[1]
+		t.Prompt = fmt.Sprintf("/code-review %s %s", level, url)
+		t.AddLog(fmt.Sprintf("Review level: %s", level))
+	})
+	return err
 }
 
 // syncIssueStarted moves the task's Linear issue to a started state when an

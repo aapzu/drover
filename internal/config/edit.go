@@ -11,25 +11,38 @@ import (
 	"slices"
 )
 
-// Layer is one of the two files a setting can live in.
+// Layer is one of the two config files a setting can live in.
 type Layer int
 
 const (
-	// Shared is drover.json, which is committed with the repo.
-	Shared Layer = iota
-	// Local is drover.local.json, for personal overrides.
-	Local
+	// Global is the config file for every repo.
+	Global Layer = iota
+	// Project is the config file of one repo; it wins over Global.
+	Project
 )
 
-// ErrNoSharedFile means drover.json has not been written yet, so there is
-// nothing for a Shared edit to change.
-var ErrNoSharedFile = errors.New(FileName + " does not exist yet")
-
-func (l Layer) FileName() string {
-	if l == Local {
-		return LocalFileName
+// Path is the layer's config file for the repo at root.
+func (l Layer) Path(root string) string {
+	if l == Project {
+		return ProjectPath(root)
 	}
-	return FileName
+	return GlobalPath()
+}
+
+func (l Layer) String() string {
+	if l == Project {
+		return "project"
+	}
+	return "global"
+}
+
+// ColumnLayer is the layer that holds the board: the project's when it defines
+// columns, otherwise the global one.
+func ColumnLayer(root string) Layer {
+	if Sets(root, Project, []string{columnsKey}) {
+		return Project
+	}
+	return Global
 }
 
 const columnsKey = "columns"
@@ -41,17 +54,26 @@ func ColumnPath(id string, key ...string) []string {
 }
 
 // Set writes value at path in the layer's file and keeps the other keys in
-// their order; the file is re-indented on write. If the result no longer
-// loads, the file is restored, or removed if it did not exist, and the error
-// is returned.
+// their order; the file is re-indented on write and created if missing. Setting
+// a column or flow key in a layer that defines no columns first copies the
+// default board into it. If the result no longer loads, the file is restored, or
+// removed if it did not exist, and the error is returned.
 func Set(root string, layer Layer, path []string, value any) error {
+	raw, err := encodeValue(value)
+	if err != nil {
+		return err
+	}
+	return edit(root, layer, path, raw)
+}
+
+func encodeValue(value any) (json.RawMessage, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(value); err != nil {
-		return err
+		return nil, err
 	}
-	return edit(root, layer, path, bytes.TrimSpace(buf.Bytes()))
+	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 // Unset removes path from the layer's file, so the value falls back to the
@@ -62,7 +84,7 @@ func Unset(root string, layer Layer, path []string) error {
 
 // Sets reports whether the layer's file sets path itself.
 func Sets(root string, layer Layer, path []string) bool {
-	data, err := os.ReadFile(filepath.Join(root, layer.FileName()))
+	data, err := os.ReadFile(layer.Path(root))
 	if err != nil {
 		return false
 	}
@@ -96,34 +118,90 @@ func setsInColumns(data []byte, path []string) bool {
 }
 
 func edit(root string, layer Layer, path []string, value json.RawMessage) error {
-	if layer != Shared && layer != Local {
+	if layer != Global && layer != Project {
 		return fmt.Errorf("unknown layer %d", layer)
 	}
 	if len(path) == 0 {
 		return errors.New("empty path")
 	}
-	file := filepath.Join(root, layer.FileName())
+	return modify(root, layer, func(members []member) ([]member, error) {
+		if isBoardKey(path[0]) && len(path) > 1 && value != nil && findMember(members, columnsKey) < 0 {
+			var err error
+			if members, err = seedDefaultBoard(root, members); err != nil {
+				return nil, err
+			}
+		}
+		return setMember(members, path, value)
+	})
+}
+
+// isBoardKey is a key of the board definition, which a layer holds whole.
+func isBoardKey(key string) bool {
+	return key == columnsKey || key == "prFlow" || key == "reviewFlow"
+}
+
+// WriteDefaultBoard copies the built-in board into the layer's file, unless it
+// already defines columns.
+func WriteDefaultBoard(root string, layer Layer) error {
+	return modify(root, layer, func(members []member) ([]member, error) {
+		if findMember(members, columnsKey) >= 0 {
+			return members, nil
+		}
+		return seedDefaultBoard(root, members)
+	})
+}
+
+// seedDefaultBoard adds the built-in columns, flows and archive setting the
+// members lack. It refuses when the other layer already defines the columns,
+// since a copy of the default would replace them.
+func seedDefaultBoard(root string, members []member) ([]member, error) {
+	for _, other := range []Layer{Global, Project} {
+		if Sets(root, other, []string{columnsKey}) && findMember(members, columnsKey) < 0 {
+			return nil, fmt.Errorf("the columns are defined in the %s config; edit them there", other)
+		}
+	}
+	def := Default()
+	for _, kv := range []struct {
+		key string
+		val any
+	}{{columnsKey, def.Columns}, {"prFlow", def.PRFlow}, {"reviewFlow", def.ReviewFlow}, {"archiveDoneAfter", def.ArchiveDoneAfter}} {
+		if findMember(members, kv.key) >= 0 {
+			continue
+		}
+		raw, err := encodeValue(kv.val)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, member{kv.key, raw})
+	}
+	return members, nil
+}
+
+// modify rewrites the layer's file with change and restores it if the board no
+// longer loads.
+func modify(root string, layer Layer, change func([]member) ([]member, error)) error {
+	file := layer.Path(root)
 	old, err := os.ReadFile(file)
 	missing := errors.Is(err, os.ErrNotExist)
 	if err != nil && !missing {
 		return err
 	}
-	if missing && layer == Shared {
-		return ErrNoSharedFile
-	}
-	if missing && value == nil {
-		return nil
-	}
 	members, err := parseObject(old)
 	if err != nil {
-		return fmt.Errorf("%s: %w", layer.FileName(), err)
+		return fmt.Errorf("%s: %w", file, err)
 	}
-	members, err = setMember(members, path, value, layer == Local)
+	members, err = change(members)
 	if err != nil {
-		return fmt.Errorf("%s: %w", layer.FileName(), err)
+		return fmt.Errorf("%s: %w", file, err)
+	}
+	if missing && len(members) == 0 {
+		return nil
 	}
 	data, err := formatFile(members)
 	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
 		return err
 	}
 	if err := writeFile(file, data); err != nil {
@@ -137,7 +215,7 @@ func edit(root string, layer Layer, path []string, value json.RawMessage) error 
 			undo = writeFile(file, old)
 		}
 		if undo != nil {
-			return fmt.Errorf("%w (and restoring %s failed: %v)", err, layer.FileName(), undo)
+			return fmt.Errorf("%w (and restoring %s failed: %v)", err, file, undo)
 		}
 		return err
 	}
@@ -234,7 +312,7 @@ func encodeObject(members []member) (json.RawMessage, error) {
 }
 
 // formatFile writes the members with a two-space indent and a trailing
-// newline, like Board.Save.
+// newline.
 func formatFile(members []member) ([]byte, error) {
 	obj, err := encodeObject(members)
 	if err != nil {
@@ -250,7 +328,7 @@ func formatFile(members []member) ([]byte, error) {
 
 // setMember sets the value at path, creating parent objects as needed. A nil
 // value removes the key, and a parent left empty by that goes too.
-func setMember(members []member, path []string, value json.RawMessage, local bool) ([]member, error) {
+func setMember(members []member, path []string, value json.RawMessage) ([]member, error) {
 	i := findMember(members, path[0])
 	if len(path) == 1 {
 		if value == nil {
@@ -263,7 +341,7 @@ func setMember(members []member, path []string, value json.RawMessage, local boo
 		if i >= 0 {
 			raw = members[i].val
 		}
-		elems, err := setColumn(raw, path[1:], value, local)
+		elems, err := setColumn(raw, path[1:], value)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path[0], err)
 		}
@@ -279,7 +357,7 @@ func setMember(members []member, path []string, value json.RawMessage, local boo
 			return nil, fmt.Errorf("%s: %w", path[0], err)
 		}
 	}
-	child, err := setMember(child, path[1:], value, local)
+	child, err := setMember(child, path[1:], value)
 	if err != nil {
 		return nil, err
 	}
@@ -294,10 +372,8 @@ func setMember(members []member, path []string, value json.RawMessage, local boo
 }
 
 // setColumn sets the value at path inside the columns element whose id is
-// path[0]. drover.local.json elements are overrides, so they are added and
-// dropped as keys come and go; a drover.json column must already exist and is
-// never dropped.
-func setColumn(raw json.RawMessage, path []string, value json.RawMessage, local bool) (json.RawMessage, error) {
+// path[0]. The column must already exist and is never dropped.
+func setColumn(raw json.RawMessage, path []string, value json.RawMessage) (json.RawMessage, error) {
 	if len(path) < 2 {
 		return nil, errors.New("address a setting of the column, not the whole column")
 	}
@@ -328,35 +404,18 @@ func setColumn(raw json.RawMessage, path []string, value json.RawMessage, local 
 		}
 	case value == nil:
 		return raw, nil
-	case !local:
-		return nil, fmt.Errorf("no column %q", path[0])
 	default:
-		id, err := json.Marshal(path[0])
-		if err != nil {
-			return nil, err
-		}
-		child = []member{{"id", id}}
+		return nil, fmt.Errorf("no column %q", path[0])
 	}
-	child, err := setMember(child, path[1:], value, local)
+	child, err := setMember(child, path[1:], value)
 	if err != nil {
 		return nil, err
 	}
-	if local && value == nil && len(child) <= 1 {
-		elems = slices.Delete(elems, j, j+1)
-	} else {
-		obj, err := encodeObject(child)
-		if err != nil {
-			return nil, err
-		}
-		if j >= 0 {
-			elems[j] = obj
-		} else {
-			elems = append(elems, obj)
-		}
+	obj, err := encodeObject(child)
+	if err != nil {
+		return nil, err
 	}
-	if len(elems) == 0 {
-		return nil, nil
-	}
+	elems[j] = obj
 	var buf bytes.Buffer
 	buf.WriteByte('[')
 	for i, e := range elems {

@@ -13,7 +13,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/aapzu/drover/internal/assistant"
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gitx"
 	"github.com/aapzu/drover/internal/tmux"
@@ -25,11 +27,13 @@ const usage = `drover: a kanban board for AI coding agents, in your terminal.
 Usage:
   drover [project-dir]          open the board for a git repository (default: .)
   drover version                print the version (also --version, -v)
+  drover update [--check]       install the latest release (--check only looks)
   drover hook <file>            internal: record a Claude Code hook event
   drover hook-gate <file>       internal: hold an approved plan until its worktree is ready
 
-The board is read from drover.json at the repo root. Agents run in tmux and
-keep running after you quit.
+The board and settings are read from $XDG_CONFIG_HOME/drover/config.json
+(default ~/.config/drover/config.json) and the repo's config.json in its state
+directory. Agents run in tmux and keep running after you quit.
 
 ` + cliUsage
 
@@ -47,6 +51,7 @@ func main() {
 		}
 		return
 	}
+	assistant.Docs = helpDocs()
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 		fmt.Print(usage)
 		return
@@ -55,9 +60,19 @@ func main() {
 		fmt.Println("drover", buildVersion())
 		return
 	}
+	if len(args) > 0 && args[0] == "update" {
+		if err := cmdUpdate(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "drover:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(args) > 0 {
 		if cmd, ok := cliCommands[args[0]]; ok {
 			root, err := projectRoot(".")
+			if err == nil {
+				err = migrateConfig(root)
+			}
 			if err == nil {
 				err = cmd(root, args[1:])
 			}
@@ -97,7 +112,8 @@ func run(dir string) error {
 	stopped := make(chan struct{})
 	go func() { eng.Run(ctx); close(stopped) }()
 
-	p := tea.NewProgram(ui.New(eng), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(eng).WithVersion(buildVersion()), tea.WithAltScreen(), tea.WithFilter(ui.FilterKeys))
+	defer fmt.Print(ui.ExtendedKeysOff)
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
@@ -122,6 +138,16 @@ func run(dir string) error {
 			}
 			fmt.Printf("#%d %s\n  cd %s && claude --resume %s\n", h.Number, h.Title, claude.ShellQuote(h.Dir), h.SessionID)
 		}
+	}
+	return err
+}
+
+// migrateConfig imports a repo's old drover.json files before a command reads
+// the board, saying so once.
+func migrateConfig(root string) error {
+	dest, err := config.MigrateRepoFiles(root)
+	if dest != "" {
+		fmt.Fprintf(os.Stderr, "drover: moved the repo's drover.json settings to %s; the repo files are no longer read\n", dest)
 	}
 	return err
 }

@@ -72,6 +72,7 @@ type Task struct {
 	// Archived cards stay in Done but are hidden from the board.
 	Archived bool `json:"archived,omitempty"`
 	Hidden   bool `json:"hidden,omitempty"`
+	Pinned   bool `json:"pinned,omitempty"`
 }
 
 type Session struct {
@@ -96,9 +97,11 @@ type Session struct {
 	Started     bool   `json:"started"`
 	TurnInVisit bool   `json:"turnInVisit"`
 	TurnEndRow  string `json:"turnEndRow,omitempty"`
+	HookStops   int    `json:"hookStops,omitempty"`
 	// RespawnPending switches the agent to its column's settings once the
 	// current turn ends; set when the card moves mid-turn.
 	RespawnPending     bool      `json:"respawnPending,omitempty"`
+	StopPending        bool      `json:"stopPending,omitempty"`
 	Background         []string  `json:"background,omitempty"`
 	BackgroundScanPath string    `json:"backgroundScanPath,omitempty"`
 	BackgroundScan     int64     `json:"backgroundScan,omitempty"`
@@ -120,6 +123,8 @@ type Session struct {
 	UsageScanPath  string       `json:"usageScanPath,omitempty"`
 	UsageScan      int64        `json:"usageScan,omitempty"`
 	UpdatedAt      time.Time    `json:"updatedAt"`
+
+	Schedules []Schedule `json:"schedules,omitempty"`
 }
 
 // HasBackground reports whether the session's background tasks are still running.
@@ -134,7 +139,7 @@ func (s *Session) SetMode(mode string) {
 	s.PermissionMode, s.ModeInherited = mode, mode == ""
 }
 
-// Issue links a task to a tracker issue, currently Linear.
+// Issue links a task to a tracker issue, from Linear or GitHub.
 type Issue struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
@@ -168,7 +173,11 @@ type PR struct {
 	MyReviewAt time.Time `json:"myReviewAt,omitzero"`
 	// ReviewedSHA is the commit your latest review was on.
 	ReviewedSHA string `json:"reviewedSha,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Mergeable is the last MERGEABLE or CONFLICTING gh reported; empty until seen.
+	Mergeable string `json:"mergeable,omitempty"`
+	// ReviewRequested is whether your review was requested at the last check.
+	ReviewRequested bool   `json:"reviewRequested,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // IsReview reports whether p is a PR you review, and is safe on nil.
@@ -216,6 +225,7 @@ func (t *Task) Clone() *Task {
 		sc := *s
 		sc.Pending = append([]Pending(nil), s.Pending...)
 		sc.Background = slices.Clone(s.Background)
+		sc.Schedules = slices.Clone(s.Schedules)
 		c.Sessions[k] = &sc
 	}
 	c.Log = append([]LogEntry(nil), t.Log...)
@@ -282,15 +292,25 @@ func Driver(tasks []*Task, owner *Task) *Task {
 	return owner
 }
 
+// Home is the directory drover keeps its state in, shared by every project.
+func Home() string {
+	return filepath.Join(XDGDir("XDG_STATE_HOME", ".local", "state"), "drover")
+}
+
 // Dir is the project's state directory, keyed by its root path.
 func Dir(root string) string {
-	base := os.Getenv("XDG_STATE_HOME")
-	if !filepath.IsAbs(base) {
-		home, _ := os.UserHomeDir()
-		base = filepath.Join(home, ".local", "state")
-	}
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(base, "drover", filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
+	return filepath.Join(Home(), filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
+}
+
+// XDGDir is the directory named by the environment variable when it is an
+// absolute path, else fallback under the home directory.
+func XDGDir(env string, fallback ...string) string {
+	if base := os.Getenv(env); filepath.IsAbs(base) {
+		return base
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(append([]string{home}, fallback...)...)
 }
 
 func stateFile(dir string) string { return filepath.Join(dir, "state.json") }

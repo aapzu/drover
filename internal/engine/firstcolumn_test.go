@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aapzu/drover/internal/claude"
-	"github.com/aapzu/drover/internal/linear"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
 	"github.com/aapzu/drover/internal/tmux"
 )
@@ -19,7 +19,7 @@ import (
 func TestNewCardsLandInTheFirstColumnWithoutAnAgent(t *testing.T) {
 	e := newEngineWithClaudeDir(t)
 	e.CreateTask("By hand", "")
-	e.ImportIssues([]linear.Issue{{ID: "i1", Identifier: "DX-1", Title: "Speed up CI", URL: "https://linear.app/x/issue/DX-1"}})
+	e.ImportIssues([]Issue{{Provider: "linear", ID: "i1", Key: "DX-1", Title: "Speed up CI", URL: "https://linear.app/x/issue/DX-1"}})
 	e.ImportSessions([]claude.Found{{SessionID: "abcdef12-past", Cwd: e.Root, Title: "Past work", FirstPrompt: "Past work"}})
 
 	snap := e.Snapshot()
@@ -54,7 +54,7 @@ const planningWithoutWorktree = `{"columns":[
 
 func TestNewSessionStartsItsAgentInTheProjectRoot(t *testing.T) {
 	root, log := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestNewSessionStartsItsAgentInTheProjectRoot(t *testing.T) {
 
 func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestLeavingPlanningMovesTheAgentIntoAWorktree(t *testing.T) {
 
 func TestDiscardSilentDropsASessionThatNeverGotAWorktree(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(planningWithoutWorktree), 0o644)
+	writeBoard(root, []byte(planningWithoutWorktree))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -228,10 +228,10 @@ func TestMovingBackToTheFirstColumnKeepsTheWorktreeAndConversation(t *testing.T)
 
 func TestNotStartedCardHoldsNoSlotAndQueuesWhenStarted(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"planning","name":"Planning","autoSpawn":true},
 	  {"id":"exec","name":"Executing","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +271,7 @@ const legacyBoard = `{"columns":[
 func TestLegacyTodoCardsMoveToTheFirstColumn(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(legacyBoard), 0o644)
+	writeBoard(root, []byte(legacyBoard))
 
 	card := func(n int, title, column string, s *store.Session) *store.Task {
 		task := &store.Task{ID: uuid.NewString(), Number: n, Title: title, ColumnID: column, CreatedAt: time.Now(), UpdatedAt: time.Now()}
@@ -330,7 +330,7 @@ func TestLegacyTodoCardsMoveToTheFirstColumn(t *testing.T) {
 
 func TestDefaultBoardWithAnOldTodoCardMovesItToPlanning(t *testing.T) {
 	root, _ := setupProject(t)
-	os.Remove(filepath.Join(root, "drover.json"))
+	os.Remove(config.ProjectPath(root))
 	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: uuid.NewString(), Number: 1, Title: "Old", ColumnID: "todo", CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
 	if err := state.Save(root); err != nil {
 		t.Fatal(err)
@@ -347,10 +347,10 @@ func TestDefaultBoardWithAnOldTodoCardMovesItToPlanning(t *testing.T) {
 func TestStartingANewCardRunsTheFirstColumnsEnterAutomations(t *testing.T) {
 	root, _ := setupProject(t)
 	marker := filepath.Join(t.TempDir(), "entered")
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"planning","name":"Planning","autoSpawn":true,"automations":{"onEnter":[
 	    {"name":"Mark","type":"run_script","script":"echo x >> `+marker+`"}]}},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -397,7 +397,7 @@ func TestFailedNewSessionLeavesNothingBehind(t *testing.T) {
 func TestLegacyTodoMigrationLeavesASharedAgentAlone(t *testing.T) {
 	root, _ := setupProject(t)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(legacyBoard), 0o644)
+	writeBoard(root, []byte(legacyBoard))
 
 	liveName := "repo-1-shared"
 	if err := tmux.NewSession(liveName, root, []string{"sleep", "60"}, nil); err != nil {
@@ -438,9 +438,9 @@ func TestLegacyTodoMigrationLeavesASharedAgentAlone(t *testing.T) {
 
 func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"todo","name":"Backlog"},
-	  {"id":"planning","name":"Planning","autoSpawn":true}]}`), 0o644)
+	  {"id":"planning","name":"Planning","autoSpawn":true}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -450,10 +450,10 @@ func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 		t.Fatalf("the card starts in %q, want the plain first column", task.ColumnID)
 	}
 
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"columns":[
+	writeBoard(root, []byte(`{"columns":[
 	  {"id":"todo","name":"Backlog","role":"todo"},
 	  {"id":"planning","name":"Planning","autoSpawn":true},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e.reloadBoard()
 
 	got := e.Snapshot().Tasks[0]
@@ -468,10 +468,10 @@ func TestBoardReloadMigratesCardsOfAColumnThatLostItsRole(t *testing.T) {
 
 func TestRespawnAtTheLimitKeepsItsOwnSlot(t *testing.T) {
 	root, _ := setupProject(t)
-	os.WriteFile(filepath.Join(root, "drover.json"), []byte(`{"maxConcurrent":1,"columns":[
+	writeBoard(root, []byte(`{"maxConcurrent":1,"columns":[
 	  {"id":"plan","name":"Planning","autoSpawn":true,"permissionMode":"plan"},
 	  {"id":"exec","name":"Executing","autoSpawn":true,"permissionMode":"acceptEdits"},
-	  {"id":"done","name":"Done","role":"done"}]}`), 0o644)
+	  {"id":"done","name":"Done","role":"done"}]}`))
 	e, err := New(root)
 	if err != nil {
 		t.Fatal(err)
@@ -562,5 +562,79 @@ func TestDiscardSilentKeepsASessionYouTouched(t *testing.T) {
 				t.Errorf("the uncommitted file is gone: %v", err)
 			}
 		})
+	}
+}
+
+const reviewLaneBoard = `{"columns":[
+  {"id":"inbox","name":"Inbox"},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"},
+  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}]}`
+
+func TestNewReviewSessionStartsItsAgentInTheReviewLane(t *testing.T) {
+	e := startWithBoard(t, reviewLaneBoard)
+	task, err := e.NewReviewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the review agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if got.ID != task.ID || got.ColumnID != "triage" {
+		t.Errorf("new review: card %s in %q, want %s in Triage", got.ID, got.ColumnID, task.ID)
+	}
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.Snapshot().Tasks); n != 0 {
+		t.Errorf("the untouched review left %d cards", n)
+	}
+}
+
+func TestNewReviewSessionSkipsPlainColumnsAheadOfItsAgentColumn(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"inbox","name":"Inbox"},
+	  {"id":"requested","name":"Requested","lane":"review"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}],
+	  "reviewFlow":{"started":"triage"}}`)
+	task, err := e.NewReviewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the review agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if got.ID != task.ID || got.ColumnID != "reviewing" {
+		t.Errorf("new review: card %s in %q, want %s in Reviewing", got.ID, got.ColumnID, task.ID)
+	}
+}
+
+func TestNewReviewSessionNeedsAnAgentInTheReviewLane(t *testing.T) {
+	for name, tc := range map[string]struct{ board, want string }{
+		"no lane":  {`{"columns":[{"id":"inbox","name":"Inbox","autoSpawn":true},{"id":"done","name":"Done","role":"done"}]}`, "no review lane"},
+		"no agent": {`{"columns":[{"id":"inbox","name":"Inbox"},{"id":"triage","name":"Triage","lane":"review"}]}`, "Triage"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := startWithBoard(t, tc.board)
+			if _, err := e.NewReviewSession(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("NewReviewSession = %v, want an error mentioning %q", err, tc.want)
+			}
+			if n := len(e.Snapshot().Tasks); n != 0 {
+				t.Errorf("a refused review left %d cards", n)
+			}
+		})
+	}
+}
+
+func TestAReviewedPRStaysOnTheCardStartedInTheReviewLane(t *testing.T) {
+	e := startWithBoard(t, reviewLaneBoard)
+	card := e.createTask("", "", "triage")
+	e.with(func() { e.addPRs(card, []string{"https://github.com/o/r/pull/7"}, true) })
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR == nil || !tasks[0].PR.Review || tasks[0].PR.Number != 7 {
+		t.Errorf("the reviewed PR should sit on the card that reviews it: %+v", tasks)
 	}
 }

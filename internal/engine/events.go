@@ -17,6 +17,8 @@ import (
 	"github.com/aapzu/drover/internal/tmux"
 )
 
+const hookLoopStops = 3
+
 // Run polls hook events and tmux, and applies the CLI's requests, until ctx is
 // done, then waits for the work it started. Automations only run while the
 // TUI is open; agents keep working in tmux when it is closed.
@@ -68,6 +70,7 @@ func (e *Engine) Tick() {
 				}
 			}
 		}
+		e.expireSchedules(time.Now())
 		followUps = append(followUps, e.idleTimeouts()...)
 		followUps = append(followUps, e.checkInterrupted()...)
 		followUps = append(followUps, e.backgroundScans()...)
@@ -129,6 +132,8 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.flushPending(e.taskByID(taskID), key) })
 			}
 		case "UserPromptSubmit":
+			s.HookStops = 0
+			s.RunSchedules(ev.Prompt, time.Now())
 			s.Forked = false
 			s.Activity = store.ActivityThinking
 			firstTurn := !s.Started
@@ -152,9 +157,13 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				out = append(out, func() { e.reviewRequested(taskID, visit) })
 			}
 		case "PreToolUse":
+			s.HookStops = 0
 			s.Activity = store.ActivityThinking
 		case "PostToolUse":
 			s.Activity = store.ActivityThinking
+			if c, ok := ev.ScheduleCall(time.Now()); ok {
+				s.ApplySchedule(c)
+			}
 			if id, ok := ev.BackgroundAgent(); ok {
 				s.Background = append(s.Background, id)
 			}
@@ -180,6 +189,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.Activity = store.ActivityPermission
 			}
 		case "StopFailure":
+			s.HookStops = 0
 			s.Activity = store.ActivityIdle
 			s.Started = true
 			s.TurnInVisit = false
@@ -191,8 +201,8 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			}
 			t.AddLog(msg)
 			e.alert(t, alertNeedsYou, "turn failed: "+reason)
-			if s.RespawnPending {
-				out = append(out, func() { e.respawnPending(taskID, key) })
+			if s.RespawnPending || s.StopPending {
+				out = append(out, func() { e.turnEnded(taskID, key) })
 			}
 		case "Stop":
 			s.Activity = store.ActivityIdle
@@ -203,6 +213,20 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			reply := ev.Reply()
 			s.LastReply = reply
 			s.Summary = ""
+			if ev.StopHookActive {
+				s.HookStops++
+			} else {
+				s.HookStops = 0
+			}
+			looping := s.HookStops == hookLoopStops
+			if s.HookStops > 1 && !looping {
+				break
+			}
+			if looping {
+				t.AddLog("Agent can't stop: a Stop hook (e.g. /goal) keeps sending it back; /goal clear releases it")
+				e.alert(t, alertNeedsYou, "can't stop: a Stop hook keeps sending it back")
+				s.TurnInVisit = true
+			}
 			out = append(out, func() { e.scanUsage(taskID, key) })
 			out = append(out, func() { e.summarize(taskID, key, reply) })
 			next := func() {
@@ -214,9 +238,9 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 				s.TurnInVisit = false
 				next = func() { e.runTurnEnd(taskID, key, visit, reply) }
 			}
-			if s.RespawnPending {
+			if s.RespawnPending || s.StopPending {
 				then := next
-				next = func() { e.respawnPending(taskID, key); then() }
+				next = func() { e.turnEnded(taskID, key); then() }
 			}
 			out = append(out, func() { next(); e.alertTurnDone(taskID, key, reply) })
 		}
@@ -227,6 +251,20 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 		}
 	}
 	return out
+}
+
+// expireSchedules drops the schedules of agents that stopped running, which
+// lose them, and ends those that missed their run. Called with mu held.
+func (e *Engine) expireSchedules(now time.Time) {
+	for _, t := range e.state.Tasks {
+		for _, s := range t.Sessions {
+			if s.Status == store.StatusRunning {
+				s.ExpireSchedules(now)
+			} else {
+				s.ClearSchedules()
+			}
+		}
+	}
 }
 
 // backgroundScans returns follow-ups that read the transcripts of sessions with
@@ -307,7 +345,7 @@ func (e *Engine) checkInterrupted() []func() {
 					task.AddLog("Turn interrupted")
 				})
 				if task != nil {
-					e.respawnPending(taskID, key)
+					e.turnEnded(taskID, key)
 					e.flushPending(task, key)
 				}
 			})
@@ -512,7 +550,8 @@ func (e *Engine) shipTask(t *store.Task) bool {
 // shipOpenedPR moves the card that took its session's first PR to the
 // prFlow's opened column once the agent is idle, unless you moved it first.
 // A PR you review goes to the reviewFlow's started column instead, once gh has
-// confirmed it isn't yours. A card whose agent runs outside drover never moves.
+// confirmed it isn't yours, also from the column imported reviews land in. A
+// card whose agent runs outside drover never moves.
 // It reports whether it moved the card. The caller holds the task lock.
 func (e *Engine) shipOpenedPR(t *store.Task) bool {
 	e.mu.Lock()
@@ -545,7 +584,7 @@ func (e *Engine) shipOpenedPR(t *store.Task) bool {
 		switch {
 		case target.ID == "" || target.ID == col.ID:
 			target = config.Column{}
-		case !isAgentColumn(col):
+		case !isAgentColumn(col) && !(review && col.ID == e.board.ReviewImport(false).ID):
 			t.AddLog(fmt.Sprintf("%s, not moving to %s: the card is in %s", reason, target.Name, col.Name))
 			target = config.Column{}
 		}
@@ -648,13 +687,52 @@ func (e *Engine) claimTurn(t *store.Task, taskID string) {
 	})
 }
 
+// turnEnded applies a deferred stop, or failing that a deferred settings
+// switch, once the agent's turn ends.
+func (e *Engine) turnEnded(taskID, key string) {
+	if !e.stopPending(taskID, key) {
+		e.respawnPending(taskID, key)
+	}
+}
+
+// stopPending stops an agent whose card moved mid-turn into a column that runs
+// no agent. It reports whether the agent was stopped.
+func (e *Engine) stopPending(taskID, key string) bool {
+	unlock := e.lockTask(taskID)
+	defer unlock()
+	e.mu.Lock()
+	t := e.find(taskID)
+	var s *store.Session
+	due := false
+	if t != nil {
+		s = t.Sessions[key]
+		col := e.sessionColumn(t)
+		due = s != nil && s.StopPending && s.Status == store.StatusRunning &&
+			key == store.MainSession && !isAgentColumn(col) && !col.KeepAgent
+	}
+	if s != nil {
+		s.StopPending = false
+	}
+	e.mu.Unlock()
+	if !due {
+		return false
+	}
+	e.stopSessions(t, "", store.StatusSuspended)
+	return true
+}
+
 // respawnPending switches an agent whose card moved mid-turn into a column
 // with other settings or another directory, in place or by resuming its
-// conversation. A keepAgent
-// column drops a pending settings switch and keeps the agent's settings.
+// conversation. A keepAgent column drops a pending settings switch and keeps
+// the agent's settings.
 func (e *Engine) respawnPending(taskID, key string) {
 	unlock := e.lockTask(taskID)
 	defer unlock()
+	e.respawnLocked(taskID, key)
+}
+
+// respawnLocked is respawnPending for a caller that holds lockTask(taskID).
+func (e *Engine) respawnLocked(taskID, key string) {
 	e.mu.Lock()
 	t := e.find(taskID)
 	var s *store.Session
@@ -683,6 +761,7 @@ func (e *Engine) respawnPending(taskID, key string) {
 	}
 	if err := e.switchSettings(t, key, col, worktree); err != nil {
 		e.logf(t, "Respawn failed: %v", err)
+		e.notify("#%d: respawning the agent failed: %v", t.Number, err)
 	}
 }
 
