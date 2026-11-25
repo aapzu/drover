@@ -814,5 +814,6 @@ each PR with exactly one of `patch`, `minor`, `major` or `no-release` (a CI
 check requires it); `no-release` skips the release.
 
 Add a bullet under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md) in each PR
-that isn't labelled `no-release`. The release moves it under the new version; if Unreleased is empty it lists the
-merged pull request titles instead, so write PR titles for readers.
+that isn't labelled `no-release`. The release moves it under the new version;
+if Unreleased is empty it lists the merged pull request titles instead, so
+write PR titles for readers.
