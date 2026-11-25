@@ -1,6 +1,64 @@
 # Changelog
 
-Added on each release from the titles of the merged pull requests.
+Add a bullet under Unreleased in every pull request that isn't labelled no-release. The release moves it under the new version, or lists the merged pull request titles if Unreleased is empty.
+
+## Unreleased
+
+## [0.15.3](https://github.com/aapzu/drover/compare/v0.15.2...v0.15.3) - 2026-11-24
+
+- Search more card fields in the board filter ([#175](https://github.com/aapzu/drover/pull/175))
+
+## [0.15.2](https://github.com/aapzu/drover/compare/v0.15.1...v0.15.2) - 2026-11-24
+
+- Send esc and ctrl+k to the board from live mode ([#176](https://github.com/aapzu/drover/pull/176))
+
+## [0.15.1](https://github.com/aapzu/drover/compare/v0.15.0...v0.15.1) - 2026-11-24
+
+- Audit tests: drop restating and duplicate tests, cover untested behaviour ([#174](https://github.com/aapzu/drover/pull/174))
+
+## [0.15.0](https://github.com/aapzu/drover/compare/v0.14.2...v0.15.0) - 2026-11-24
+
+- Search cards from the ctrl+k palette ([#173](https://github.com/aapzu/drover/pull/173))
+
+## [0.14.2](https://github.com/aapzu/drover/compare/v0.14.1...v0.14.2) - 2026-11-24
+
+- Show the hidden review lane while a filter only matches there ([#172](https://github.com/aapzu/drover/pull/172))
+
+## [0.14.1](https://github.com/aapzu/drover/compare/v0.14.0...v0.14.1) - 2026-11-23
+
+- Treat a Stop-hook loop as the agent waiting for you ([#171](https://github.com/aapzu/drover/pull/171))
+
+## [0.14.0](https://github.com/aapzu/drover/compare/v0.13.1...v0.14.0) - 2026-11-23
+
+- Pin cards to the top of a column, list newest first ([#170](https://github.com/aapzu/drover/pull/170))
+
+## [0.13.1](https://github.com/aapzu/drover/compare/v0.13.0...v0.13.1) - 2026-11-23
+
+- Stop the agent when its turn ends if its card is moved mid-turn ([#169](https://github.com/aapzu/drover/pull/169))
+
+## [0.13.0](https://github.com/aapzu/drover/compare/v0.12.6...v0.13.0) - 2026-11-19
+
+- Send approved review cards back to Reviewing on dismissal or conflicts ([#168](https://github.com/aapzu/drover/pull/168))
+
+## [0.12.6](https://github.com/aapzu/drover/compare/v0.12.5...v0.12.6) - 2026-11-19
+
+- Build the worktree in the background when a running agent enters the review lane ([#165](https://github.com/aapzu/drover/pull/165))
+
+## [0.12.5](https://github.com/aapzu/drover/compare/v0.12.4...v0.12.5) - 2026-11-19
+
+- Remove the doubled caret in the filter and send bars ([#167](https://github.com/aapzu/drover/pull/167))
+
+## [0.12.4](https://github.com/aapzu/drover/compare/v0.12.3...v0.12.4) - 2026-11-19
+
+- Wait for the agent's screen to settle before sending a message ([#166](https://github.com/aapzu/drover/pull/166))
+
+## [0.12.3](https://github.com/aapzu/drover/compare/v0.12.2...v0.12.3) - 2026-11-19
+
+- Make shift+enter insert a newline in the live view ([#164](https://github.com/aapzu/drover/pull/164))
+
+## [0.12.2](https://github.com/aapzu/drover/compare/v0.12.1...v0.12.2) - 2026-11-17
+
+- Add a changelog that the release workflow keeps up to date ([#163](https://github.com/aapzu/drover/pull/163))
 
 ## [0.12.1](https://github.com/aapzu/drover/compare/v0.12.0...v0.12.1) - 2026-11-17
 
