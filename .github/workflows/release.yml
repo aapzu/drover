@@ -91,7 +91,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for attempt in 1 2 3; do
-            git fetch origin main
+            git fetch origin main "refs/tags/$TAG:refs/tags/$TAG"
             git checkout -B main origin/main
             scripts/changelog.sh "$TAG"
             if [ -z "$(git status --porcelain CHANGELOG.md)" ]; then

@@ -18,7 +18,7 @@ compare=$(sed -n 's/^\*\*Full Changelog\*\*: //p' <<<"$body")
 
 : "${compare:?no Full Changelog line in the release notes of $tag}"
 
-entries=$(awk '/^## Unreleased$/ { in_section = 1; next } /^## / { in_section = 0 } in_section && NF' CHANGELOG.md)
+entries=$(git show "$tag:CHANGELOG.md" 2>/dev/null | awk '/^## Unreleased$/ { in_section = 1; next } /^## / { in_section = 0 } in_section && NF' || true)
 if [ -z "$entries" ]; then
   entries=$(sed -nE 's|^\* (.+) by @[^ ]+ in (https://[^ ]+/pull/([0-9]+))$|- \1 ([#\3](\2))|p' <<<"$body")
 fi
@@ -29,9 +29,17 @@ section="## [$version]($compare) - $published
 $entries
 "
 
-updated=$(SECTION=$section awk '
-  /^## Unreleased$/ { print; print ""; print ENVIRON["SECTION"]; skipping = 1; next }
-  /^## / { skipping = 0 }
-  !skipping { print }
+updated=$(SECTION=$section ENTRIES=$entries awk '
+  BEGIN { n = split(ENVIRON["ENTRIES"], released, "\n"); for (i = 1; i <= n; i++) drop[released[i]] = 1 }
+  function flush(    i) {
+    print "## Unreleased"; print ""
+    for (i = 1; i <= kept; i++) print rest[i]
+    if (kept) print ""
+    print ENVIRON["SECTION"]
+  }
+  /^## Unreleased$/ { in_unreleased = 1; next }
+  in_unreleased && /^## / { flush(); in_unreleased = 0 }
+  in_unreleased { if (NF && !($0 in drop)) rest[++kept] = $0; next }
+  { print }
 ' CHANGELOG.md)
 printf '%s\n' "$updated" >CHANGELOG.md

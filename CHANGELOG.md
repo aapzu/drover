@@ -1,6 +1,6 @@
 # Changelog
 
-Add a bullet under Unreleased in every pull request. The release moves it under the new version, or lists the merged pull request titles if Unreleased is empty.
+Add a bullet under Unreleased in every pull request that isn't labelled no-release. The release moves it under the new version, or lists the merged pull request titles if Unreleased is empty.
 
 ## Unreleased
 
