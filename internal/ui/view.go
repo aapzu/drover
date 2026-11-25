@@ -195,6 +195,11 @@ func (m Model) renderFooter() string {
 // two keys that lead to every other command.
 func (m Model) boardFooter() string {
 	right := dim.Render("ctrl+k search · ? help") + " "
+	if m.updating {
+		right = bold.Render("updating drover…") + dim.Render(" · ") + right
+	} else if m.updateTag != "" {
+		right = bold.Render(m.updateTag+" available: U") + dim.Render(" · ") + right
+	}
 	var parts []string
 	if t := m.current(); t != nil {
 		parts = append(parts, bold.Render(fmt.Sprintf("#%d", t.Number)))
@@ -823,6 +828,7 @@ var helpKeys = [][2]string{
 	{"t", "show or hide column settings under column names"},
 	{"o", "change settings in the global and project config (press / there to search)"},
 	{"O", "change column settings in the config that holds the columns"},
+	{"U", "update drover when the footer says a newer release is out"},
 	{"W", "write the default board to the project config"},
 	{"q", "quit (agents keep running in tmux)"},
 	{"Q", "suspend every agent and quit, printing claude --resume commands"},

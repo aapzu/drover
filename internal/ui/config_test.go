@@ -76,6 +76,7 @@ func TestConfigToggleSavesToTheGlobalConfig(t *testing.T) {
 		{"Auto-name cards", "autoName", func(b *config.Board) bool { return b.AutoName }, true},
 		{"Split PRs into cards", "splitByPR", func(b *config.Board) bool { return b.SplitByPR }, true},
 		{"Disable mouse in agents", "disableMouse", func(b *config.Board) bool { return b.DisableMouse }, false},
+		{"Disable update check", "disableUpdateCheck", func(b *config.Board) bool { return b.DisableUpdateCheck }, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.key, func(t *testing.T) {
@@ -251,6 +252,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 	board.DefaultBaseBranch, board.DefaultPermissionMode, board.DefaultModel = "main", "auto", "opus"
 	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
 	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked, board.DisableMouse = 4, 5, true, true
+	board.DisableUpdateCheck = true
 	board.TeamReviewRequests = true
 	data, err := json.Marshal(board)
 	if err != nil {

@@ -35,6 +35,16 @@ prints the version.
 Install the binary somewhere permanent. Claude's hooks call it to report
 activity, so don't run it with `go run`.
 
+### Updating
+
+When the board opens it checks GitHub for a newer release, at most once a day,
+and says so in the footer. Press `U` to download it, verify its checksum and
+replace the binary, then restart the board to use it. `drover update` does the
+same from the shell, and `drover update --check` only reports.
+
+Local builds and `go install` of a commit never check; `go install ...@latest` does, and `U` replaces that binary too. Turn the check off with
+`disableUpdateCheck` or `DROVER_NO_UPDATE_CHECK=1`.
+
 ## Use
 
 ```sh
@@ -281,7 +291,8 @@ reloaded while the board runs.
   "idleTimeoutMinutes": 0,
   "notifications": { "turnDone": true, "needsYou": true, "planReady": true, "exited": true, "cooldownSeconds": 10 },
   "autoName": true,
-  "disableMouse": false
+  "disableMouse": false,
+  "disableUpdateCheck": false
 }
 ```
 
@@ -307,6 +318,8 @@ reloaded while the board runs.
   `CLAUDE_CODE_DISABLE_MOUSE=1` and turns tmux's mouse mode off in their
   sessions, so your terminal handles selection and scrolling when you attach.
   It applies to sessions started or resumed after you change it.
+- **`disableUpdateCheck`** (default `false`) stops the board from checking
+  GitHub for a newer release when it opens. See [Updating](#updating).
 - **`assistantPlugins`** and **`assistantTools`** (both empty by default) give
   the assistant MCP tools, such as Slack's, so you can ask it to read a source and
   turn what it finds into cards. `assistantPlugins` lists Claude Code plugin ids

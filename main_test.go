@@ -116,6 +116,7 @@ func TestMainDispatch(t *testing.T) {
 		"short help":                  {"-h", 0, "drover ask", ""},
 		"long help":                   {"--help", 0, "Change the board from outside it", ""},
 		"hook without a file":         {"hook", 0, "", ""},
+		"update on a dev build":       {"update", 1, "", "development build"},
 		"cli command error":           {"move 1 nowhere", 1, "", `drover: unknown column "nowhere"`},
 		"a directory opens the board": {"some-dir", 1, "", "drover: tmux is required"},
 		"no arguments open the board": {"", 1, "", "drover: tmux is required"},

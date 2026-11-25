@@ -4,6 +4,7 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- The board checks for a newer release when it opens and offers to install it with `U`; `drover update` does the same from the shell
 - Settings now live in `~/.config/drover/config.json` and a per-repo config in the state directory instead of `drover.json` and `drover.local.json`; old repo files are imported once
 
 ## [0.15.3](https://github.com/aapzu/drover/compare/v0.15.2...v0.15.3) - 2026-11-24

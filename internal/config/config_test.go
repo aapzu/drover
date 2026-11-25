@@ -521,6 +521,12 @@ func TestLayers(t *testing.T) {
 					t.Error("default board disables the mouse")
 				}
 			}},
+		{"project disableUpdateCheck true overrides the global file", `{"disableUpdateCheck":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableUpdateCheck":true}`,
+			func(t *testing.T, b *Board) {
+				if !b.DisableUpdateCheck {
+					t.Error("project disableUpdateCheck:true does not override the global file")
+				}
+			}},
 		{"project disableMouse true overrides the global file", `{"disableMouse":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableMouse":true}`,
 			func(t *testing.T, b *Board) {
 				if !b.DisableMouse {

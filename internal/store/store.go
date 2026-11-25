@@ -292,10 +292,15 @@ func Driver(tasks []*Task, owner *Task) *Task {
 	return owner
 }
 
+// Home is the directory drover keeps its state in, shared by every project.
+func Home() string {
+	return filepath.Join(XDGDir("XDG_STATE_HOME", ".local", "state"), "drover")
+}
+
 // Dir is the project's state directory, keyed by its root path.
 func Dir(root string) string {
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(XDGDir("XDG_STATE_HOME", ".local", "state"), "drover", filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
+	return filepath.Join(Home(), filepath.Base(root)+"-"+hex.EncodeToString(sum[:4]))
 }
 
 // XDGDir is the directory named by the environment variable when it is an

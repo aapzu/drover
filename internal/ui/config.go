@@ -46,6 +46,8 @@ var configOptions = []configOption{
 		get: func(b *config.Board) any { return b.DisableMouse }},
 	{name: "Include team review requests", path: []string{"teamReviewRequests"}, kind: optToggle,
 		get: func(b *config.Board) any { return b.TeamReviewRequests }},
+	{name: "Disable update check", path: []string{"disableUpdateCheck"}, kind: optToggle,
+		get: func(b *config.Board) any { return b.DisableUpdateCheck }},
 	{name: "Max concurrent agents", path: []string{"maxConcurrent"}, kind: optNumber, min: 1,
 		get: func(b *config.Board) any { return b.Limit() }},
 	{name: "Idle timeout (minutes)", path: []string{"idleTimeoutMinutes"}, kind: optNumber,

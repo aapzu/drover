@@ -54,6 +54,7 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	DisableUpdateCheck    bool          `json:"disableUpdateCheck,omitempty"`
 	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
 	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
 	AssistantPlugins      []string      `json:"assistantPlugins,omitempty"`
