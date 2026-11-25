@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- Fix the import view overflowing the screen when there are many sessions, issues or PRs; it now scrolls with the cursor
+
 ## [0.19.1](https://github.com/aapzu/drover/compare/v0.19.0...v0.19.1) - 2026-11-25
 
 - ctrl+k card search also finds cards in a lane the board is not showing, and opens that lane when you pick one
