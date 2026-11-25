@@ -381,6 +381,23 @@ func TestAsksForPR(t *testing.T) {
 	}
 }
 
+func TestIsReviewCommand(t *testing.T) {
+	for prompt, want := range map[string]bool{
+		"/code-review":                 true,
+		"/pr-review-toolkit:review-pr": true,
+		"/security-review high":        true,
+		"  /Review https://x":          true,
+		"/simplify":                    false,
+		"review the PR comments":       false,
+		"open a PR":                    false,
+		"":                             false,
+	} {
+		if got := IsReviewCommand(prompt); got != want {
+			t.Errorf("IsReviewCommand(%q) = %v, want %v", prompt, got, want)
+		}
+	}
+}
+
 func TestReviewedPRs(t *testing.T) {
 	const a, b = "https://github.com/o/r/pull/12", "https://github.com/o/r/pull/13"
 	for prompt, want := range map[string][]string{

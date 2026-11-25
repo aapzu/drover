@@ -142,13 +142,17 @@ func TestConsumeEventsTracksTheAgentsActivity(t *testing.T) {
 			},
 		},
 		"a slash command does not name the card": {
-			session: &store.Session{Activity: store.ActivityIdle}, line: `{"hook_event_name":"UserPromptSubmit","prompt":"/review"}`,
+			session: &store.Session{Activity: store.ActivityIdle}, line: `{"hook_event_name":"UserPromptSubmit","prompt":"/simplify"}`,
 			activity: store.ActivityThinking,
 			check: func(t *testing.T, task *store.Task, _ *store.Session) {
 				if task.Title != "" {
 					t.Errorf("title = %q", task.Title)
 				}
 			},
+		},
+		"a review command with no PR": {
+			session: &store.Session{Activity: store.ActivityIdle}, line: `{"hook_event_name":"UserPromptSubmit","prompt":"/review"}`,
+			activity: store.ActivityThinking, followUps: 1,
 		},
 		"a titled card keeps its title": {
 			session: &store.Session{Activity: store.ActivityIdle}, title: "Mine", line: `{"hook_event_name":"UserPromptSubmit","prompt":"something else"}`,

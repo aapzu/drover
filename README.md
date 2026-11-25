@@ -439,6 +439,11 @@ same sentence, unless it is negated ("don't review") or reads "review
 comments". `gh` then confirms the PR isn't yours. If it is, drover forgets it
 again.
 
+A card still in the first column whose agent is told to review with a slash
+command that names no PR, like `/code-review`, moves to `reviewFlow`'s
+`started` column, else the review lane's first column, as soon as the prompt is
+sent.
+
 A session that is still in the first column takes the PR on its own card. One
 already working on something gets a separate card for it.
 

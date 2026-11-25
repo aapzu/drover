@@ -44,6 +44,7 @@ turn() {
     *"open a PR"*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"open a PR"}';;
     *TWEAK*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"TWEAK the footer"}';;
     *REVIEWME*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/code-review https://github.com/o/r/pull/7"}';;
+    *REVIEWCMD*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"/pr-review-toolkit:review-pr"}';;
     *AUTOMATION*) emit '{"hook_event_name":"UserPromptSubmit","prompt":"AUTOMATION review"}';;
     *) emit '{"hook_event_name":"UserPromptSubmit"}';;
   esac
@@ -2393,6 +2394,113 @@ const reviewBoard = `{
   "prFlow": {"opened": "waiting", "changesRequested": "exec", "changesRequestedMessage": "FIX {{prNumber}}"},
   "reviewFlow": {"started": "reviewing", "reviewed": "waiting", "updated": "reviewing", "done": "done"}
 }`
+
+const laneBoard = `{
+  "columns": [
+    {"id":"planning","name":"Planning","autoSpawn":true},
+    {"id": "exec", "name": "Executing", "autoSpawn": true},
+    {"id": "done", "name": "Done", "role": "done"},
+    {"id": "reviewing", "name": "Reviewing", "lane": "review", "autoSpawn": true},
+    {"id": "triage", "name": "Triage", "lane": "review", "autoSpawn": true}
+  ]%s
+}`
+
+func TestBareReviewCommandMovesANewCardToTheReviewLane(t *testing.T) {
+	for name, tc := range map[string]struct{ flow, want string }{
+		"started column":    {`, "reviewFlow": {"started": "triage"}`, "triage"},
+		"first lane column": {``, "reviewing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root, _ := setupProject(t)
+			os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(laneBoard, tc.flow)), 0o644)
+			e, err := New(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runEngine(t, e)
+			task, err := e.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := e.Send(task.ID, "REVIEWCMD"); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, e, "the card to move to "+tc.want, func(c *store.Task) bool { return c.ColumnID == tc.want })
+		})
+	}
+}
+
+func TestBareReviewCommandLeavesAWorkingCardAlone(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(laneBoard, "")), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+	task := e.CreateTask("Auth", "REVIEWCMD")
+	if err := e.Move(task.ID, "exec", MoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the agent to finish", func(c *store.Task) bool {
+		s := c.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := e.Snapshot().Tasks[0]; c.ColumnID != "exec" {
+		t.Fatalf("a card already working moved to %s", c.ColumnID)
+	}
+}
+
+func TestBareReviewCommandAfterTheFirstTurnLeavesTheCardAlone(t *testing.T) {
+	root, _ := setupProject(t)
+	os.WriteFile(filepath.Join(root, "drover.json"), []byte(fmt.Sprintf(laneBoard, "")), 0o644)
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+	task, err := e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Send(task.ID, "TWEAK"); err != nil {
+		t.Fatal(err)
+	}
+	idle := func(c *store.Task) bool {
+		s := c.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	}
+	waitFor(t, e, "the first turn to finish", idle)
+	if err := e.Send(task.ID, "REVIEWCMD"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	waitFor(t, e, "the second turn to finish", idle)
+	if c := e.Snapshot().Tasks[0]; c.ColumnID != "planning" {
+		t.Fatalf("a review command after the first turn moved the card to %s", c.ColumnID)
+	}
+}
+
+func TestBareReviewCommandWithoutALaneLeavesTheCardAlone(t *testing.T) {
+	r := newReviewRig(t, "them", strings.Replace(reviewBoard, `,
+  "reviewFlow": {"started": "reviewing", "reviewed": "waiting", "updated": "reviewing", "done": "done"}`, "", 1))
+	task, err := r.e.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.e.Send(task.ID, "REVIEWCMD"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, r.e, "the agent to finish", func(c *store.Task) bool {
+		s := c.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	time.Sleep(600 * time.Millisecond)
+	if c := r.e.Snapshot().Tasks[0]; c.ColumnID == "reviewing" {
+		t.Fatalf("a bare review command moved the card to %s", c.ColumnID)
+	}
+}
 
 // reviewRig runs an engine against a fake gh that reports one PR, number 7,
 // written by author. Its state and the failures of `gh pr view` and
