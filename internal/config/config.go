@@ -54,6 +54,10 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
+	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
+	AssistantPlugins      []string      `json:"assistantPlugins,omitempty"`
+	AssistantTools        []string      `json:"assistantTools,omitempty"`
 	Columns               []Column      `json:"columns"`
 	PRFlow                *PRFlow       `json:"prFlow,omitempty"`
 	ReviewFlow            *ReviewFlow   `json:"reviewFlow,omitempty"`
@@ -74,16 +78,19 @@ func DefaultNotifications() Notifications {
 	return Notifications{TurnDone: true, NeedsYou: true, PlanReady: true, Exited: true, CooldownSeconds: 10}
 }
 
-// ReviewFlow moves the cards of pull requests you review. Started is where a
-// card goes once the agent's first review turn ends, Reviewed once you have
-// submitted a review, Updated when the author pushes after it, and Done when
-// the PR merges or closes. Targets are column ids or names; an empty one
-// leaves cards where they are.
+// ReviewFlow moves the cards of pull requests you review. Requested is where
+// an imported PR awaiting your review lands, Started is where a card goes once
+// the agent's first review turn ends, Reviewed once you have submitted a
+// review (Approved instead when it approves the PR), Updated when the author
+// pushes after it, and Done when the PR merges or closes. Targets are column
+// ids or names; an empty one leaves cards where they are.
 type ReviewFlow struct {
-	Started  string `json:"started,omitempty"`
-	Reviewed string `json:"reviewed,omitempty"`
-	Updated  string `json:"updated,omitempty"`
-	Done     string `json:"done,omitempty"`
+	Requested string `json:"requested,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Reviewed  string `json:"reviewed,omitempty"`
+	Approved  string `json:"approved,omitempty"`
+	Updated   string `json:"updated,omitempty"`
+	Done      string `json:"done,omitempty"`
 }
 
 // PRFlow moves the cards of pull requests as they progress on GitHub. Each
@@ -112,6 +119,8 @@ const (
 		"list each issue with the fix you would make, and ask me which to apply."
 	fixChangesMessage = readReviewComments + ", address them, push, and reply to each."
 )
+
+const afterReview = `test -n "$DROVER_PRREVIEWEDSHA"`
 
 const reReviewMessage = "Review PR #{{prNumber}} ({{prUrl}}) again. " +
 	"Look only at what changed since your last review, and list what is still open."
@@ -182,6 +191,9 @@ type Automation struct {
 
 // Conditional reports whether the row is gated.
 func (a Automation) Conditional() bool { return a.Condition != "" || a.ConditionScript != "" }
+
+// OpensAgent reports whether the row can be the first prompt of a new agent.
+func (a Automation) OpensAgent() bool { return a.Type == "send_message" && !a.Conditional() }
 
 func (c Column) IsDone() bool { return c.Role == "done" }
 
@@ -379,6 +391,21 @@ func (b *Board) validate() error {
 			return fmt.Errorf("config: archiveDoneAfter %w", err)
 		}
 	}
+	for _, id := range b.AssistantPlugins {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("config: assistantPlugins must not hold an empty id")
+		}
+	}
+	for _, r := range b.ReviewRepos {
+		if owner, name, ok := strings.Cut(r, "/"); !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			return fmt.Errorf("config: reviewRepos entry %q must be owner/name", r)
+		}
+	}
+	for _, t := range b.AssistantTools {
+		if !strings.HasPrefix(t, "mcp__") || len(t) == len("mcp__") {
+			return fmt.Errorf("config: assistantTools entry %q must be an MCP tool pattern starting with mcp__", t)
+		}
+	}
 	if b.Columns[0].InReviewLane() {
 		return fmt.Errorf("config: the first column must not be in the %s lane, since new cards land there", LaneReview)
 	}
@@ -410,7 +437,7 @@ func (b *Board) validate() error {
 		}
 	}
 	if f := b.ReviewFlow; f != nil {
-		return b.checkColumns("reviewFlow", f.Started, f.Reviewed, f.Updated, f.Done)
+		return b.checkColumns("reviewFlow", f.Requested, f.Started, f.Reviewed, f.Approved, f.Updated, f.Done)
 	}
 	return nil
 }
@@ -477,6 +504,52 @@ func (b *Board) PermissionMode(c Column) string {
 // FirstColumn is where new and imported cards land.
 func (b *Board) FirstColumn() Column { return b.Columns[0] }
 
+// ErrNoReviewLane is what starting a review on a board without a review lane
+// reports.
+var ErrNoReviewLane = errors.New(`no review lane: give columns "lane": "review" in your config`)
+
+// ReviewEntry is where a card you review starts: the review lane's first agent
+// column, else its first column. It reports false when the board has no review
+// lane.
+func (b *Board) ReviewEntry() (Column, bool) {
+	var first *Column
+	for i, c := range b.Columns {
+		switch {
+		case !c.InReviewLane():
+		case c.IsAgent():
+			return c, true
+		case first == nil:
+			first = &b.Columns[i]
+		}
+	}
+	if first == nil {
+		return Column{}, false
+	}
+	return *first, true
+}
+
+// ReviewImport is where an imported PR to review lands: the reviewFlow's
+// reviewed column once you have reviewed it, else its requested column.
+// Without that column it is the review lane's first column without an agent,
+// else the first column.
+func (b *Board) ReviewImport(reviewed bool) Column {
+	if f := b.ReviewFlow; f != nil {
+		ref := f.Requested
+		if reviewed {
+			ref = f.Reviewed
+		}
+		if c, ok := b.Find(ref); ok && ref != "" {
+			return c
+		}
+	}
+	for _, c := range b.Columns {
+		if c.InReviewLane() && !c.IsAgent() && !c.IsDone() {
+			return c
+		}
+	}
+	return b.FirstColumn()
+}
+
 // DoneColumn is the first column with the done role, or the zero Column.
 func (b *Board) DoneColumn() Column {
 	for _, c := range b.Columns {
@@ -500,16 +573,23 @@ func Default() *Board {
 			{ID: "in-review", Name: "In review", Color: "#f59e0b", AutoSpawn: true,
 				Automations: Automations{OnEnter: []Automation{{Name: "Review", Type: "send_message", Message: "/pr-review-toolkit:review-pr"}}}},
 			{ID: "done", Name: "Done", Role: "done", Color: "#10b981"},
+			{ID: "review-requested", Name: "Review requested", Lane: LaneReview, Color: "#a855f7"},
 			{ID: "reviewing", Name: "Reviewing", Lane: LaneReview, Color: "#ec4899", AutoSpawn: true, EffortOverride: "high",
-				Automations: Automations{OnEnter: []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: `test -n "$DROVER_PRNUMBER"`}}}},
+				Automations: Automations{
+					OnEnter:   []Automation{{Name: "Re-review", Type: "send_message", Message: reReviewMessage, ConditionScript: afterReview}},
+					OnTurnEnd: []Automation{{Name: "Triage", Type: "move_to_column", TargetColumn: "triage", ConditionScript: afterReview}},
+				}},
 			{ID: "triage", Name: "Triage findings", Lane: LaneReview, Color: "#f97316", AutoSpawn: true},
 			{ID: "waiting-on-author", Name: "Waiting on author", Lane: LaneReview, Color: "#64748b"},
+			{ID: "review-done", Name: "Done", Role: "done", Lane: LaneReview, Color: "#10b981"},
 		},
 		ReviewFlow: &ReviewFlow{
-			Started:  "triage",
-			Reviewed: "waiting-on-author",
-			Updated:  "reviewing",
-			Done:     "done",
+			Requested: "review-requested",
+			Started:   "triage",
+			Reviewed:  "waiting-on-author",
+			Approved:  "review-done",
+			Updated:   "reviewing",
+			Done:      "review-done",
 		},
 		PRFlow: &PRFlow{
 			Requested:            "waiting-for-me",

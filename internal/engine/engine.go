@@ -393,15 +393,24 @@ func (e *Engine) reconcile() {
 }
 
 func (e *Engine) CreateTask(title, prompt string) *store.Task {
+	return e.createTask(title, prompt, "")
+}
+
+// createTask adds a card in the column with the given id, or the first column
+// when it is empty.
+func (e *Engine) createTask(title, prompt, columnID string) *store.Task {
 	var task *store.Task
 	e.with(func() {
 		now := time.Now()
+		if columnID == "" {
+			columnID = e.board.FirstColumn().ID
+		}
 		task = &store.Task{
 			ID:        uuid.NewString(),
 			Number:    e.state.NextNumber,
 			Title:     title,
 			Prompt:    prompt,
-			ColumnID:  e.board.FirstColumn().ID,
+			ColumnID:  columnID,
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
@@ -418,7 +427,27 @@ func (e *Engine) NewSession() (*store.Task, error) {
 	if !col.IsAgent() {
 		return nil, fmt.Errorf("%s, the first column, runs no agent; make it an agent column in your config to start sessions with n", col.Name)
 	}
-	task := e.CreateTask("", "")
+	return e.startSession(col)
+}
+
+// NewReviewSession adds a card in the review lane's entry column and starts
+// its agent right away.
+func (e *Engine) NewReviewSession() (*store.Task, error) {
+	e.mu.Lock()
+	col, ok := e.board.ReviewEntry()
+	e.mu.Unlock()
+	switch {
+	case !ok:
+		return nil, config.ErrNoReviewLane
+	case !col.IsAgent():
+		return nil, fmt.Errorf("%s, where reviews start, runs no agent; make it an agent column in your config to start reviews with ctrl+n", col.Name)
+	}
+	return e.startSession(col)
+}
+
+// startSession adds a card in col and starts its agent.
+func (e *Engine) startSession(col config.Column) (*store.Task, error) {
+	task := e.createTask("", "", col.ID)
 	_, owner, unlock := e.lockGroup(task.ID)
 	defer unlock()
 	if err := e.activate(task, col, col, "", true, true); err != nil {
@@ -462,8 +491,9 @@ func (e *Engine) discardCard(t, owner *store.Task) error {
 
 // DiscardSilent deletes a new card whose agent never got a message, and stops
 // the agent, its worktree and its unused branch. A card that is titled, has a
-// prompt or an issue, has left the first column, has a started conversation or
-// has uncommitted changes in its worktree is kept.
+// prompt or an issue, has left the first column or the review lane's entry
+// column, has a started conversation or has uncommitted changes in its
+// worktree is kept.
 func (e *Engine) DiscardSilent(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()
@@ -472,7 +502,9 @@ func (e *Engine) DiscardSilent(id string) error {
 	}
 	e.mu.Lock()
 	s := t.Sessions[store.MainSession]
-	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && t.ColumnID == e.board.FirstColumn().ID && !e.talkedTo(t, store.MainSession)
+	entry, _ := e.board.ReviewEntry()
+	atStart := t.ColumnID == e.board.FirstColumn().ID || t.ColumnID == entry.ID
+	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && atStart && !e.talkedTo(t, store.MainSession)
 	path := t.WorktreePath
 	e.mu.Unlock()
 	if !silent || gitx.Dirty(path, e.Root) {
@@ -485,6 +517,15 @@ func (e *Engine) EditTask(id, title, prompt string) {
 	e.with(func() {
 		if t := e.find(id); t != nil {
 			t.Title, t.Prompt = title, prompt
+		}
+	})
+}
+
+// RenameTask changes a card's title and leaves its prompt alone.
+func (e *Engine) RenameTask(id, title string) {
+	e.with(func() {
+		if t := e.find(id); t != nil {
+			t.Title = title
 		}
 	})
 }
@@ -546,6 +587,24 @@ func (e *Engine) HideTask(id string, hidden bool) error {
 			t.AddLog("Hidden")
 		} else {
 			t.AddLog("Unhidden")
+		}
+	})
+	return nil
+}
+
+// PinTask pins a card to the top of its column, or unpins it.
+func (e *Engine) PinTask(id string, pinned bool) error {
+	t, _, unlock := e.lockGroup(id)
+	defer unlock()
+	if t == nil {
+		return errors.New("task not found")
+	}
+	e.with(func() {
+		t.Pinned = pinned
+		if pinned {
+			t.AddLog("Pinned")
+		} else {
+			t.AddLog("Unpinned")
 		}
 	})
 	return nil
@@ -724,11 +783,11 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 			t.PR.MergeMovePending = false
 		}
 		if drives {
-			// Turn-end automations of the previous visit no longer apply.
 			owner.Visit++
 			for _, s := range owner.Sessions {
 				s.TurnInVisit = false
 				s.TurnEndRow = ""
+				s.StopPending = false
 			}
 		}
 		t.Archived = false
@@ -746,8 +805,11 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 		return nil
 	case keeps:
 		return nil
-	case !isAgentColumn(target):
+	case target.IsDone():
 		e.stopSessions(owner, "", store.StatusSuspended)
+		return nil
+	case !isAgentColumn(target):
+		e.stopOrDefer(owner)
 		return nil
 	case external != nil:
 		e.logf(t, "Not starting an agent: its conversation is still running in another terminal")
@@ -755,6 +817,23 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	default:
 		return e.activate(t, target, from, opts.Message, !opts.skipEnter, opts.evict)
 	}
+}
+
+// stopOrDefer stops owner's sessions.
+func (e *Engine) stopOrDefer(owner *store.Task) {
+	e.mu.Lock()
+	sess := owner.Sessions[store.MainSession]
+	busy := live(sess) && sess.Activity == store.ActivityThinking
+	if busy {
+		sess.StopPending = true
+	}
+	e.mu.Unlock()
+	if !busy {
+		e.stopSessions(owner, "", store.StatusSuspended)
+		return
+	}
+	e.stopSessions(owner, store.MainSession, store.StatusSuspended)
+	e.logf(owner, "Agent stops when its current turn ends")
 }
 
 // Start resumes or starts the agent for a task in place. A card that never had
@@ -976,7 +1055,7 @@ func (e *Engine) ensureWorktree(t *store.Task, col config.Column, busyID string)
 	if err == nil && board.InitScript != "" {
 		e.setBusy(busyID, "running init script")
 		env := []string{"DROVER_PROJECTPATH=" + e.Root, "DROVER_WORKTREEPATH=" + path, "DROVER_BRANCHNAME=" + branch}
-		if err = runShell(e.stopping, path, board.InitScript, env, 10*time.Minute); err != nil {
+		if err = runShell(e.stopping, path, board.InitScript, env, 10*time.Minute, shellWaitDelay); err != nil {
 			err = fmt.Errorf("init script: %w", err)
 		}
 	}
@@ -1225,6 +1304,7 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 		s.Status = status
 		s.Activity = store.ActivityIdle
 		s.Pending = nil
+		s.StopPending = false
 		stopped++
 	}
 	e.with(func() {
@@ -1285,8 +1365,11 @@ func (e *Engine) stopSessions(t *store.Task, keep string, status store.SessionSt
 }
 
 // activate makes sure the agent for col is running in the task's worktree, or
-// in the project root for a noWorktree column without one: an existing session is kept (or respawned when the model changes), a missing
-// one is resumed or started, then the enter group runs. card is the card being
+// in the project root for a noWorktree column without one: an existing session
+// is kept (or respawned when the model changes), a missing one is resumed or
+// started, then the enter group runs. A live agent that is working in the root
+// stays there while moveIntoWorktree builds the worktree in the background, and
+// switches to col's settings when it moves in. card is the card being
 // moved; the session belongs to its group's owner and now follows card. evict
 // lets a start you asked for suspend the longest-idle agent when every slot is
 // taken.
@@ -1296,14 +1379,24 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	e.mu.Lock()
 	t := e.owner(card)
 	e.mu.Unlock()
-	worktree, err := e.ensureWorktree(t, col, card.ID)
+	later := e.deferWorktree(t, col)
+	worktree := e.Root
+	var err error
+	if !later {
+		worktree, err = e.ensureWorktree(t, col, card.ID)
+	}
 	if err != nil {
 		e.logf(card, "Worktree failed: %v", err)
 		e.notify("#%d: %v", card.Number, err)
 		return err
 	}
-	e.with(func() { t.ActiveCard = card.ID })
 	key := store.MainSession
+	e.with(func() {
+		t.ActiveCard = card.ID
+		if s := t.Sessions[key]; s != nil {
+			s.StopPending = false
+		}
+	})
 	e.stopSessions(t, key, store.StatusSuspended)
 
 	e.mu.Lock()
@@ -1348,7 +1441,7 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 	gc := groupContext{from: from, to: col}
 
 	switch {
-	case live && changed && !busy:
+	case live && changed && !busy && !later:
 		if err := e.switchSettings(t, key, col, worktree); err != nil {
 			return err
 		}
@@ -1368,19 +1461,85 @@ func (e *Engine) activate(card *store.Task, col, from config.Column, message str
 		if err := e.spawn(t, col, key, worktree, fresh, prompt, evict); err != nil {
 			return err
 		}
+		if fresh {
+			// A review card's first agent, such as an imported one's, moves the
+			// card on once its turn ends, as when an agent names the PR itself.
+			e.with(func() {
+				if card == t && card.PR.IsReview() {
+					card.PRMovePending = e.flowColumn(e.startRef(true)).ID != ""
+				}
+			})
+		}
 	}
 	if message != "" {
 		e.sendMessage(t, key, message)
 	}
 	e.runEnterGroup(card, enter, gc)
+	if later {
+		e.logf(card, "Creating the worktree while the agent keeps working in the project root")
+		id := card.ID
+		e.work.Go(func() { e.moveIntoWorktree(id) })
+	}
 	return nil
+}
+
+// deferWorktree reports whether the move of t's card into col should leave
+// its agent in the project root while the worktree is built: col is in the
+// review lane, the task has no worktree yet, and its agent is running in the
+// root and has a conversation to resume (it was prompted and isn't imported).
+// Called without mu held.
+func (e *Engine) deferWorktree(t *store.Task, col config.Column) bool {
+	if !col.InReviewLane() || e.rootAgent(t, col) == "" {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return t.WorktreePath == "" && !t.Sessions[store.MainSession].Imported && e.talkedTo(t, store.MainSession)
+}
+
+// moveIntoWorktree builds the worktree of a card whose agent kept working in
+// the project root and moves the agent into it with col's settings, right away
+// when the agent is idle or still starting, and once its turn ends otherwise.
+// If the worktree can't be built, the agent stays in the root and only gets the
+// settings. It takes the group lock itself.
+func (e *Engine) moveIntoWorktree(cardID string) {
+	card, owner, unlock := e.lockGroup(cardID)
+	defer unlock()
+	if card == nil {
+		return
+	}
+	defer e.setBusy(cardID, "")
+	e.mu.Lock()
+	cur := e.sessionColumn(owner)
+	e.mu.Unlock()
+	if !isAgentColumn(cur) || cur.NoWorktree {
+		e.logf(card, "Not creating the worktree: the card left the column it was moved into")
+		return
+	}
+	if _, err := e.ensureWorktree(owner, cur, cardID); err != nil {
+		e.logf(card, "Worktree failed, the agent stays in the project root: %v", err)
+		e.notify("#%d: couldn't create the worktree, the agent keeps working in the project root: %v", card.Number, err)
+	}
+	key := store.MainSession
+	var idle bool
+	e.mu.Lock()
+	if s := owner.Sessions[key]; s != nil && s.Status == store.StatusRunning && settingsDiffer(s, cur, e.board.PermissionMode(cur), e.dirOf(owner)) {
+		s.RespawnPending = true
+		idle = s.Activity == store.ActivityIdle || s.Activity == store.ActivityStarting
+	}
+	e.mu.Unlock()
+	if idle {
+		e.respawnLocked(owner.ID, key)
+	} else {
+		e.logf(card, "Agent switches to %s's settings and its worktree when its current turn ends", cur.Name)
+	}
 }
 
 // initialPrompt is the first message of a fresh session. A column whose enter
 // group opens with a message (like `/code-review`) starts with that message
 // instead of the task prompt; the row is consumed.
 func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc groupContext) (string, []config.Automation) {
-	if len(enter) > 0 && enter[0].Type == "send_message" && !enter[0].Conditional() {
+	if len(enter) > 0 && enter[0].OpensAgent() {
 		row := enter[0]
 		e.logf(t, "Automation %q: started agent with message", rowName(row))
 		return e.render(t, row.Message, gc, false), enter[1:]
@@ -1390,7 +1549,8 @@ func (e *Engine) initialPrompt(t *store.Task, enter []config.Automation, gc grou
 	if strings.TrimSpace(t.Prompt) == "" {
 		return t.Title, enter
 	}
-	if strings.HasPrefix(t.Prompt, t.Title) {
+	// A slash command only runs at the start of the message.
+	if strings.HasPrefix(t.Prompt, t.Title) || strings.HasPrefix(t.Prompt, "/") {
 		return t.Prompt, enter
 	}
 	return t.Title + "\n\n" + t.Prompt, enter
@@ -1418,16 +1578,16 @@ func (e *Engine) runningCountExcept(skip *store.Session) int {
 // freeSlot suspends the agent on another task that has been idle longest, to
 // make room for a start you asked for. It returns that agent's tmux session to
 // stop, or "" when no agent is idle. An agent in a keepAgent column is never
-// chosen. Called with mu held.
+// chosen, nor one waiting for a scheduled run. Called with mu held.
 func (e *Engine) freeSlot(t *store.Task) string {
 	var victim *store.Session
 	var owner *store.Task
 	for _, o := range e.state.Tasks {
-		if o == t || e.keepsAgent(o) {
+		if o == t {
 			continue
 		}
 		for _, s := range o.Sessions {
-			if !idle(s) {
+			if !e.suspendable(o, s) {
 				continue
 			}
 			if victim == nil || s.UpdatedAt.Before(victim.UpdatedAt) {
@@ -1574,12 +1734,14 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	s := t.Sessions[key]
 	name := s.Tmux
 	s.Cwd = worktree
+	s.ClearSchedules()
 	env := map[string]string{
 		"DROVER_TASK_ID":     t.ID,
 		"DROVER_TASK_NUMBER": fmt.Sprint(t.Number),
 		"DROVER_TASK_TITLE":  t.Title,
 	}
 	maps.Copy(env, e.board.ClaudeEnv())
+	disableMouse := e.board.DisableMouse
 	e.mu.Unlock()
 	launch.SystemPrompt = claude.BoardPrompt(e.exe)
 	tmux.Kill(name)
@@ -1591,6 +1753,9 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		})
 		e.notify("#%d: starting agent failed: %v", t.Number, err)
 		return err
+	}
+	if disableMouse {
+		tmux.DisableMouse(name)
 	}
 	verb := "Started"
 	if launch.Resume {
@@ -1670,8 +1835,12 @@ func (e *Engine) Send(id, text string) error {
 	defer unlock()
 	e.mu.Lock()
 	if card != nil {
-		if s := t.Sessions[store.MainSession]; s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
+		s := t.Sessions[store.MainSession]
+		if s == nil || (s.Status != store.StatusRunning && s.Status != store.StatusQueued) {
 			t = nil
+		} else if s.StopPending {
+			e.mu.Unlock()
+			return errors.New("the agent stops when its current turn ends")
 		}
 	}
 	e.mu.Unlock()

@@ -40,9 +40,7 @@ func running(t *testing.T) (*Engine, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go e.Run(ctx)
+	runEngine(t, e)
 	return e, root
 }
 
@@ -142,9 +140,7 @@ func TestCLIRequestsQueuedWhileClosedApplyOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 
 	waitForAll(t, e, "both queued cards", func(tasks []*store.Task) bool { return len(tasks) == 2 })
 	tasks := e.Snapshot().Tasks
@@ -283,9 +279,7 @@ func TestSecondBoardLeavesTheInboxAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go second.Run(ctx)
+	runEngine(t, second)
 
 	id, _ := inbox.Send(root, inbox.Request{Op: inbox.OpAdd, Title: ptr("Mine")})
 	if _, ok, _ := inbox.Wait(root, id, 1500*time.Millisecond, nil); ok {
@@ -306,9 +300,7 @@ func TestClaimedRequestIsAppliedAfterARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go e.Run(ctx)
+	runEngine(t, e)
 	res, ok, err := inbox.Wait(root, id, 10*time.Second, nil)
 	if err != nil || !ok || res.Error != "" || res.Title != "Interrupted" {
 		t.Fatalf("Wait = %+v, %v, %v", res, ok, err)
@@ -335,17 +327,5 @@ func TestBoardHoldsTheLockWhileRunning(t *testing.T) {
 	<-done
 	if inbox.Running(root) {
 		t.Error("the lock outlived Run")
-	}
-}
-
-func TestFindColumn(t *testing.T) {
-	e := &Engine{board: groupBoard()}
-	for ref, want := range map[string]string{"exec": "exec", "Executing": "exec", "executing": "exec"} {
-		if col, err := e.findColumn(ref); err != nil || col.ID != want {
-			t.Errorf("findColumn(%q) = %q, %v, want %q", ref, col.ID, err, want)
-		}
-	}
-	if _, err := e.findColumn("nowhere"); err == nil || err.Error() != `unknown column "nowhere"` {
-		t.Errorf("findColumn(nowhere) = %v", err)
 	}
 }

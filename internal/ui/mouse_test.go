@@ -88,6 +88,70 @@ func sentJob(m Model) (keyJob, bool) {
 	}
 }
 
+func TestWheelPagesAgentThatHasNoHistoryAndIgnoresTheMouse(t *testing.T) {
+	setup := func(md mode) Model {
+		m := testModel(120, 40, 1, 1)
+		id := m.snap.Tasks[0].ID
+		m.snap.Live = map[string]string{id: "sess"}
+		m.keys = &keySender{jobs: make(chan keyJob, 4)}
+		m.previewFor = id
+		m.mode = md
+		return m
+	}
+	y := setup(modeLive).layout().previewY + 3
+	for _, c := range []struct {
+		name   string
+		button tea.MouseButton
+		want   string
+	}{
+		{"up", tea.MouseButtonWheelUp, "PPage"},
+		{"down", tea.MouseButtonWheelDown, "NPage"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := setup(modeLive)
+			m.Update(mouse(tea.MouseActionPress, c.button, 10, y))
+			job, ok := sentJob(m)
+			if !ok || job.session != "sess" || job.key != c.want {
+				t.Fatalf("sent %+v (sent=%v), want key %q to sess", job, ok, c.want)
+			}
+		})
+	}
+	t.Run("not on the board", func(t *testing.T) {
+		m := setup(modeBoard)
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v from the board", job)
+		}
+	})
+	t.Run("not when tmux has history", func(t *testing.T) {
+		m := setup(modeLive)
+		m.previewHistory = 100
+		next, _ := m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v despite history", job)
+		}
+		if got := next.(Model).previewScroll; got != 3 {
+			t.Fatalf("previewScroll = %d, want 3", got)
+		}
+	})
+	t.Run("not for a stale preview", func(t *testing.T) {
+		m := setup(modeLive)
+		m.previewFor = "other"
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v for another task's preview", job)
+		}
+	})
+	t.Run("not when the agent isn't running", func(t *testing.T) {
+		m := setup(modeLive)
+		m.snap.Live = nil
+		m.Update(mouse(tea.MouseActionPress, tea.MouseButtonWheelUp, 10, y))
+		if job, ok := sentJob(m); ok {
+			t.Fatalf("sent %+v without a live session", job)
+		}
+	})
+}
+
 func TestWheelGoesToAgentThatTracksMouse(t *testing.T) {
 	setup := func() Model {
 		m := testModel(120, 40, 1, 1)
@@ -202,13 +266,28 @@ func TestDraggingACardMovesItToTheColumnItIsDroppedOn(t *testing.T) {
 	}
 }
 
-func TestDraggingStartsAfterAVerticalWobble(t *testing.T) {
-	m := mouseModel(t)
-	y := firstCardY(m)
-	m, _ = update(m, mousePress(5, y))
-	m, _ = update(m, mouseMotion(5, y+1))
-	if m.drag.kind != dragCard {
-		t.Errorf("drag = %v after moving a row", m.drag.kind)
+func TestACardDragStartsOnceThePointerMovesAway(t *testing.T) {
+	tests := []struct {
+		name   string
+		dx, dy int
+		drag   dragKind
+	}{
+		{"a row down", 0, 1, dragCard},
+		{"two cells right", 2, 0, dragCard},
+		{"two cells left", -2, 0, dragCard},
+		{"one cell left", -1, 0, dragPending},
+		{"one cell right", 1, 0, dragPending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := mouseModel(t)
+			y := firstCardY(m)
+			m, _ = update(m, mousePress(45, y))
+			m, _ = update(m, mouseMotion(45+tt.dx, y+tt.dy))
+			if m.drag.kind != tt.drag {
+				t.Errorf("drag = %v, want %v", m.drag.kind, tt.drag)
+			}
+		})
 	}
 }
 
@@ -310,8 +389,8 @@ func TestDragFromTheColumnEdgeResizesTheColumnAndSavesIt(t *testing.T) {
 		t.Fatalf("drag = %+v", m.drag)
 	}
 	m, _ = update(m, mouseMotion(60, y))
-	if got := m.prefs.ColumnWidths["c0"]; got != 62 {
-		t.Errorf("width = %d, want the edge following the pointer", got)
+	if on, before := m.layout().hitTest(m, 60, y), m.layout().hitTest(m, 59, y); on.kind != hitColumnEdge || before.kind == hitColumnEdge {
+		t.Errorf("hit under the pointer %v, one cell left %v; want the resize handle to start under the pointer", on.kind, before.kind)
 	}
 	m, _ = update(m, mouseMotion(2, y))
 	if got := m.prefs.ColumnWidths["c0"]; got != minResizedWidth {
@@ -322,8 +401,8 @@ func TestDragFromTheColumnEdgeResizesTheColumnAndSavesIt(t *testing.T) {
 		t.Error("the layout was saved before the drag ended")
 	}
 	m, _ = update(m, mouseRelease(60, y))
-	if m.drag.kind != dragNone || loadPrefs(m.eng.Root).ColumnWidths["c0"] != 62 {
-		t.Errorf("drag %v saved widths %v", m.drag.kind, loadPrefs(m.eng.Root).ColumnWidths)
+	if saved := loadPrefs(m.eng.Root).ColumnWidths["c0"]; m.drag.kind != dragNone || saved == 0 || saved != m.prefs.ColumnWidths["c0"] {
+		t.Errorf("drag %v saved widths %v, want the width on screen", m.drag.kind, loadPrefs(m.eng.Root).ColumnWidths)
 	}
 }
 
@@ -348,6 +427,49 @@ func TestDragFromThePreviewBorderResizesThePreviewAndSavesIt(t *testing.T) {
 	m, _ = update(m, mouseRelease(10, 20))
 	if got := loadPrefs(m.eng.Root).PreviewHeight; got != 19 || m.drag.kind != dragNone {
 		t.Errorf("saved preview height %d, drag %v", got, m.drag.kind)
+	}
+}
+
+func TestDragFromTheLaneDividerResizesTheReviewLaneAndSavesIt(t *testing.T) {
+	m := laneModel(t)
+	l := m.layout()
+	lo, hi := laneBounds(l.boardH)
+	m, _ = update(m, mousePress(10, l.bodyY+l.laneY))
+	if m.drag.kind != dragLane {
+		t.Fatalf("drag = %v", m.drag.kind)
+	}
+
+	for _, tt := range []struct{ y, want int }{{l.bodyY + l.boardH - 15, 15}, {0, hi}, {l.bodyY + l.boardH, lo}} {
+		m, _ = update(m, mouseMotion(10, tt.y))
+		if got := m.layout().laneH; got != tt.want {
+			t.Errorf("pointer at row %d: lane is %d rows, want %d", tt.y, got, tt.want)
+		}
+	}
+	m, _ = update(m, mouseMotion(10, l.bodyY+l.boardH-15))
+	if loadPrefs(m.eng.Root).ReviewLaneHeight != 0 {
+		t.Error("the layout was saved before the drag ended")
+	}
+	m, _ = update(m, mouseRelease(10, l.bodyY+l.boardH-15))
+	if got := loadPrefs(m.eng.Root).ReviewLaneHeight; got != 15 || m.drag.kind != dragNone {
+		t.Errorf("saved lane height %d, drag %v", got, m.drag.kind)
+	}
+}
+
+func TestDraggingTheLaneDividerOnABoardTooShortToResizeSavesNothing(t *testing.T) {
+	m := laneModel(t)
+	m.height = 8
+	l := m.layout()
+	if l.laneH == 0 {
+		t.Fatal("no divider to drag")
+	}
+	if lo, hi := laneBounds(l.boardH); lo <= hi {
+		t.Fatalf("board of %d rows can be resized", l.boardH)
+	}
+	m, _ = update(m, mousePress(10, l.bodyY+l.laneY))
+	m, _ = update(m, mouseMotion(10, l.bodyY+l.laneY-2))
+	m, _ = update(m, mouseRelease(10, l.bodyY+l.laneY-2))
+	if got := m.prefs.ReviewLaneHeight; got != 0 {
+		t.Errorf("lane height %d saved", got)
 	}
 }
 

@@ -174,6 +174,26 @@ func TestSetKeepsTheFileMode(t *testing.T) {
 	}
 }
 
+func TestSetThroughASymlinkedFileUpdatesTheTarget(t *testing.T) {
+	dir := testRoot(t)
+	target := filepath.Join(t.TempDir(), "elsewhere.json")
+	os.WriteFile(target, []byte(sample), 0o644)
+	link := Global.Path(dir)
+	os.MkdirAll(filepath.Dir(link), 0o755)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(dir, Global, []string{"archiveDoneAfter"}, "30d"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the symlink was replaced by a regular file: %v, %v", info, err)
+	}
+	if data, _ := os.ReadFile(target); !strings.Contains(string(data), `"archiveDoneAfter": "30d"`) {
+		t.Errorf("the link target was not updated:\n%s", data)
+	}
+}
+
 func TestEditRejectsAnUnknownLayerAndAnEmptyPath(t *testing.T) {
 	dir := testRoot(t)
 	writeLayer(t, dir, Global, sample)

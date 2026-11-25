@@ -565,3 +565,77 @@ func TestDiscardSilentKeepsASessionYouTouched(t *testing.T) {
 		})
 	}
 }
+
+const reviewLaneBoard = `{"columns":[
+  {"id":"inbox","name":"Inbox"},
+  {"id":"exec","name":"Executing","autoSpawn":true},
+  {"id":"done","name":"Done","role":"done"},
+  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}]}`
+
+func TestNewReviewSessionStartsItsAgentInTheReviewLane(t *testing.T) {
+	e := startWithBoard(t, reviewLaneBoard)
+	task, err := e.NewReviewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the review agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if got.ID != task.ID || got.ColumnID != "triage" {
+		t.Errorf("new review: card %s in %q, want %s in Triage", got.ID, got.ColumnID, task.ID)
+	}
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.Snapshot().Tasks); n != 0 {
+		t.Errorf("the untouched review left %d cards", n)
+	}
+}
+
+func TestNewReviewSessionSkipsPlainColumnsAheadOfItsAgentColumn(t *testing.T) {
+	e := startWithBoard(t, `{"columns":[
+	  {"id":"inbox","name":"Inbox"},
+	  {"id":"requested","name":"Requested","lane":"review"},
+	  {"id":"reviewing","name":"Reviewing","lane":"review","autoSpawn":true},
+	  {"id":"triage","name":"Triage","lane":"review","autoSpawn":true}],
+	  "reviewFlow":{"started":"triage"}}`)
+	task, err := e.NewReviewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := waitFor(t, e, "the review agent to start", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Status == store.StatusRunning
+	})
+	if got.ID != task.ID || got.ColumnID != "reviewing" {
+		t.Errorf("new review: card %s in %q, want %s in Reviewing", got.ID, got.ColumnID, task.ID)
+	}
+}
+
+func TestNewReviewSessionNeedsAnAgentInTheReviewLane(t *testing.T) {
+	for name, tc := range map[string]struct{ board, want string }{
+		"no lane":  {`{"columns":[{"id":"inbox","name":"Inbox","autoSpawn":true},{"id":"done","name":"Done","role":"done"}]}`, "no review lane"},
+		"no agent": {`{"columns":[{"id":"inbox","name":"Inbox"},{"id":"triage","name":"Triage","lane":"review"}]}`, "Triage"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := startWithBoard(t, tc.board)
+			if _, err := e.NewReviewSession(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("NewReviewSession = %v, want an error mentioning %q", err, tc.want)
+			}
+			if n := len(e.Snapshot().Tasks); n != 0 {
+				t.Errorf("a refused review left %d cards", n)
+			}
+		})
+	}
+}
+
+func TestAReviewedPRStaysOnTheCardStartedInTheReviewLane(t *testing.T) {
+	e := startWithBoard(t, reviewLaneBoard)
+	card := e.createTask("", "", "triage")
+	e.with(func() { e.addPRs(card, []string{"https://github.com/o/r/pull/7"}, true) })
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 || tasks[0].PR == nil || !tasks[0].PR.Review || tasks[0].PR.Number != 7 {
+		t.Errorf("the reviewed PR should sit on the card that reviews it: %+v", tasks)
+	}
+}
