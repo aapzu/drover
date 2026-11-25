@@ -96,29 +96,32 @@ func (m Model) paletteMatches() []paletteCommand {
 	})
 }
 
-// paletteCards is the cards the board shows that match the search, newest
-// first.
+// paletteCards is the cards on the board that match the search, newest first,
+// including those in a lane the board does not draw.
 func (m Model) paletteCards() []*store.Task {
 	query := m.paletteInput.Value()
 	if strings.TrimSpace(query) == "" {
 		return nil
 	}
-	var shown []*store.Task
+	var onBoard []*store.Task
 	for _, t := range m.snap.Tasks {
-		_, col, ok := m.snap.Board.Column(m.columnOf(t))
-		if ok && m.visibleColumn(col) && !m.offBoard(t, m.hidesArchived(m.columnOf(t))) {
-			shown = append(shown, t)
+		if _, _, ok := m.snap.Board.Column(m.columnOf(t)); ok && !m.offBoard(t, m.hidesArchived(m.columnOf(t))) {
+			onBoard = append(onBoard, t)
 		}
 	}
-	cards := filterCards(shown, query)
+	cards := filterCards(onBoard, query)
 	slices.SortFunc(cards, func(a, b *store.Task) int { return b.Number - a.Number })
 	return cards
 }
 
-// openCard selects the card and attaches to it as enter does on the board.
+// openCard selects the card, showing its lane if the board hides it, and
+// attaches to it as enter does on the board.
 func (m Model) openCard(t *store.Task) (tea.Model, tea.Cmd) {
 	m.mode = modeBoard
 	m.filter = ""
+	if _, col, ok := m.snap.Board.Column(m.columnOf(t)); ok {
+		m.revealColumn(col)
+	}
 	m.selectTask(t)
 	return m.updateBoard(keyPress("enter"))
 }
