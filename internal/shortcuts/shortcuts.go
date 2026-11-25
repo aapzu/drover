@@ -71,21 +71,16 @@ var Live = []Row{
 // Text lists every shortcut as plain text, one "key: description" line each.
 func Text() string {
 	var b strings.Builder
-	for i, s := range []struct {
-		title string
-		rows  []Row
-	}{
-		{"Board keys", Keys},
-		{"Mouse on the board", Mouse},
-		{"Live mode (typing into an agent from the board)", Live},
-	} {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(s.title + ":\n")
-		for _, r := range s.rows {
+	section := func(title string, rows []Row) {
+		b.WriteString(title + ":\n")
+		for _, r := range rows {
 			b.WriteString(r.Key + ": " + r.Desc + "\n")
 		}
 	}
-	return strings.TrimSuffix(b.String(), "\n")
+	section("Board keys", Keys)
+	b.WriteString("\n")
+	section("Mouse on the board", Mouse)
+	b.WriteString("\n")
+	section("Live mode (typing into an agent from the board)", Live)
+	return b.String()
 }

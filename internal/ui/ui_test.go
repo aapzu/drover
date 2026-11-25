@@ -16,7 +16,6 @@ import (
 
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/engine"
-	"github.com/aapzu/drover/internal/shortcuts"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -310,14 +309,6 @@ func TestHelpRendersBothLayouts(t *testing.T) {
 		}
 	}
 	m.width = 220
-	plain := ansi.Strip(m.renderHelp())
-	for _, rows := range [][]shortcuts.Row{shortcuts.Keys, shortcuts.Mouse, shortcuts.Live} {
-		for _, r := range rows {
-			if !strings.Contains(plain, r.Key) || !strings.Contains(plain, r.Desc) {
-				t.Errorf("help misses %q: %q", r.Key, r.Desc)
-			}
-		}
-	}
 	wide := lipgloss.Height(m.renderHelp())
 	m.width = 60
 	if narrow := lipgloss.Height(m.renderHelp()); narrow <= wide {

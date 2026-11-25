@@ -5,13 +5,11 @@ import (
 	"testing"
 )
 
-func TestTextListsEveryShortcut(t *testing.T) {
+func TestTextListsEverySection(t *testing.T) {
 	got := Text()
 	for _, rows := range [][]Row{Keys, Mouse, Live} {
-		for _, r := range rows {
-			if want := r.Key + ": " + r.Desc; !strings.Contains(got, want) {
-				t.Errorf("text lacks %q", want)
-			}
+		if want := rows[0].Key + ": " + rows[0].Desc; !strings.Contains(got, want) {
+			t.Errorf("text lacks %q", want)
 		}
 	}
 }

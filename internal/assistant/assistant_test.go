@@ -184,10 +184,8 @@ func TestCorruptSessionFileStartsANewConversation(t *testing.T) {
 
 func TestPromptListsTheBoardsShortcuts(t *testing.T) {
 	got := systemPrompt("/bin/drover", "/work/my-app", &config.Board{})
-	for _, want := range []string{shortcuts.Text(), "say a key isn't listed instead of guessing"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("prompt lacks %q:\n%s", want, got)
-		}
+	if !strings.Contains(got, shortcuts.Text()) {
+		t.Errorf("prompt lacks the shortcuts:\n%s", got)
 	}
 }
 

@@ -344,9 +344,9 @@ func systemPrompt(exe, root string, board *config.Board) string {
 		"Change the board only when asked. Before `rm`, say what you are about to do and wait for the user to agree. " +
 		"`rm` refuses while the worktree has uncommitted changes; " +
 		"report that instead of working around it, and never pass --force.\n" +
-		"The board's keyboard and mouse shortcuts are listed below, the same as the `?` help on the board; `ctrl+k` opens a command palette that runs any of them. " +
+		"The board's keyboard and mouse shortcuts are listed below, the same as the `?` help on the board. " +
 		"Answer questions about shortcuts from this list, and say a key isn't listed instead of guessing.\n" +
-		shortcuts.Text() + "\n" +
+		shortcuts.Text() +
 		"Answer briefly, in plain text without markdown headings, and always write cards as #<number> and their title."
 }
 
