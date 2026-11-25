@@ -3,6 +3,8 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -13,9 +15,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aapzu/drover/internal/claude"
+	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/engine"
 	"github.com/aapzu/drover/internal/gh"
-	"github.com/aapzu/drover/internal/linear"
 )
 
 func importModel(more bool, sessions ...claude.Found) Model {
@@ -98,7 +100,7 @@ func TestLoadMoreOnlyWhenThereIsMore(t *testing.T) {
 		t.Error("m loaded with nothing more to load")
 	}
 	m = importModel(true, claude.Found{SessionID: "a", Cwd: "/repo"})
-	m.imp.source = sourceLinear
+	m.imp.source = sourceIssues
 	if _, cmd := press(m, "m"); cmd != nil {
 		t.Error("m loaded on the Linear tab")
 	}
@@ -189,10 +191,8 @@ func session(id, dir string) claude.Found {
 	return claude.Found{SessionID: id, Cwd: dir, Title: "title " + id, Branch: "br-" + id, Updated: time.Now()}
 }
 
-func issue(id string) linear.Issue {
-	i := linear.Issue{ID: "id-" + id, Identifier: id, Title: "issue " + id, BranchName: "feat/" + id}
-	i.State.Name = "Todo"
-	return i
+func issue(id string) engine.Issue {
+	return engine.Issue{Provider: "linear", ID: "id-" + id, Key: id, Title: "issue " + id, Branch: "feat/" + id, State: "Todo"}
 }
 
 // linearModel is importOn with a Linear key in the environment, so the Linear tab works.
@@ -200,7 +200,7 @@ func linearModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("LINEAR_API_KEY", "test-key")
 	m := importOn(t)
-	m.imp.source = sourceLinear
+	m.imp.source = sourceIssues
 	return m
 }
 
@@ -260,7 +260,7 @@ func TestImportClosesOnEscAndQ(t *testing.T) {
 func TestImportTabSwitchesSource(t *testing.T) {
 	m := importModel(false, claude.Found{SessionID: "a", Cwd: "/repo/x"})
 	m, cmd := pressKey(m, tea.KeyTab)
-	if m.imp.source != sourceLinear || cmd != nil || m.imp.loading || !strings.Contains(m.imp.err, "LINEAR_API_KEY") || len(m.imp.items) != 0 {
+	if m.imp.source != sourceIssues || cmd != nil || m.imp.loading || !strings.Contains(m.imp.err, "LINEAR_API_KEY") || len(m.imp.items) != 0 {
 		t.Fatalf("to Linear: source %d err %q items %d loading %v", m.imp.source, m.imp.err, len(m.imp.items), m.imp.loading)
 	}
 	gen := m.imp.gen
@@ -330,10 +330,37 @@ func TestImportEnterOnAHeaderOrNothingImportsNothing(t *testing.T) {
 	}
 }
 
+func TestGitHubTrackerShowsItsOwnTabAndSetupHint(t *testing.T) {
+	m := importOn(t)
+	if err := config.Set(m.eng.Root, config.Project, []string{"issueTracker"}, "github"); err != nil {
+		t.Fatal(err)
+	}
+	m.eng.ReloadBoard()
+	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "GitHub issues") || strings.Contains(got, "Linear") {
+		t.Errorf("tab is not the GitHub one:\n%s", got)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	m.mode = modeBoard
+	if cmd := m.openImport(sourceIssues); cmd != nil || !strings.Contains(m.imp.err, "gh auth login") {
+		t.Errorf("without gh: cmd nil %v err %q", cmd == nil, m.imp.err)
+	}
+
+	fake := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fake, "gh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fake)
+	m, _ = press(m, "/")
+	if !m.imp.keyEntry || !strings.Contains(m.imp.keyInput.Placeholder, "github.com") {
+		t.Errorf("keyEntry %v placeholder %q", m.imp.keyEntry, m.imp.keyInput.Placeholder)
+	}
+}
+
 func TestLinearKeyEntryNeedsAKey(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "")
 	m := importOn(t)
-	m.imp.source = sourceLinear
+	m.imp.source = sourceIssues
 	m, _ = press(m, "/")
 	if m.imp.keyEntry {
 		t.Error("/ opened the key entry without a Linear key")
@@ -343,16 +370,16 @@ func TestLinearKeyEntryNeedsAKey(t *testing.T) {
 func TestLinearImportLoadsListsAndImportsIssues(t *testing.T) {
 	m := linearModel(t)
 	m.mode = modeBoard
-	cmd := m.openImport(sourceLinear)
+	cmd := m.openImport(sourceIssues)
 	if cmd == nil || !m.imp.loading || m.mode != modeImport || m.imp.err != "" {
 		t.Fatalf("cmd nil %v loading %v mode %v err %q", cmd == nil, m.imp.loading, m.mode, m.imp.err)
 	}
 
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen - 1, issues: []linear.Issue{issue("OLD-1")}})
+	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen - 1, issues: []engine.Issue{issue("OLD-1")}})
 	if len(m.imp.items) != 0 || !m.imp.loading {
 		t.Fatalf("a stale load changed the list: %+v", m.imp.items)
 	}
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen, issues: []linear.Issue{issue("DX-1"), issue("DX-2")}})
+	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen, issues: []engine.Issue{issue("DX-1"), issue("DX-2")}})
 	if len(m.imp.items) != 2 || m.imp.loading || m.imp.items[0].selected {
 		t.Fatalf("items %+v loading %v", m.imp.items, m.imp.loading)
 	}
@@ -370,7 +397,7 @@ func TestLinearImportLoadsListsAndImportsIssues(t *testing.T) {
 
 func TestLinearImportShowsLoadErrors(t *testing.T) {
 	m := linearModel(t)
-	m.imp.items = []importItem{{issue: &linear.Issue{Identifier: "DX-1"}}}
+	m.imp.items = []importItem{{issue: &engine.Issue{Key: "DX-1"}}}
 	m.imp.gen = 3
 	m = m.updateImportLoaded(issuesLoadedMsg{gen: 3, err: errors.New("401 unauthorized")})
 	if m.imp.err != "401 unauthorized" || m.imp.loading || len(m.imp.items) != 0 {
@@ -379,7 +406,7 @@ func TestLinearImportShowsLoadErrors(t *testing.T) {
 	if got := ansi.Strip(m.renderImport(40)); !strings.Contains(got, "401 unauthorized") {
 		t.Errorf("the error is not shown:\n%s", got)
 	}
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: 3, issues: []linear.Issue{issue("DX-1")}})
+	m = m.updateImportLoaded(issuesLoadedMsg{gen: 3, issues: []engine.Issue{issue("DX-1")}})
 	if m.imp.err != "" {
 		t.Errorf("a good load kept the error %q", m.imp.err)
 	}
@@ -387,7 +414,7 @@ func TestLinearImportShowsLoadErrors(t *testing.T) {
 
 func TestLinearImportFetchesAnIssueByKey(t *testing.T) {
 	m := linearModel(t)
-	m.imp.items = []importItem{{issue: &linear.Issue{Identifier: "DX-1"}}}
+	m.imp.items = []importItem{{issue: &engine.Issue{Key: "DX-1"}}}
 	m, _ = press(m, "/")
 	if !m.imp.keyEntry {
 		t.Fatal("/ did not open the key entry")
@@ -411,7 +438,7 @@ func TestLinearImportFetchesAnIssueByKey(t *testing.T) {
 		t.Fatalf("enter: keyEntry %v loading %v gen %d cmd nil %v", m.imp.keyEntry, m.imp.loading, m.imp.gen, cmd == nil)
 	}
 
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen, issues: []linear.Issue{issue("DX-9")}, single: true})
+	m = m.updateImportLoaded(issuesLoadedMsg{gen: m.imp.gen, issues: []engine.Issue{issue("DX-9")}, single: true})
 	if len(m.imp.items) != 2 || !m.imp.items[1].selected || m.imp.cursor != 1 || m.imp.loading {
 		t.Errorf("items %d cursor %d loading %v", len(m.imp.items), m.imp.cursor, m.imp.loading)
 	}
@@ -421,7 +448,7 @@ func TestImportLoadsOnlyWhileImporting(t *testing.T) {
 	m := importModel(false)
 	m.mode = modeBoard
 	m = m.updateImportLoaded(sessionsLoadedMsg{gen: 1, sessions: []claude.Found{{SessionID: "a", Cwd: "/repo"}}})
-	m = m.updateImportLoaded(issuesLoadedMsg{gen: 1, issues: []linear.Issue{issue("DX-1")}})
+	m = m.updateImportLoaded(issuesLoadedMsg{gen: 1, issues: []engine.Issue{issue("DX-1")}})
 	if len(m.imp.items) != 0 {
 		t.Errorf("a result that arrived after closing filled the list: %+v", m.imp.items)
 	}
@@ -491,11 +518,11 @@ func TestRenderImportStates(t *testing.T) {
 		{"no sessions", func(*Model) {}, "No running agents"},
 		{"loading", func(m *Model) { m.imp.loading = true }, "loading…"},
 		{"error", func(m *Model) { m.imp.err = "it broke" }, "it broke"},
-		{"no issues", func(m *Model) { m.imp.source = sourceLinear }, "No open issues assigned to you"},
-		{"linear hint", func(m *Model) { m.imp.source = sourceLinear }, "/ fetch by key"},
+		{"no issues", func(m *Model) { m.imp.source = sourceIssues }, "No open issues assigned to you"},
+		{"linear hint", func(m *Model) { m.imp.source = sourceIssues }, "/ fetch by key"},
 		{"no load more", func(*Model) {}, "space select · a all · enter import"},
 		{"linear issues", func(m *Model) {
-			m.imp.source = sourceLinear
+			m.imp.source = sourceIssues
 			i := issue("DX-5")
 			m.imp.items = []importItem{{issue: &i, selected: true}}
 		}, "[x] DX-5 issue DX-5"},

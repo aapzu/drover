@@ -815,7 +815,7 @@ var helpKeys = [][2]string{
 	{"i", "task details and automation log"},
 	{"$", "usage and cost"},
 	{"T", "timeline of the runs agents have scheduled (/loop, ScheduleWakeup, CronCreate)"},
-	{"I", "import running Claude Code agents, past sessions, Linear issues or PRs to review"},
+	{"I", "import running Claude Code agents, past sessions, Linear or GitHub issues or PRs to review"},
 	{"b", "hide or unhide a card in any column (its worktree and agent are untouched)"},
 	{"B", "show or hide hidden cards"},
 	{"P", "pin or unpin a card to the top of its column"},

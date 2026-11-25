@@ -527,6 +527,24 @@ func TestLayers(t *testing.T) {
 					t.Error("project disableUpdateCheck:true does not override the global file")
 				}
 			}},
+		{"issue tracker is Linear by default", "", "",
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerLinear {
+					t.Errorf("default tracker = %q", b.Tracker())
+				}
+			}},
+		{"global issueTracker github", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, "",
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerGitHub {
+					t.Errorf("tracker = %q", b.Tracker())
+				}
+			}},
+		{"project issueTracker overrides the global file", `{"issueTracker":"github","columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"issueTracker":"linear"}`,
+			func(t *testing.T, b *Board) {
+				if b.Tracker() != TrackerLinear {
+					t.Errorf("tracker = %q", b.Tracker())
+				}
+			}},
 		{"project disableMouse true overrides the global file", `{"disableMouse":false,"columns":[{"id":"done","name":"Done","role":"done"}]}`, `{"disableMouse":true}`,
 			func(t *testing.T, b *Board) {
 				if !b.DisableMouse {
@@ -695,6 +713,7 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"unknown issueTracker", `{"issueTracker":"jira","columns":[{"id":"a","name":"A"}]}`, `issueTracker must be "linear" or "github"`},
 		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
 		{"reviewRepos without an owner", `{"reviewRepos":["widgets"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "widgets"`},
 		{"reviewRepos as a URL", `{"reviewRepos":["https://github.com/o/r"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "https://github.com/o/r"`},

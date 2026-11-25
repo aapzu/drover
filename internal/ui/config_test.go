@@ -101,6 +101,24 @@ func TestConfigToggleSavesToTheGlobalConfig(t *testing.T) {
 	}
 }
 
+func TestConfigIssueTrackerCyclesAndSavesToTheProjectConfig(t *testing.T) {
+	root := newRoot(t)
+	m := configModel(t, root)
+	if m.snap.Board.Tracker() != config.TrackerLinear {
+		t.Fatalf("default tracker = %q", m.snap.Board.Tracker())
+	}
+	m = selectOption(t, m, "Issue tracker")
+
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.Tracker() != config.TrackerGitHub || !config.Sets(root, config.Project, []string{"issueTracker"}) {
+		t.Errorf("tracker = %q, saved to the project config %v", m.snap.Board.Tracker(), config.Sets(root, config.Project, []string{"issueTracker"}))
+	}
+	m = pressConfig(t, m, keyPress("enter"))
+	if m.snap.Board.Tracker() != config.TrackerLinear {
+		t.Errorf("second enter left the tracker at %q", m.snap.Board.Tracker())
+	}
+}
+
 func TestConfigNumberRejectsText(t *testing.T) {
 	root := newRoot(t)
 	m := configModel(t, root)
@@ -252,6 +270,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 	board.DefaultBaseBranch, board.DefaultPermissionMode, board.DefaultModel = "main", "auto", "opus"
 	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
 	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked, board.DisableMouse = 4, 5, true, true
+	board.IssueTracker = config.TrackerGitHub
 	board.DisableUpdateCheck = true
 	board.TeamReviewRequests = true
 	data, err := json.Marshal(board)

@@ -54,6 +54,7 @@ type Board struct {
 	AutoName              bool          `json:"autoName"`
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
+	IssueTracker          string        `json:"issueTracker,omitempty"`
 	DisableUpdateCheck    bool          `json:"disableUpdateCheck,omitempty"`
 	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
 	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
@@ -106,6 +107,12 @@ type PRFlow struct {
 	Released                string `json:"released,omitempty"`
 	ReleaseBranch           string `json:"releaseBranch,omitempty"`
 }
+
+// Issue trackers the import view can list issues from.
+const (
+	TrackerLinear = "linear"
+	TrackerGitHub = "github"
+)
 
 const (
 	ChangesModePropose = "propose"
@@ -349,6 +356,15 @@ func Stamp(root string) string {
 	return stamp
 }
 
+// Tracker is the issue tracker the import view lists issues from: Linear
+// unless the board asks for GitHub.
+func (b *Board) Tracker() string {
+	if b != nil && b.IssueTracker == TrackerGitHub {
+		return TrackerGitHub
+	}
+	return TrackerLinear
+}
+
 // Limit is how many agents may run at once.
 func (b *Board) Limit() int {
 	if b.MaxConcurrent > 0 {
@@ -425,6 +441,9 @@ func (b *Board) validate() error {
 		if c.KeepAgent && (c.AutoSpawn || c.IsDone()) {
 			return fmt.Errorf("config: keepAgent column %s must not be autoSpawn or Done", c.ID)
 		}
+	}
+	if t := b.IssueTracker; t != "" && t != TrackerLinear && t != TrackerGitHub {
+		return fmt.Errorf("config: issueTracker must be %q or %q, not %q", TrackerLinear, TrackerGitHub, t)
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {

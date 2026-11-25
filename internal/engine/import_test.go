@@ -116,9 +116,9 @@ func TestImportLinearIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := linear.Issue{ID: "i1", Identifier: "DX-1", Title: "Speed up CI", Description: "CI takes 40 minutes.",
-		URL: "https://linear.app/x/issue/DX-1", BranchName: "aapeli/dx-1-speed-up-ci"}
-	e.ImportIssues([]linear.Issue{issue, issue})
+	issue := fromLinear(linear.Issue{ID: "i1", Identifier: "DX-1", Title: "Speed up CI", Description: "CI takes 40 minutes.",
+		URL: "https://linear.app/x/issue/DX-1", BranchName: "aapeli/dx-1-speed-up-ci"})
+	e.ImportIssues([]Issue{issue, issue})
 	snap := e.Snapshot()
 	if len(snap.Tasks) != 1 {
 		t.Fatalf("want one card, got %d", len(snap.Tasks))
@@ -126,6 +126,77 @@ func TestImportLinearIssue(t *testing.T) {
 	task := snap.Tasks[0]
 	if task.Branch != "aapeli/dx-1-speed-up-ci" || task.Issue.Key != "DX-1" || !strings.Contains(task.Prompt, "CI takes 40 minutes.") {
 		t.Errorf("card wrong: %+v", task)
+	}
+}
+
+func TestImportGitHubIssue(t *testing.T) {
+	e := newEngineWithClaudeDir(t)
+	issue := fromGitHub(gh.Issue{Number: 7, Title: "Crash on start", Body: "It breaks.", URL: "https://github.com/acme/widgets/issues/7", State: "OPEN"})
+	e.ImportIssues([]Issue{issue, issue})
+	tasks := e.Snapshot().Tasks
+	if len(tasks) != 1 {
+		t.Fatalf("want one card, got %d", len(tasks))
+	}
+	task := tasks[0]
+	if task.Branch != "" || task.Title != "Crash on start" || task.Issue.Provider != "github" || task.Issue.ID != "acme/widgets#7" || task.Issue.Key != "GH-7" || task.Issue.State != "open" {
+		t.Errorf("card wrong: %+v %+v", task, task.Issue)
+	}
+	if want := "It breaks.\n\nGitHub issue GH-7: https://github.com/acme/widgets/issues/7"; task.Prompt != want {
+		t.Errorf("prompt = %q, want %q", task.Prompt, want)
+	}
+	if len(task.Log) == 0 || !strings.Contains(task.Log[len(task.Log)-1].Text, "Imported GitHub issue GH-7") {
+		t.Errorf("log = %+v", task.Log)
+	}
+}
+
+func fakeGhIssues(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+"issue list"*) echo '[{"number":7,"title":"Crash","body":"b","url":"https://github.com/acme/widgets/issues/7","state":"OPEN"},{"number":8,"title":"Slow","body":"","url":"https://github.com/acme/widgets/issues/8","state":"OPEN"}]' ;;
+"issue view 8"*) echo '{"number":8,"title":"Slow","body":"","url":"https://github.com/acme/widgets/issues/8","state":"OPEN"}' ;;
+*) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestIssueTrackerFollowsTheBoardSetting(t *testing.T) {
+	fakeGhIssues(t)
+	e := newEngineWithClaudeDir(t)
+	if e.Tracker() != config.TrackerLinear || e.TrackerName() != "Linear" || e.TrackerReady() {
+		t.Fatalf("default tracker %q %q ready %v", e.Tracker(), e.TrackerName(), e.TrackerReady())
+	}
+	if _, err := e.IssueList(context.Background()); err == nil || !strings.Contains(err.Error(), "LINEAR_API_KEY") {
+		t.Errorf("Linear list without a key: %v", err)
+	}
+
+	if err := config.Set(e.Root, config.Project, []string{"issueTracker"}, "github"); err != nil {
+		t.Fatal(err)
+	}
+	e.ReloadBoard()
+	if e.Tracker() != config.TrackerGitHub || e.TrackerName() != "GitHub issues" || !e.TrackerReady() {
+		t.Fatalf("github tracker %q %q ready %v", e.Tracker(), e.TrackerName(), e.TrackerReady())
+	}
+	ctx := context.Background()
+	issues, err := e.IssueList(ctx)
+	if err != nil || len(issues) != 2 || issues[0].Key != "GH-7" {
+		t.Fatalf("IssueList = %+v, %v", issues, err)
+	}
+	e.ImportIssues(issues[:1])
+	if issues, _ = e.IssueList(ctx); len(issues) != 1 || issues[0].Key != "GH-8" {
+		t.Errorf("an imported issue is listed again: %+v", issues)
+	}
+	one, err := e.IssueByRef(ctx, "#8")
+	if err != nil || one.Key != "GH-8" {
+		t.Errorf("IssueByRef = %+v, %v", one, err)
+	}
+	if _, err := e.IssueByRef(ctx, "DX-8"); err == nil {
+		t.Error("a Linear key was accepted as a GitHub issue")
 	}
 }
 
@@ -199,7 +270,7 @@ func TestDiscoverSessionsSkipsTheAssistantsConversation(t *testing.T) {
 	}
 }
 
-// linearServer answers the queries LinearIssues and syncIssueStarted send and
+// linearServer answers the queries IssueList and syncIssueStarted send and
 // records the issue updates.
 func linearServer(t *testing.T) (*linear.Client, func() []string) {
 	t.Helper()
@@ -236,18 +307,18 @@ func linearServer(t *testing.T) (*linear.Client, func() []string) {
 
 func TestLinearIssuesSkipsTheOnesOnTheBoard(t *testing.T) {
 	e := bareEngine(t)
-	if e.HasLinear() {
-		t.Error("HasLinear without a client")
+	if e.TrackerReady() {
+		t.Error("TrackerReady without a client")
 	}
-	if _, err := e.LinearIssues(context.Background()); err == nil || !strings.Contains(err.Error(), "LINEAR_API_KEY") {
-		t.Errorf("LinearIssues without a key = %v", err)
+	if _, err := e.IssueList(context.Background()); err == nil || !strings.Contains(err.Error(), "LINEAR_API_KEY") {
+		t.Errorf("IssueList without a key = %v", err)
 	}
 
 	e.linear, _ = linearServer(t)
 	e.state.Tasks = []*store.Task{{ID: "a", Issue: &store.Issue{Provider: "linear", ID: "i1"}}, {ID: "b"}}
-	issues, err := e.LinearIssues(context.Background())
-	if !e.HasLinear() || err != nil || len(issues) != 1 || issues[0].Identifier != "DX-2" {
-		t.Errorf("HasLinear = %v, LinearIssues = %+v, %v, want only DX-2", e.HasLinear(), issues, err)
+	issues, err := e.IssueList(context.Background())
+	if !e.TrackerReady() || err != nil || len(issues) != 1 || issues[0].Key != "DX-2" {
+		t.Errorf("TrackerReady = %v, IssueList = %+v, %v, want only DX-2", e.TrackerReady(), issues, err)
 	}
 }
 

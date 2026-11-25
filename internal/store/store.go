@@ -139,7 +139,7 @@ func (s *Session) SetMode(mode string) {
 	s.PermissionMode, s.ModeInherited = mode, mode == ""
 }
 
-// Issue links a task to a tracker issue, currently Linear.
+// Issue links a task to a tracker issue, from Linear or GitHub.
 type Issue struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`

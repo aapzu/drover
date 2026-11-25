@@ -10,7 +10,6 @@ import (
 
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/inbox"
-	"github.com/aapzu/drover/internal/linear"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -125,9 +124,9 @@ func (e *Engine) inboxAdd(r inbox.Request) (inbox.Result, error) {
 		if err != nil {
 			return inbox.Result{}, err
 		}
-		added := e.ImportIssues([]linear.Issue{issue})
+		added := e.ImportIssues([]Issue{issue})
 		if len(added) == 0 {
-			return inbox.Result{}, fmt.Errorf("%s is already on the board", issue.Identifier)
+			return inbox.Result{}, fmt.Errorf("%s is already on the board", issue.Key)
 		}
 		task = added[0]
 	} else {
