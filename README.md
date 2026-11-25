@@ -552,6 +552,8 @@ same column targets as `prFlow`:
 - **updated:** you get a notice when the author pushes after your review. A
   card in `reviewed` or `approved` also moves here, as it does when your
   approval is dismissed or the PR gets merge conflicts after you approved it.
+  If this column has no `onTurnEnd`, it gets a row that moves the card on to
+  `started` once the agent's re-review turn ends; `"onTurnEnd": []` turns that off.
 - **done:** where it goes once the PR merges or closes. A PR that was already
   merged or closed when drover first sees it moves nothing.
 
