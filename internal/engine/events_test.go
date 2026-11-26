@@ -12,6 +12,7 @@ import (
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 // consume writes hook event lines for a session and applies them on e,
@@ -358,6 +359,119 @@ func TestTickMarksAnAgentWhoseTmuxSessionIsGoneAsExited(t *testing.T) {
 				t.Errorf("notifications = %q", got)
 			}
 		})
+	}
+}
+
+// crashedAgent starts an agent session that prints a line and is then killed,
+// and waits until tmux has kept its dead pane.
+func crashedAgent(t *testing.T, e *Engine, name string) {
+	t.Helper()
+	if err := tmux.NewAgentSession(name, e.Root, []string{"sh", "-c", "echo worker crashed; sleep 0.3; kill -9 $$"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tmux.Kill(name) })
+	for range 100 {
+		if _, dead := tmux.Panes(); dead[name] {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s never died", name)
+}
+
+func TestTickSaysHowACrashedAgentDied(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	for name, tc := range map[string]struct {
+		quietFor  time.Duration
+		launching bool
+		reaped    bool
+	}{
+		"quiet for a while":    {time.Minute, false, true},
+		"just updated":         {0, false, false},
+		"still being launched": {time.Minute, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := bareEngine(t)
+			tmuxName := "repo-52-crashed"
+			crashedAgent(t, e, tmuxName)
+			card := &store.Task{ID: "t1", Number: 52, Title: "Crashing agent " + name, ColumnID: e.board.FirstColumn().ID, Sessions: map[string]*store.Session{
+				store.MainSession: {Key: store.MainSession, Status: store.StatusRunning, Started: true, Tmux: tmuxName, UpdatedAt: time.Now().Add(-tc.quietFor)},
+			}}
+			e.state.Tasks = []*store.Task{card}
+			if tc.launching {
+				e.launching.Store(tmuxName, true)
+			}
+
+			e.Tick()
+			e.work.Wait()
+
+			s := card.Sessions[store.MainSession]
+			if exited := s.Status == store.StatusExited; exited != tc.reaped {
+				t.Errorf("status = %s", s.Status)
+			}
+			if _, kept := tmux.Died(tmuxName); kept == tc.reaped {
+				t.Errorf("dead session kept = %v", kept)
+			}
+			if !tc.reaped {
+				if len(card.Log) != 0 {
+					t.Errorf("log = %v", card.Log)
+				}
+				return
+			}
+			if !hasLog(card, "Agent exited: killed by SIGKILL, last output: worker crashed") {
+				t.Errorf("log = %v", card.Log)
+			}
+			if got := desktopNotified("#52 " + card.Title + ":"); len(got) != 1 || !strings.Contains(got[0], "agent exited: killed by SIGKILL") {
+				t.Errorf("notifications = %q", got)
+			}
+		})
+	}
+}
+
+func TestTickRemovesDeadSessionsOfCardsThatAreNotRunning(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := bareEngine(t)
+	crashedAgent(t, e, "repo-53-orphan")
+	card := &store.Task{ID: "t1", Number: 53, ColumnID: e.board.FirstColumn().ID, Sessions: map[string]*store.Session{
+		store.MainSession: {Key: store.MainSession, Status: store.StatusExited, Tmux: "repo-53-orphan"},
+	}}
+	e.state.Tasks = []*store.Task{card}
+
+	e.Tick()
+	e.work.Wait()
+
+	if _, kept := tmux.Died("repo-53-orphan"); kept {
+		t.Error("the dead session was kept")
+	}
+	if len(card.Log) != 0 {
+		t.Errorf("log = %v", card.Log)
+	}
+}
+
+func TestReconcileSaysHowACrashedAgentDiedAndRemovesItsSession(t *testing.T) {
+	e := bareEngine(t)
+	crashedAgent(t, e, "repo-54-crashed")
+	crashed := &store.Session{Status: store.StatusRunning, Tmux: "repo-54-crashed"}
+	live := "repo-55-live"
+	if err := tmux.NewAgentSession(live, e.Root, []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tmux.Kill(live) })
+	running := &store.Session{Status: store.StatusRunning, Tmux: live}
+	card := &store.Task{ID: "a", Sessions: map[string]*store.Session{store.MainSession: crashed}}
+	other := &store.Task{ID: "b", Sessions: map[string]*store.Session{store.MainSession: running}}
+	e.state.Tasks = []*store.Task{card, other}
+
+	e.reconcile()
+
+	if crashed.Status != store.StatusExited || running.Status != store.StatusRunning {
+		t.Errorf("crashed %s, running %s", crashed.Status, running.Status)
+	}
+	if !hasLog(card, "Agent exited: killed by SIGKILL, last output: worker crashed") || len(other.Log) != 0 {
+		t.Errorf("logs = %v, %v", card.Log, other.Log)
+	}
+	if _, kept := tmux.Died("repo-54-crashed"); kept || !tmux.Has(live) {
+		t.Errorf("dead session kept = %v, live session running = %v", kept, tmux.Has(live))
 	}
 }
 

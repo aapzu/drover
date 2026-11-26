@@ -44,12 +44,26 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
+// exitReasons says how each dead agent ended, as ": <how>". It runs tmux, so
+// call it without the lock.
+func exitReasons(dead map[string]bool) map[string]string {
+	reasons := map[string]string{}
+	for name := range dead {
+		if exit, ok := tmux.Died(name); ok {
+			reasons[name] = ": " + exit.String()
+		}
+	}
+	return reasons
+}
+
 func (e *Engine) Tick() {
 	e.reloadBoard()
-	live := tmux.List()
+	live, dead := tmux.Panes()
+	reasons := exitReasons(dead)
 	var followUps []func()
 
 	e.with(func() {
+		running := map[string]bool{}
 		for _, t := range e.state.Tasks {
 			if t.PRMovePending && !agentRunning(t) {
 				followUps = append(followUps, func() { e.shipTask(t) })
@@ -58,6 +72,7 @@ func (e *Engine) Tick() {
 				if s.Status != store.StatusRunning {
 					continue
 				}
+				running[s.Tmux] = true
 				followUps = append(followUps, e.consumeEvents(t, key, s)...)
 				if _, launching := e.launching.Load(s.Tmux); launching {
 					continue
@@ -65,9 +80,16 @@ func (e *Engine) Tick() {
 				if !live[s.Tmux] && time.Since(s.UpdatedAt) > 3*time.Second && !tmux.Has(s.Tmux) {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
-					t.AddLog("Agent exited")
-					e.alert(t, alertExited, "agent exited")
+					reason := reasons[s.Tmux]
+					t.AddLog("Agent exited" + reason)
+					e.alert(t, alertExited, "agent exited"+reason)
+					tmux.Kill(s.Tmux)
 				}
+			}
+		}
+		for name := range dead {
+			if !running[name] {
+				tmux.Kill(name)
 			}
 		}
 		e.expireSchedules(time.Now())

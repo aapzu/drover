@@ -377,17 +377,25 @@ func (e *Engine) talkedTo(t *store.Task, key string) bool {
 }
 
 // reconcile marks sessions whose tmux session vanished while the TUI was
-// closed (reboot, manual kill) as exited, so they can be resumed.
+// closed (reboot, manual kill) as exited, so they can be resumed. It logs how
+// the ones that crashed ended and removes the dead sessions they left.
 func (e *Engine) reconcile() {
-	live := tmux.List()
+	live, dead := tmux.Panes()
+	reasons := exitReasons(dead)
 	e.with(func() {
 		for _, t := range e.state.Tasks {
 			for _, s := range t.Sessions {
 				if s.Status == store.StatusRunning && !live[s.Tmux] {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
+					if reason := reasons[s.Tmux]; reason != "" {
+						t.AddLog("Agent exited" + reason)
+					}
 				}
 			}
+		}
+		for name := range dead {
+			tmux.Kill(name)
 		}
 	})
 }
@@ -1768,7 +1776,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		launch.SystemPrompt = claude.QuickPrompt
 	}
 	tmux.Kill(name)
-	if err := tmux.NewSession(name, worktree, launch.Argv(), env); err != nil {
+	if err := tmux.NewAgentSession(name, worktree, launch.Argv(), env); err != nil {
 		e.with(func() {
 			s.Status = store.StatusExited
 			s.Activity = store.ActivityIdle

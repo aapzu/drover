@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -490,6 +491,178 @@ func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
 	Stop("stubborn")
 	if Has("stubborn") {
 		t.Error("Stop left the session running")
+	}
+}
+
+func waitGone(t *testing.T, name string) {
+	t.Helper()
+	for range 100 {
+		if !exists(name) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Errorf("%s was kept", name)
+}
+
+func waitDead(t *testing.T, name string) Exit {
+	t.Helper()
+	for range 100 {
+		if x, ok := Died(name); ok {
+			return x
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s never died", name)
+	return Exit{}
+}
+
+func TestAgentSessionKeepsWhyItFailedUntilKilled(t *testing.T) {
+	useSocket(t)
+
+	for name, tc := range map[string]struct {
+		script string
+		want   Exit
+	}{
+		"exit status": {"echo oops; sleep 0.3; exit 3", Exit{Status: 3, Output: []string{"oops"}}},
+		"signal":      {"echo one; echo two; echo three; echo four; sleep 0.3; kill -9 $$", Exit{Signal: "kill", Output: []string{"two", "three", "four"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sess := SafeName(name)
+			if err := NewAgentSession(sess, t.TempDir(), []string{"sh", "-c", tc.script}, nil); err != nil {
+				t.Fatal(err)
+			}
+			got := waitDead(t, sess)
+			if got.Status != tc.want.Status || got.Signal != tc.want.Signal || !slices.Equal(got.Output, tc.want.Output) {
+				t.Errorf("Died = %#v, want %#v", got, tc.want)
+			}
+			if Has(sess) || List()[sess] {
+				t.Error("a dead session is reported as running")
+			}
+			if err := Kill(sess); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := Died(sess); ok || exists(sess) {
+				t.Error("Kill left the dead session")
+			}
+		})
+	}
+}
+
+func TestAgentSessionThatSucceedsOrIsStoppedLeavesNothing(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("busy", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("ok", t.TempDir(), []string{"sh", "-c", "exit 0"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitGone(t, "ok")
+	if _, ok := Died("busy"); ok || !Has("busy") {
+		t.Error("a running session is reported dead")
+	}
+	Stop("busy")
+	if exists("busy") {
+		t.Error("Stop left the session")
+	}
+}
+
+func TestPlainSessionDoesNotOutliveAFailure(t *testing.T) {
+	useSocket(t)
+
+	if err := NewSession("shell", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitGone(t, "shell")
+}
+
+func TestAgentSessionKeepsTrailingSemicolons(t *testing.T) {
+	useSocket(t)
+
+	script := "echo foo=$FOO arg=$1; sleep 0.3; exit 1"
+	if err := NewAgentSession("semi", t.TempDir(), []string{"sh", "-c", script, "sh", "b;"}, map[string]string{"FOO": "a;"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitDead(t, "semi").Output; !slices.Equal(got, []string{"foo=a; arg=b;"}) {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestAgentSessionFailsOnADuplicateName(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("twice", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("twice", t.TempDir(), []string{"cat"}, nil); err == nil {
+		t.Error("a second session with the same name started")
+	}
+}
+
+func TestAgentSessionRestartsOverADeadOne(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("again", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "again")
+	if err := Kill("again"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("again", t.TempDir(), []string{"cat"}, nil); err != nil || !Has("again") {
+		t.Errorf("restart = %v, running: %v", err, Has("again"))
+	}
+}
+
+func TestPanesSplitsRunningFromDead(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("busy", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("dead", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "dead")
+	live, dead := Panes()
+	if len(live) != 1 || !live["busy"] || len(dead) != 1 || !dead["dead"] {
+		t.Errorf("live %v, dead %v", live, dead)
+	}
+}
+
+func TestStopKillsADeadSession(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("dead", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "dead")
+	Stop("dead")
+	waitGone(t, "dead")
+}
+
+func TestSignalName(t *testing.T) {
+	for sig, want := range map[string]string{"9": "kill", "15": "term", "kill": "kill", "37": "37", "": ""} {
+		if got := signalName(sig); got != want {
+			t.Errorf("signalName(%q) = %q, want %q", sig, got, want)
+		}
+	}
+}
+
+func TestExitString(t *testing.T) {
+	for _, tc := range []struct {
+		exit Exit
+		want string
+	}{
+		{Exit{Status: 1}, "exit status 1"},
+		{Exit{Signal: "kill"}, "killed by SIGKILL"},
+		{Exit{Signal: "37"}, "killed by signal 37"},
+		{Exit{Status: 2, Output: []string{"a", "b"}}, "exit status 2, last output: a | b"},
+	} {
+		if got := tc.exit.String(); got != tc.want {
+			t.Errorf("%+v: %q, want %q", tc.exit, got, tc.want)
+		}
 	}
 }
 
