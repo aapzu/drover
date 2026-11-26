@@ -494,6 +494,17 @@ func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
 	}
 }
 
+func waitGone(t *testing.T, name string) {
+	t.Helper()
+	for range 100 {
+		if !exists(name) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Errorf("%s was kept", name)
+}
+
 func waitDead(t *testing.T, name string) Exit {
 	t.Helper()
 	for range 100 {
@@ -547,15 +558,7 @@ func TestAgentSessionThatSucceedsOrIsStoppedLeavesNothing(t *testing.T) {
 	if err := NewAgentSession("ok", t.TempDir(), []string{"sh", "-c", "exit 0"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for range 100 {
-		if !exists("ok") {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if exists("ok") {
-		t.Error("a clean exit left the session")
-	}
+	waitGone(t, "ok")
 	if _, ok := Died("busy"); ok || !Has("busy") {
 		t.Error("a running session is reported dead")
 	}
@@ -571,13 +574,35 @@ func TestPlainSessionDoesNotOutliveAFailure(t *testing.T) {
 	if err := NewSession("shell", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	for range 100 {
-		if !exists("shell") {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
+	waitGone(t, "shell")
+}
+
+func TestAgentSessionKeepsTrailingSemicolons(t *testing.T) {
+	useSocket(t)
+
+	script := "echo foo=$FOO arg=$1; sleep 0.3; exit 1"
+	if err := NewAgentSession("semi", t.TempDir(), []string{"sh", "-c", script, "sh", "b;"}, map[string]string{"FOO": "a;"}); err != nil {
+		t.Fatal(err)
 	}
-	t.Error("a failed plain session was kept")
+	if got := waitDead(t, "semi").Output; !slices.Equal(got, []string{"foo=a; arg=b;"}) {
+		t.Errorf("output = %q", got)
+	}
+}
+
+func TestPanesSplitsRunningFromDead(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("busy", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("dead", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "dead")
+	live, dead := Panes()
+	if len(live) != 1 || !live["busy"] || len(dead) != 1 || !dead["dead"] {
+		t.Errorf("live %v, dead %v", live, dead)
+	}
 }
 
 func TestStopKillsADeadSession(t *testing.T) {
@@ -588,9 +613,7 @@ func TestStopKillsADeadSession(t *testing.T) {
 	}
 	waitDead(t, "dead")
 	Stop("dead")
-	if exists("dead") {
-		t.Error("Stop left the dead session")
-	}
+	waitGone(t, "dead")
 }
 
 func TestExitString(t *testing.T) {

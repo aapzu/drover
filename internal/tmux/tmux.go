@@ -89,15 +89,20 @@ func ensureConf() string {
 }
 
 func command(args ...string) *exec.Cmd {
+	return rawCommand(context.Background(), escapeSeparators(args)...)
+}
+
+// escapeSeparators stops tmux from reading an argument ending in ';' as a
+// command separator.
+func escapeSeparators(args []string) []string {
 	escaped := make([]string, len(args))
 	for i, a := range args {
-		// tmux reads an argument ending in ';' as a command separator.
 		if strings.HasSuffix(a, ";") {
 			a = a[:len(a)-1] + `\;`
 		}
 		escaped[i] = a
 	}
-	return rawCommand(context.Background(), escaped...)
+	return escaped
 }
 
 // rawCommand passes args as they are, so a lone ";" chains tmux commands.
@@ -146,10 +151,14 @@ func NewSession(name, dir string, argv []string, env map[string]string) error {
 
 // NewAgentSession is NewSession, except that when argv fails the session stays
 // until Died or Kill, so you can read why. Has and List report it as gone.
+// tmux older than 3.3 rejects the option, and the session then ends as usual.
 func NewAgentSession(name, dir string, argv []string, env map[string]string) error {
-	args := append(newSessionArgs(name, dir, argv, env), ";",
+	args := append(escapeSeparators(newSessionArgs(name, dir, argv, env)), ";",
 		"set-option", "-t", "="+name+":", "remain-on-exit", "failed")
 	_, err := output(rawCommand(context.Background(), args...), "new-session")
+	if err != nil && exists(name) {
+		return nil
+	}
 	return err
 }
 
@@ -183,17 +192,28 @@ func exists(name string) bool {
 // List returns the names of all sessions on the private server that are
 // running a process.
 func List() map[string]bool {
+	live, _ := Panes()
+	return live
+}
+
+// Panes returns the names of the sessions that are running a process, and of
+// those NewAgentSession kept after the process died.
+func Panes() (live, dead map[string]bool) {
+	live, dead = map[string]bool{}, map[string]bool{}
 	out, err := run("list-panes", "-a", "-F", "#{pane_dead} #{session_name}")
-	live := map[string]bool{}
 	if err != nil {
-		return live
+		return live, dead
 	}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if dead, name, ok := strings.Cut(line, " "); ok && dead == "0" {
-			live[name] = true
+		if isDead, name, ok := strings.Cut(line, " "); ok {
+			if isDead == "0" {
+				live[name] = true
+			} else {
+				dead[name] = true
+			}
 		}
 	}
-	return live
+	return live, dead
 }
 
 // Exit is how a NewAgentSession process ended.
@@ -243,8 +263,8 @@ func Died(name string) (Exit, bool) {
 // the history.
 func deadOutput(target string) []string {
 	var lines []string
-	for range 10 {
-		screen, err := run("capture-pane", "-p", "-S", "-100", "-t", target)
+	for i := range 10 {
+		screen, err := run("capture-pane", "-p", "-S", "-20", "-t", target)
 		if err != nil {
 			return nil
 		}
@@ -252,19 +272,21 @@ func deadOutput(target string) []string {
 		banner := false
 		for _, l := range strings.Split(screen, "\n") {
 			l = strings.TrimSpace(l)
-			switch {
-			case strings.HasPrefix(l, "Pane is dead"):
-				banner = true
-			case l != "":
-				lines = append(lines, ansi.Truncate(l, 120, "…"))
+			banner = banner || strings.HasPrefix(l, "Pane is dead")
+			if l != "" && !strings.HasPrefix(l, "Pane is dead") {
+				lines = append(lines, l)
 			}
 		}
-		if banner {
+		if banner || i == 9 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return lines[max(0, len(lines)-exitOutputLines):]
+	tail := lines[max(0, len(lines)-exitOutputLines):]
+	for i, l := range tail {
+		tail[i] = ansi.Truncate(l, 120, "…")
+	}
+	return tail
 }
 
 func Kill(name string) error {

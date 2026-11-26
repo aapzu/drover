@@ -44,21 +44,24 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
-// exitReason says how a vanished agent ended, as ": <how>", and removes the
-// dead session it left. It is empty when the session is already gone.
-func exitReason(name string) string {
-	exit, ok := tmux.Died(name)
-	if !ok {
-		return ""
+// exitReasons says how each dead agent ended, as ": <how>". It runs tmux, so
+// call it without the lock.
+func exitReasons(dead map[string]bool) map[string]string {
+	reasons := map[string]string{}
+	for name := range dead {
+		if exit, ok := tmux.Died(name); ok {
+			reasons[name] = ": " + exit.String()
+		}
 	}
-	tmux.Kill(name)
-	return ": " + exit.String()
+	return reasons
 }
 
 func (e *Engine) Tick() {
 	e.reloadBoard()
-	live := tmux.List()
+	live, dead := tmux.Panes()
+	reasons := exitReasons(dead)
 	var followUps []func()
+	var reaped []string
 
 	e.with(func() {
 		for _, t := range e.state.Tasks {
@@ -76,9 +79,10 @@ func (e *Engine) Tick() {
 				if !live[s.Tmux] && time.Since(s.UpdatedAt) > 3*time.Second && !tmux.Has(s.Tmux) {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
-					reason := exitReason(s.Tmux)
+					reason := reasons[s.Tmux]
 					t.AddLog("Agent exited" + reason)
 					e.alert(t, alertExited, "agent exited"+reason)
+					reaped = append(reaped, s.Tmux)
 				}
 			}
 		}
@@ -97,6 +101,9 @@ func (e *Engine) Tick() {
 		}
 	})
 
+	for _, name := range reaped {
+		tmux.Kill(name)
+	}
 	for _, fn := range followUps {
 		e.work.Go(fn)
 	}

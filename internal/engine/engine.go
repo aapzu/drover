@@ -379,20 +379,24 @@ func (e *Engine) talkedTo(t *store.Task, key string) bool {
 // reconcile marks sessions whose tmux session vanished while the TUI was
 // closed (reboot, manual kill) as exited, so they can be resumed.
 func (e *Engine) reconcile() {
-	live := tmux.List()
+	live, dead := tmux.Panes()
+	reasons := exitReasons(dead)
 	e.with(func() {
 		for _, t := range e.state.Tasks {
 			for _, s := range t.Sessions {
 				if s.Status == store.StatusRunning && !live[s.Tmux] {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
-					if reason := exitReason(s.Tmux); reason != "" {
+					if reason := reasons[s.Tmux]; reason != "" {
 						t.AddLog("Agent exited" + reason)
 					}
 				}
 			}
 		}
 	})
+	for name := range dead {
+		tmux.Kill(name)
+	}
 }
 
 func (e *Engine) CreateTask(title, prompt string) *store.Task {

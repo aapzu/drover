@@ -393,9 +393,6 @@ func TestTickSaysHowACrashedAgentDied(t *testing.T) {
 	if got := desktopNotified("#52 " + card.Title + ":"); len(got) != 1 || !strings.Contains(got[0], "agent exited: killed by SIGKILL") {
 		t.Errorf("notifications = %q", got)
 	}
-	if tmux.Has(name) || len(tmux.List()) != 0 {
-		t.Error("the dead session was not cleaned up")
-	}
 	if _, ok := tmux.Died(name); ok {
 		t.Error("the dead session was not killed")
 	}
