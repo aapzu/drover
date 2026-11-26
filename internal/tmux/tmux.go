@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,14 +140,26 @@ func Available() error {
 
 // NewSession starts argv detached in dir. The session ends when argv exits.
 func NewSession(name, dir string, argv []string, env map[string]string) error {
+	_, err := run(newSessionArgs(name, dir, argv, env)...)
+	return err
+}
+
+// NewAgentSession is NewSession, except that when argv fails the session stays
+// until Died or Kill, so you can read why. Has and List report it as gone.
+func NewAgentSession(name, dir string, argv []string, env map[string]string) error {
+	args := append(newSessionArgs(name, dir, argv, env), ";",
+		"set-option", "-t", "="+name+":", "remain-on-exit", "failed")
+	_, err := output(rawCommand(context.Background(), args...), "new-session")
+	return err
+}
+
+func newSessionArgs(name, dir string, argv []string, env map[string]string) []string {
 	args := []string{"new-session", "-d", "-s", name, "-c", dir, "-x", "220", "-y", "60"}
 	for k, v := range env {
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, "--")
-	args = append(args, argv...)
-	_, err := run(args...)
-	return err
+	return append(args, argv...)
 }
 
 // DisableMouse stops tmux from capturing the mouse in the session, so the
@@ -156,28 +169,106 @@ func DisableMouse(name string) error {
 	return err
 }
 
+// Has reports whether the session is running a process.
 func Has(name string) bool {
+	out, err := run("list-panes", "-t", "="+name+":", "-F", "#{pane_dead}")
+	return err == nil && slices.Contains(strings.Fields(out), "0")
+}
+
+func exists(name string) bool {
 	_, err := run("has-session", "-t", "="+name)
 	return err == nil
 }
 
-// List returns the names of all live sessions on the private server.
+// List returns the names of all sessions on the private server that are
+// running a process.
 func List() map[string]bool {
-	out, err := run("list-sessions", "-F", "#{session_name}")
+	out, err := run("list-panes", "-a", "-F", "#{pane_dead} #{session_name}")
 	live := map[string]bool{}
 	if err != nil {
 		return live
 	}
-	for _, name := range strings.Split(strings.TrimSpace(out), "\n") {
-		if name != "" {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if dead, name, ok := strings.Cut(line, " "); ok && dead == "0" {
 			live[name] = true
 		}
 	}
 	return live
 }
 
+// Exit is how a NewAgentSession process ended.
+type Exit struct {
+	Status int
+	// Signal is the lowercase name of the signal that killed it, such as "kill".
+	Signal string
+	// Output is the last lines the process printed.
+	Output []string
+}
+
+const exitOutputLines = 3
+
+func (x Exit) String() string {
+	how := fmt.Sprintf("exit status %d", x.Status)
+	if x.Signal != "" {
+		how = "killed by SIG" + strings.ToUpper(x.Signal)
+	}
+	if len(x.Output) == 0 {
+		return how
+	}
+	return how + ", last output: " + strings.Join(x.Output, " | ")
+}
+
+// Died reports how the session's process ended, if it did and the session was
+// started by NewAgentSession. The session stays until you Kill it.
+func Died(name string) (Exit, bool) {
+	target := "=" + name + ":"
+	out, err := run("display-message", "-p", "-t", target, "#{pane_dead} #{pane_dead_status} #{pane_dead_signal}")
+	if err != nil {
+		return Exit{}, false
+	}
+	fields := strings.Split(strings.TrimRight(out, "\n"), " ")
+	if len(fields) != 3 || fields[0] != "1" {
+		return Exit{}, false
+	}
+	var x Exit
+	x.Status, _ = strconv.Atoi(fields[1])
+	x.Signal = fields[2]
+	x.Output = deadOutput(target)
+	return x, true
+}
+
+// deadOutput returns the last lines a dead pane printed. tmux marks a pane dead
+// before it has read the process's last output, then clears the screen into
+// the history and shows a "Pane is dead" line, so wait for that line and read
+// the history.
+func deadOutput(target string) []string {
+	var lines []string
+	for range 10 {
+		screen, err := run("capture-pane", "-p", "-S", "-100", "-t", target)
+		if err != nil {
+			return nil
+		}
+		lines = lines[:0]
+		banner := false
+		for _, l := range strings.Split(screen, "\n") {
+			l = strings.TrimSpace(l)
+			switch {
+			case strings.HasPrefix(l, "Pane is dead"):
+				banner = true
+			case l != "":
+				lines = append(lines, ansi.Truncate(l, 120, "…"))
+			}
+		}
+		if banner {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return lines[max(0, len(lines)-exitOutputLines):]
+}
+
 func Kill(name string) error {
-	if !Has(name) {
+	if !exists(name) {
 		return nil
 	}
 	_, err := run("kill-session", "-t", "="+name)
@@ -186,7 +277,7 @@ func Kill(name string) error {
 
 // Stop asks the agent to exit gracefully before killing the session.
 func Stop(name string) {
-	if !Has(name) {
+	if !exists(name) {
 		return
 	}
 	run("send-keys", "-t", "="+name, "C-c")

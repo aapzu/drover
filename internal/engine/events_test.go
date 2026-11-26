@@ -12,6 +12,7 @@ import (
 	"github.com/aapzu/drover/internal/claude"
 	"github.com/aapzu/drover/internal/config"
 	"github.com/aapzu/drover/internal/store"
+	"github.com/aapzu/drover/internal/tmux"
 )
 
 // consume writes hook event lines for a session and applies them on e,
@@ -358,6 +359,45 @@ func TestTickMarksAnAgentWhoseTmuxSessionIsGoneAsExited(t *testing.T) {
 				t.Errorf("notifications = %q", got)
 			}
 		})
+	}
+}
+
+func TestTickSaysHowACrashedAgentDied(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	e := bareEngine(t)
+	name := "repo-52-crashed"
+	if err := tmux.NewAgentSession(name, e.Root, []string{"sh", "-c", "echo worker crashed; sleep 0.3; kill -9 $$"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tmux.Kill(name) })
+	for range 100 {
+		if !tmux.Has(name) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	card := &store.Task{ID: "t1", Number: 52, Title: "Crashing agent", ColumnID: e.board.FirstColumn().ID, Sessions: map[string]*store.Session{
+		store.MainSession: {Key: store.MainSession, Status: store.StatusRunning, Started: true, Tmux: name, UpdatedAt: time.Now().Add(-time.Minute)},
+	}}
+	e.state.Tasks = []*store.Task{card}
+
+	e.Tick()
+	e.work.Wait()
+
+	if s := card.Sessions[store.MainSession]; s.Status != store.StatusExited {
+		t.Errorf("status = %s", s.Status)
+	}
+	if !hasLog(card, "Agent exited: killed by SIGKILL, last output: worker crashed") {
+		t.Errorf("log = %v", card.Log)
+	}
+	if got := desktopNotified("#52 " + card.Title + ":"); len(got) != 1 || !strings.Contains(got[0], "agent exited: killed by SIGKILL") {
+		t.Errorf("notifications = %q", got)
+	}
+	if tmux.Has(name) || len(tmux.List()) != 0 {
+		t.Error("the dead session was not cleaned up")
+	}
+	if _, ok := tmux.Died(name); ok {
+		t.Error("the dead session was not killed")
 	}
 }
 

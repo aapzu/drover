@@ -44,6 +44,17 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 }
 
+// exitReason says how a vanished agent ended, as ": <how>", and removes the
+// dead session it left. It is empty when the session is already gone.
+func exitReason(name string) string {
+	exit, ok := tmux.Died(name)
+	if !ok {
+		return ""
+	}
+	tmux.Kill(name)
+	return ": " + exit.String()
+}
+
 func (e *Engine) Tick() {
 	e.reloadBoard()
 	live := tmux.List()
@@ -65,8 +76,9 @@ func (e *Engine) Tick() {
 				if !live[s.Tmux] && time.Since(s.UpdatedAt) > 3*time.Second && !tmux.Has(s.Tmux) {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
-					t.AddLog("Agent exited")
-					e.alert(t, alertExited, "agent exited")
+					reason := exitReason(s.Tmux)
+					t.AddLog("Agent exited" + reason)
+					e.alert(t, alertExited, "agent exited"+reason)
 				}
 			}
 		}

@@ -386,6 +386,9 @@ func (e *Engine) reconcile() {
 				if s.Status == store.StatusRunning && !live[s.Tmux] {
 					s.Status = store.StatusExited
 					s.Activity = store.ActivityIdle
+					if reason := exitReason(s.Tmux); reason != "" {
+						t.AddLog("Agent exited" + reason)
+					}
 				}
 			}
 		}
@@ -1768,7 +1771,7 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 		launch.SystemPrompt = claude.QuickPrompt
 	}
 	tmux.Kill(name)
-	if err := tmux.NewSession(name, worktree, launch.Argv(), env); err != nil {
+	if err := tmux.NewAgentSession(name, worktree, launch.Argv(), env); err != nil {
 		e.with(func() {
 			s.Status = store.StatusExited
 			s.Activity = store.ActivityIdle

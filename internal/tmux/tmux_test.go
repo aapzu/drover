@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -490,6 +491,120 @@ func TestStopKillsAnAgentThatIgnoresInterrupt(t *testing.T) {
 	Stop("stubborn")
 	if Has("stubborn") {
 		t.Error("Stop left the session running")
+	}
+}
+
+func waitDead(t *testing.T, name string) Exit {
+	t.Helper()
+	for range 100 {
+		if x, ok := Died(name); ok {
+			return x
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("%s never died", name)
+	return Exit{}
+}
+
+func TestAgentSessionKeepsWhyItFailedUntilKilled(t *testing.T) {
+	useSocket(t)
+
+	for name, tc := range map[string]struct {
+		script string
+		want   Exit
+	}{
+		"exit status": {"echo oops; sleep 0.3; exit 3", Exit{Status: 3, Output: []string{"oops"}}},
+		"signal":      {"echo one; echo two; echo three; echo four; sleep 0.3; kill -9 $$", Exit{Signal: "kill", Output: []string{"two", "three", "four"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sess := SafeName(name)
+			if err := NewAgentSession(sess, t.TempDir(), []string{"sh", "-c", tc.script}, nil); err != nil {
+				t.Fatal(err)
+			}
+			got := waitDead(t, sess)
+			if got.Status != tc.want.Status || got.Signal != tc.want.Signal || !slices.Equal(got.Output, tc.want.Output) {
+				t.Errorf("Died = %#v, want %#v", got, tc.want)
+			}
+			if Has(sess) || List()[sess] {
+				t.Error("a dead session is reported as running")
+			}
+			if err := Kill(sess); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := Died(sess); ok || exists(sess) {
+				t.Error("Kill left the dead session")
+			}
+		})
+	}
+}
+
+func TestAgentSessionThatSucceedsOrIsStoppedLeavesNothing(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("busy", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("ok", t.TempDir(), []string{"sh", "-c", "exit 0"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		if !exists("ok") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if exists("ok") {
+		t.Error("a clean exit left the session")
+	}
+	if _, ok := Died("busy"); ok || !Has("busy") {
+		t.Error("a running session is reported dead")
+	}
+	Stop("busy")
+	if exists("busy") {
+		t.Error("Stop left the session")
+	}
+}
+
+func TestPlainSessionDoesNotOutliveAFailure(t *testing.T) {
+	useSocket(t)
+
+	if err := NewSession("shell", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		if !exists("shell") {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("a failed plain session was kept")
+}
+
+func TestStopKillsADeadSession(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("dead", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "dead")
+	Stop("dead")
+	if exists("dead") {
+		t.Error("Stop left the dead session")
+	}
+}
+
+func TestExitString(t *testing.T) {
+	for _, tc := range []struct {
+		exit Exit
+		want string
+	}{
+		{Exit{Status: 1}, "exit status 1"},
+		{Exit{Signal: "kill"}, "killed by SIGKILL"},
+		{Exit{Status: 2, Output: []string{"a", "b"}}, "exit status 2, last output: a | b"},
+	} {
+		if got := tc.exit.String(); got != tc.want {
+			t.Errorf("%+v: %q, want %q", tc.exit, got, tc.want)
+		}
 	}
 }
 
