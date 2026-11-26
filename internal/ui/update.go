@@ -10,9 +10,14 @@ import (
 	selfupdate "github.com/aapzu/drover/internal/update"
 )
 
+const lookupTimeout = 10 * time.Second
+
 var (
 	checkUpdate = func(ctx context.Context, current string) (string, bool) {
 		return (&selfupdate.Client{}).Check(ctx, current)
+	}
+	latestRelease = func(ctx context.Context) (string, error) {
+		return (&selfupdate.Client{}).Latest(ctx)
 	}
 	installUpdate = func(ctx context.Context, tag string) error {
 		exe, err := selfupdate.Executable()
@@ -30,6 +35,14 @@ type updateDoneMsg struct {
 	err error
 }
 
+// latestReleaseMsg is what asking GitHub for the newest release found. install
+// tells whether it was asked for to install it, or only to report it.
+type latestReleaseMsg struct {
+	tag     string
+	err     error
+	install bool
+}
+
 // WithVersion tells the board which release it is, so it can look for a newer
 // one. Without a release version it never checks.
 func (m Model) WithVersion(version string) Model {
@@ -37,13 +50,14 @@ func (m Model) WithVersion(version string) Model {
 	return m
 }
 
+// checkUpdateCmd is the check at startup, which asks GitHub at most once a day.
 func (m Model) checkUpdateCmd() tea.Cmd {
 	if m.snap.Board.DisableUpdateCheck || !selfupdate.Releasable(m.version) {
 		return nil
 	}
 	current := m.version
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
 		defer cancel()
 		if tag, ok := checkUpdate(ctx, current); ok {
 			return updateAvailableMsg(tag)
@@ -52,16 +66,50 @@ func (m Model) checkUpdateCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) confirmUpdate() {
+// lookUpLatest asks GitHub for the newest release, never the daily cache.
+func (m *Model) lookUpLatest(install bool) tea.Cmd {
 	if m.updating {
 		m.setFlash("Already updating drover…")
-		return
+		return nil
 	}
-	if m.updateTag == "" {
-		m.setFlash("drover is up to date")
-		return
+	if !selfupdate.Releasable(m.version) {
+		m.setFlash("This is a development build; install a release to update")
+		return nil
 	}
-	tag := m.updateTag
+	m.setFlash("Looking for a newer drover…")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), lookupTimeout)
+		defer cancel()
+		tag, err := latestRelease(ctx)
+		return latestReleaseMsg{tag: tag, err: err, install: install}
+	}
+}
+
+func (m Model) latestReleaseFound(msg latestReleaseMsg) Model {
+	if msg.err != nil {
+		m.setFlash("Couldn't look for updates: " + msg.err.Error())
+		return m
+	}
+	if !selfupdate.Newer(m.version, msg.tag) {
+		m.updateTag = ""
+		m.setFlash(fmt.Sprintf("drover %s is up to date", m.version))
+		return m
+	}
+	if msg.tag == m.installedTag {
+		m.setFlash(msg.tag + " is already installed. Restart the board to use it")
+		return m
+	}
+	m.updateTag = msg.tag
+	if !msg.install || m.updating || m.mode != modeBoard {
+		m.setFlash(msg.tag + " is available. Press U to install it")
+		return m
+	}
+	m.flash = ""
+	m.confirmUpdate(msg.tag)
+	return m
+}
+
+func (m *Model) confirmUpdate(tag string) {
 	m.mode = modeConfirm
 	m.confirmText = fmt.Sprintf("Update drover from %s to %s? Restart the board afterwards to use it. (y/N)", m.version, tag)
 	m.confirmAction = func() tea.Cmd {
@@ -81,6 +129,7 @@ func (m Model) updateFinished(msg updateDoneMsg) Model {
 		return m
 	}
 	m.updateTag = ""
+	m.installedTag = msg.tag
 	m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
 	return m
 }

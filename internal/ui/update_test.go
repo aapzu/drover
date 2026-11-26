@@ -10,20 +10,31 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func fakeUpdates(t *testing.T) (checks *[]string, installs *[]string) {
+type fakeGitHub struct {
+	latest           string
+	latestErr        error
+	lookups          int
+	checks, installs []string
+}
+
+func fakeUpdates(t *testing.T) *fakeGitHub {
 	t.Helper()
-	checks, installs = new([]string), new([]string)
-	origCheck, origInstall := checkUpdate, installUpdate
-	t.Cleanup(func() { checkUpdate, installUpdate = origCheck, origInstall })
+	f := &fakeGitHub{latest: "v1.1.0"}
+	origCheck, origLatest, origInstall := checkUpdate, latestRelease, installUpdate
+	t.Cleanup(func() { checkUpdate, latestRelease, installUpdate = origCheck, origLatest, origInstall })
 	checkUpdate = func(_ context.Context, current string) (string, bool) {
-		*checks = append(*checks, current)
+		f.checks = append(f.checks, current)
 		return "v1.1.0", true
 	}
+	latestRelease = func(context.Context) (string, error) {
+		f.lookups++
+		return f.latest, f.latestErr
+	}
 	installUpdate = func(_ context.Context, tag string) error {
-		*installs = append(*installs, tag)
+		f.installs = append(f.installs, tag)
 		return nil
 	}
-	return checks, installs
+	return f
 }
 
 func send(m Model, msg tea.Msg) Model {
@@ -32,7 +43,7 @@ func send(m Model, msg tea.Msg) Model {
 }
 
 func TestInitChecksForUpdatesOnlyOnReleases(t *testing.T) {
-	checks, _ := fakeUpdates(t)
+	f := fakeUpdates(t)
 	for _, c := range []struct {
 		name, version string
 		disabled      bool
@@ -44,7 +55,7 @@ func TestInitChecksForUpdatesOnlyOnReleases(t *testing.T) {
 		{"disabled in drover.json", "v1.0.0", true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			*checks = nil
+			f.checks = nil
 			m := testModel(120, 40, 1, 0).WithVersion(c.version)
 			m.snap.Board.DisableUpdateCheck = c.disabled
 			cmd := m.checkUpdateCmd()
@@ -62,7 +73,7 @@ func TestInitChecksForUpdatesOnlyOnReleases(t *testing.T) {
 }
 
 func TestUpdateNoticeAndInstall(t *testing.T) {
-	_, installs := fakeUpdates(t)
+	f := fakeUpdates(t)
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
 
 	if got := m.renderFooter(); strings.Contains(got, "available") {
@@ -73,14 +84,13 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 		t.Fatalf("footer doesn't announce the update:\n%s", got)
 	}
 
-	next, _ := m.updateBoard(keyPress("U"))
-	m = next.(Model)
+	m = pressAndResolve(t, m, "U")
 	if m.mode != modeConfirm || !strings.Contains(m.confirmText, "v1.0.0 to v1.1.0") {
 		t.Fatalf("U didn't ask to confirm: mode %v, %q", m.mode, m.confirmText)
 	}
 	next, cmd := m.updateConfirm(keyPress("y"))
 	m = next.(Model)
-	if len(*installs) != 0 {
+	if len(f.installs) != 0 {
 		t.Fatal("installed before the command ran")
 	}
 	msgs := runSequence(cmd)
@@ -91,13 +101,13 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	if !strings.Contains(m.renderFooter(), "updating drover") {
 		t.Errorf("footer = %q", m.renderFooter())
 	}
-	again, _ := m.updateBoard(keyPress("U"))
-	if got := again.(Model); got.mode != modeBoard || !strings.Contains(got.flash, "Already updating") {
+	again, cmd2 := m.updateBoard(keyPress("U"))
+	if got := again.(Model); cmd2 != nil || got.mode != modeBoard || !strings.Contains(got.flash, "Already updating") {
 		t.Errorf("U during an install: mode %v, flash %q", got.mode, got.flash)
 	}
 	done := msgs[1].(updateDoneMsg)
-	if len(*installs) != 1 || (*installs)[0] != "v1.1.0" {
-		t.Fatalf("installs = %v", *installs)
+	if len(f.installs) != 1 || f.installs[0] != "v1.1.0" {
+		t.Fatalf("installs = %v", f.installs)
 	}
 	m = send(m, done)
 	if m.updateTag != "" || !strings.Contains(m.flash, "Updated drover to v1.1.0") {
@@ -106,13 +116,12 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 }
 
 func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
-	_, installs := fakeUpdates(t)
+	f := fakeUpdates(t)
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
 	m = send(m, updateAvailableMsg("v1.1.0"))
 
-	next, _ := m.updateBoard(keyPress("U"))
-	next, cmd := next.(Model).updateConfirm(keyPress("n"))
-	if cmd != nil || len(*installs) != 0 || next.(Model).updateTag != "v1.1.0" {
+	next, cmd := pressAndResolve(t, m, "U").updateConfirm(keyPress("n"))
+	if cmd != nil || len(f.installs) != 0 || next.(Model).updateTag != "v1.1.0" {
 		t.Error("declining changed something")
 	}
 
@@ -122,11 +131,120 @@ func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
 	}
 }
 
-func TestUpdateKeyWithoutAnUpdateSaysSo(t *testing.T) {
+// pressAndResolve presses a key that looks up the newest release and feeds the
+// answer back to the board, as the program would.
+func pressAndResolve(t *testing.T, m Model, key string) Model {
+	t.Helper()
+	next, cmd := m.updateBoard(keyPress(key))
+	if cmd == nil {
+		t.Fatalf("%s didn't look anything up; flash %q", key, next.(Model).flash)
+	}
+	got := cmd()
+	msg, ok := got.(latestReleaseMsg)
+	if !ok {
+		t.Fatalf("%s sent %T, want latestReleaseMsg", key, got)
+	}
+	return send(next.(Model), msg)
+}
+
+func TestInstallLooksUpTheLatestReleaseInsteadOfTrustingTheNotice(t *testing.T) {
+	f := fakeUpdates(t)
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
-	next, _ := m.updateBoard(keyPress("U"))
-	if got := next.(Model); got.mode != modeBoard || !strings.Contains(got.flash, "up to date") {
-		t.Errorf("mode %v, flash %q", got.mode, got.flash)
+
+	m = pressAndResolve(t, m, "U")
+	if f.lookups != 1 || m.mode != modeConfirm || !strings.Contains(m.confirmText, "v1.0.0 to v1.1.0") {
+		t.Errorf("no notice yet: lookups %d, mode %v, %q", f.lookups, m.mode, m.confirmText)
+	}
+
+	m = send(testModel(120, 40, 1, 0).WithVersion("v1.0.0"), updateAvailableMsg("v1.0.5"))
+	f.latest = "v1.2.0"
+	m = pressAndResolve(t, m, "U")
+	if !strings.Contains(m.confirmText, "v1.0.0 to v1.2.0") {
+		t.Errorf("stale notice won: %q", m.confirmText)
+	}
+}
+
+func TestInstallWhenUpToDateOrOffline(t *testing.T) {
+	f := fakeUpdates(t)
+	base := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+
+	f.latest = "v1.0.0"
+	m := pressAndResolve(t, send(base, updateAvailableMsg("v1.1.0")), "U")
+	if m.mode != modeBoard || m.updateTag != "" || !strings.Contains(m.flash, "up to date") {
+		t.Errorf("up to date: mode %v, tag %q, flash %q", m.mode, m.updateTag, m.flash)
+	}
+
+	f.latestErr = errors.New("offline")
+	m = pressAndResolve(t, base, "U")
+	if m.mode != modeBoard || !strings.Contains(m.flash, "offline") {
+		t.Errorf("offline: mode %v, flash %q", m.mode, m.flash)
+	}
+}
+
+func TestCheckKeyReportsWithoutInstalling(t *testing.T) {
+	f := fakeUpdates(t)
+	base := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+
+	m := pressAndResolve(t, base, "V")
+	if f.lookups != 1 || m.mode != modeBoard || m.updateTag != "v1.1.0" || !strings.Contains(m.flash, "v1.1.0 is available") {
+		t.Errorf("newer: lookups %d, mode %v, tag %q, flash %q", f.lookups, m.mode, m.updateTag, m.flash)
+	}
+	if len(f.installs) != 0 {
+		t.Error("checking installed something")
+	}
+
+	f.latest = "v1.0.0"
+	m = pressAndResolve(t, m, "V")
+	if m.updateTag != "" || !strings.Contains(m.flash, "v1.0.0 is up to date") {
+		t.Errorf("up to date: tag %q, flash %q", m.updateTag, m.flash)
+	}
+
+	f.latestErr = errors.New("offline")
+	m = pressAndResolve(t, base, "V")
+	if m.updateTag != "" || !strings.Contains(m.flash, "offline") {
+		t.Errorf("offline: tag %q, flash %q", m.updateTag, m.flash)
+	}
+}
+
+func TestLateInstallLookupDoesNotHijackAnotherModeOrInstallTwice(t *testing.T) {
+	fakeUpdates(t)
+	base := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+	msg := latestReleaseMsg{tag: "v1.1.0", install: true}
+
+	renaming := base
+	renaming.mode = modeRename
+	if got := renaming.latestReleaseFound(msg); got.mode != modeRename || got.updateTag != "v1.1.0" {
+		t.Errorf("rename hijacked: mode %v, tag %q", got.mode, got.updateTag)
+	}
+
+	updating := base
+	updating.updating = true
+	if got := updating.latestReleaseFound(msg); got.mode != modeBoard {
+		t.Errorf("opened a second install while one runs: mode %v", got.mode)
+	}
+}
+
+func TestLookupAfterInstallSaysItIsAlreadyInstalled(t *testing.T) {
+	fakeUpdates(t)
+	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+	m = send(m, updateDoneMsg{tag: "v1.1.0"})
+
+	for _, key := range []string{"U", "V"} {
+		got := pressAndResolve(t, m, key)
+		if got.mode != modeBoard || got.updateTag != "" || !strings.Contains(got.flash, "already installed") {
+			t.Errorf("%s: mode %v, tag %q, flash %q", key, got.mode, got.updateTag, got.flash)
+		}
+	}
+}
+
+func TestUpdateKeysRefuseDevBuilds(t *testing.T) {
+	f := fakeUpdates(t)
+	for _, key := range []string{"U", "V"} {
+		m := testModel(120, 40, 1, 0).WithVersion("")
+		next, cmd := m.updateBoard(keyPress(key))
+		if cmd != nil || f.lookups != 0 || !strings.Contains(next.(Model).flash, "development build") {
+			t.Errorf("%s: cmd %v, lookups %d, flash %q", key, cmd != nil, f.lookups, next.(Model).flash)
+		}
 	}
 }
 
