@@ -107,8 +107,10 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	if quit == nil {
 		t.Fatal("the board didn't quit after the install")
 	}
-	if _, ok := quit().(tea.QuitMsg); !ok {
-		t.Errorf("command returned %T, want tea.QuitMsg", quit())
+	if got := quit(); got == nil {
+		t.Fatal("command returned no message")
+	} else if _, ok := got.(tea.QuitMsg); !ok {
+		t.Errorf("command returned %T, want tea.QuitMsg", got)
 	}
 }
 
