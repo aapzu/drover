@@ -45,7 +45,7 @@ func (m Model) layout() layout {
 	l := layout{bodyY: headerHeight, bodyH: m.bodyHeight()}
 	l.assistantW, l.boardW = m.assistantWidth(), m.boardWidth()
 	l.quickW = m.quickWidth()
-	l.columnsW = l.boardW - l.quickW
+	l.columnsW = m.columnsWidth()
 	l.assistantFull = m.assist.full && l.assistantW > 0
 	if !m.prefs.HidePreview && !l.assistantFull && l.bodyH >= minPreviewHeight+minBoardHeight {
 		h := m.prefs.PreviewHeight
@@ -221,9 +221,11 @@ func (l layout) hitTest(m Model, x, y int) hit {
 	if l.quickW > 0 && x >= l.columnsW {
 		h := hit{kind: hitQuick}
 		tasks := m.quickTasks()
-		k := (y-l.bodyY-1)/quickRowHeight + m.quickStart(quickRows(l.boardH))
-		if y > l.bodyY && k < len(tasks) && k-m.quickStart(quickRows(l.boardH)) < quickRows(l.boardH) {
-			h.task = tasks[k]
+		rows := quickRows(l.boardH)
+		start := m.quickStart(rows)
+		row := (y - l.bodyY - 1) / quickRowHeight
+		if y > l.bodyY && row < rows && start+row < len(tasks) {
+			h.task = tasks[start+row]
 		}
 		return h
 	}

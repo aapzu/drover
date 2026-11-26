@@ -129,7 +129,7 @@ func validate(root string, req inbox.Request) error {
 	if err != nil {
 		return err
 	}
-	if t := state.ByNumber(req.Number); t == nil || t.Quick {
+	if state.ByNumber(req.Number) == nil {
 		return fmt.Errorf("no card #%d", req.Number)
 	}
 	return nil

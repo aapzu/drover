@@ -402,8 +402,9 @@ func (e *Engine) createTask(title, prompt, columnID string) *store.Task {
 	return e.addTask(&store.Task{Title: title, Prompt: prompt, ColumnID: columnID})
 }
 
-// addTask gives t its id, number and timestamps and adds it to the board. A t
-// with no column and no Quick flag lands in the first column.
+// addTask gives t its id, number and timestamps and adds it to the board. A
+// quick task keeps an empty column; any other task with none lands in the first
+// column.
 func (e *Engine) addTask(t *store.Task) *store.Task {
 	e.with(func() {
 		now := time.Now()
@@ -450,22 +451,21 @@ func (e *Engine) NewQuick() (*store.Task, error) {
 	e.mu.Lock()
 	col := e.board.QuickColumn()
 	e.mu.Unlock()
-	task := e.addTask(&store.Task{Quick: true})
-	_, owner, unlock := e.lockGroup(task.ID)
-	defer unlock()
-	if err := e.activate(task, col, col, "", false, true); err != nil {
-		return task, errors.Join(fmt.Errorf("starting quick task: %w", err), e.discardCard(task, owner))
-	}
-	return task, nil
+	return e.startCard(e.addTask(&store.Task{Quick: true}), col, false, "quick task")
 }
 
 // startSession adds a card in col and starts its agent.
 func (e *Engine) startSession(col config.Column) (*store.Task, error) {
-	task := e.createTask("", "", col.ID)
+	return e.startCard(e.createTask("", "", col.ID), col, true, "session")
+}
+
+// startCard starts task's agent under col, running col's enter group when
+// runEnter is set, and discards the card if that fails.
+func (e *Engine) startCard(task *store.Task, col config.Column, runEnter bool, what string) (*store.Task, error) {
 	_, owner, unlock := e.lockGroup(task.ID)
 	defer unlock()
-	if err := e.activate(task, col, col, "", true, true); err != nil {
-		return task, errors.Join(fmt.Errorf("starting session: %w", err), e.discardCard(task, owner))
+	if err := e.activate(task, col, col, "", runEnter, true); err != nil {
+		return task, errors.Join(fmt.Errorf("starting %s: %w", what, err), e.discardCard(task, owner))
 	}
 	return task, nil
 }
@@ -507,7 +507,7 @@ func (e *Engine) discardCard(t, owner *store.Task) error {
 // the agent, its worktree and its unused branch. A card that is titled, has a
 // prompt or an issue, has left the first column or the review lane's entry
 // column, has a started conversation or has uncommitted changes in its
-// worktree is kept.
+// worktree is kept. A quick task has no column, so it counts as at the start.
 func (e *Engine) DiscardSilent(id string) error {
 	t, owner, unlock := e.lockGroup(id)
 	defer unlock()

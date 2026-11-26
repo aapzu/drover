@@ -14,11 +14,10 @@ import (
 const (
 	quickKey        = "w"
 	quickPanelWidth = 34
-	// quickRowHeight is a quick task's title line and its status line.
-	quickRowHeight = 2
+	quickRowHeight  = 2
 )
 
-// quickTasks lists the quick tasks, oldest first so a row keeps its place.
+// quickTasks lists the quick tasks in creation order, so a row keeps its place.
 func (m Model) quickTasks() []*store.Task {
 	var out []*store.Task
 	for _, t := range m.snap.Tasks {
@@ -26,32 +25,38 @@ func (m Model) quickTasks() []*store.Task {
 			out = append(out, t)
 		}
 	}
-	slices.SortFunc(out, func(a, b *store.Task) int { return a.Number - b.Number })
 	return out
+}
+
+// quickIndex is the position of the selected quick task in tasks, the first
+// when none is selected, and -1 when there are none.
+func (m Model) quickIndex(tasks []*store.Task) int {
+	if len(tasks) == 0 {
+		return -1
+	}
+	return max(0, slices.IndexFunc(tasks, func(t *store.Task) bool { return t.ID == m.quickSel }))
 }
 
 // quickCurrent is the selected quick task, the first one when none is.
 func (m Model) quickCurrent() *store.Task {
 	tasks := m.quickTasks()
-	if len(tasks) == 0 {
-		return nil
+	if i := m.quickIndex(tasks); i >= 0 {
+		return tasks[i]
 	}
-	for _, t := range tasks {
-		if t.ID == m.quickSel {
-			return t
-		}
-	}
-	return tasks[0]
+	return nil
 }
 
 // quickWidth is the width of the quick-task panel beside the board, 0 while
 // it is hidden or the board would get too narrow.
 func (m Model) quickWidth() int {
-	if !m.prefs.ShowQuick || m.boardWidth()-quickPanelWidth < minColumnWidth {
+	if !m.prefs.ShowQuick || !m.quickFits() {
 		return 0
 	}
 	return quickPanelWidth
 }
+
+// quickFits reports whether the board stays wide enough with the panel beside it.
+func (m Model) quickFits() bool { return m.boardWidth()-quickPanelWidth >= minColumnWidth }
 
 // columnsWidth is the width of the board's columns: what the quick-task panel
 // leaves of the board.
@@ -63,25 +68,27 @@ func quickRows(height int) int { return max(1, (height-2)/quickRowHeight) }
 // quickStart is the index of the first quick task shown, keeping the selected
 // one in view.
 func (m Model) quickStart(rows int) int {
-	sel := slices.IndexFunc(m.quickTasks(), func(t *store.Task) bool { return t == m.quickCurrent() })
-	return max(0, sel-rows+1)
+	return max(0, m.quickIndex(m.quickTasks())-rows+1)
 }
 
-// openQuick shows the panel and moves the keyboard to it.
+// openQuick shows the panel and moves the keyboard to it, or flashes a notice
+// when the terminal is too narrow for it.
 func (m *Model) openQuick() {
-	m.prefs.ShowQuick = true
-	m.savePrefs()
-	if m.quickWidth() == 0 {
-		m.prefs.ShowQuick = false
+	if !m.quickFits() {
 		m.setFlash("The terminal is too narrow for the quick tasks panel")
 		return
 	}
+	m.prefs.ShowQuick = true
+	m.savePrefs()
 	m.mode = modeQuick
 }
 
+// updateQuick handles the panel's own keys. The keys listed last go to
+// updateBoard, which acts on the selected quick task because current() returns
+// it in modeQuick; any other key is ignored so it can't reach a board card.
 func (m Model) updateQuick(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	tasks := m.quickTasks()
-	sel := slices.IndexFunc(tasks, func(t *store.Task) bool { return t == m.quickCurrent() })
+	sel := m.quickIndex(tasks)
 	switch msg.String() {
 	case "esc":
 		m.mode = modeBoard
@@ -135,17 +142,14 @@ func (m Model) renderQuick(width, height int) string {
 		}
 		lines = strings.Split(ansi.Wordwrap(dim.Render("No quick tasks. "+hint+": a session with no card, column or PR."), inner, " "), "\n")
 	}
-	cur := m.quickCurrent()
+	cur := m.quickIndex(tasks)
 	rows := quickRows(height)
 	start := m.quickStart(rows)
 	for i := start; i < min(len(tasks), start+rows); i++ {
 		t := tasks[i]
-		marker, title := "  ", fmt.Sprintf("#%d %s", t.Number, taskTitle(t))
-		if t == cur && focused {
-			marker = "▸ "
-			title = activeText.Render(ansi.Truncate(title, inner-2, "…"))
-		} else {
-			title = ansi.Truncate(title, inner-2, "…")
+		marker, title := "  ", ansi.Truncate(fmt.Sprintf("#%d %s", t.Number, taskTitle(t)), inner-2, "…")
+		if i == cur && focused {
+			marker, title = "▸ ", activeText.Render(title)
 		}
 		lines = append(lines, marker+title, "  "+ansi.Truncate(m.status(t), inner-2, "…"))
 	}

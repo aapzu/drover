@@ -50,8 +50,7 @@ type Task struct {
 	Title    string `json:"title"`
 	Prompt   string `json:"prompt"`
 	ColumnID string `json:"columnId"`
-	// Quick marks a session with no column, no PR handling and no place on the
-	// board: it lives in the quick-task panel and the assistant never sees it.
+	// Quick marks a session with no column and no PR handling.
 	Quick bool   `json:"quick,omitempty"`
 	Issue *Issue `json:"issue,omitempty"`
 	PR    *PR    `json:"pr,omitempty"`
@@ -253,10 +252,11 @@ func find(tasks []*Task, id string) *Task {
 	return nil
 }
 
-// ByNumber returns the task numbered n, or nil.
+// ByNumber returns the card numbered n, or nil. Quick tasks are never found,
+// so neither the CLI nor the assistant can reach one.
 func (s *State) ByNumber(n int) *Task {
 	for _, t := range s.Tasks {
-		if t.Number == n {
+		if t.Number == n && !t.Quick {
 			return t
 		}
 	}

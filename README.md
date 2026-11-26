@@ -69,7 +69,7 @@ Press `?` for every shortcut, or `ctrl+k` to search cards (enter opens one full 
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge, the preview's top border or the review lane's
-divider to resize, click the preview to type into the agent, and click the assistant
+divider to resize, click the preview to type into the agent, click the assistant
 panel to type into it, and click a row of the quick tasks panel to select it
 (double-click attaches). Dragging over the preview or the assistant panel
 selects text and copies it, without the panes' borders; double click selects a
@@ -646,23 +646,25 @@ column, no automations and no PR handling. It can still edit code. Use it for
 "try this", "explain that" or a scratch fix you don't want a card for.
 
 `w` shows the quick tasks panel beside the board and moves the keyboard to it
-(`w` again hides it, `esc` goes back to the board and leaves it showing). There
-`n` starts a quick task and attaches to it, `↑↓` select, `enter` attaches, `r`
-resumes, `S` suspends, `s` sends a message, `E` renames and `x` closes one, as on
-cards. The first message you type becomes its title, and leaving a new one
-without typing discards it.
+(it stays hidden on a terminal too narrow for it). In the panel `w` hides it
+and `esc` returns to the board, leaving it showing; `w` on the board focuses it
+again. There `n` starts a quick task and attaches to it, `↑↓` select, `enter`
+attaches, `tab` types into it from the preview, `r` resumes, `S` suspends, `s`
+sends a message, `E` renames and `x` deletes one, as on cards; the last three
+and `x` return the keyboard to the board. The first message you type becomes its
+title, and leaving a new one without typing discards it.
 
-Quick tasks never reach the assistant: `drover list` leaves them out and
+The assistant never sees quick tasks: `drover list` leaves them out and
 `drover move`, `edit` and `rm` refuse their numbers. Their agent is told not to
 open a pull request, and drover doesn't watch for one. They count against
-`maxConcurrent` and `idleTimeoutMinutes` like any agent.
+`maxConcurrent` and `idleTimeoutMinutes` like any agent, and use
+`defaultPermissionMode` and `defaultModel`.
 
 **`quickWorkdir`** (`"worktree"`, the default, or `"root"`) says where they run.
 `worktree` gives each its own worktree and branch, so its edits never touch your
 checkout; closing the task removes the worktree and keeps the branch, as
 deleting a card does. `root` runs them in the main checkout, which starts
-faster but shares your uncommitted changes. Quick tasks use `defaultPermissionMode`
-and `defaultModel`.
+faster but shares your uncommitted changes.
 
 ## Importing Claude Code agents
 

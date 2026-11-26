@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aapzu/drover/internal/inbox"
 	"github.com/aapzu/drover/internal/store"
 )
 
@@ -134,5 +135,64 @@ func TestSilentQuickTaskIsDiscarded(t *testing.T) {
 	}
 	if n := len(e.Snapshot().Tasks); n != 0 {
 		t.Errorf("%d tasks left after leaving a quick task without a message", n)
+	}
+}
+
+func TestQuickTaskIgnoresPromptsThatMoveOrAttachCards(t *testing.T) {
+	e, _ := quickEngine(t, "")
+
+	task, err := e.NewQuick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{"open a PR", "REVIEWME"} {
+		before := e.Snapshot().Tasks[0].Sessions[store.MainSession].UpdatedAt
+		if err := e.Send(task.ID, prompt); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, e, "the turn for "+prompt+" to end", func(t *store.Task) bool {
+			s := t.Sessions[store.MainSession]
+			return s != nil && s.Started && s.Activity == store.ActivityIdle && s.UpdatedAt.After(before)
+		})
+	}
+	pollRounds(t, e, 2)
+	got := e.Snapshot().Tasks[0]
+	if got.PR != nil || got.PRMovePending || got.ColumnID != "" {
+		t.Errorf("a prompt reached the quick task's lifecycle: pr=%v pending=%v column=%q", got.PR, got.PRMovePending, got.ColumnID)
+	}
+}
+
+func TestQuickTaskWithAMessageIsKeptWhenYouLeaveIt(t *testing.T) {
+	e, _ := quickEngine(t, "")
+
+	task, err := e.NewQuick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Send(task.ID, "TWEAK the footer"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, e, "the turn to end", func(t *store.Task) bool {
+		s := t.Sessions[store.MainSession]
+		return s != nil && s.Started && s.Activity == store.ActivityIdle
+	})
+	if err := e.DiscardSilent(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(e.Snapshot().Tasks); n != 1 {
+		t.Errorf("%d tasks after leaving a quick task that was talked to, want it kept", n)
+	}
+}
+
+func TestQuickTaskCannotBeEditedFromTheCLI(t *testing.T) {
+	e, _ := quickEngine(t, "")
+
+	task, err := e.NewQuick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := "renamed"
+	if _, err := e.inboxEdit(inbox.Request{Op: inbox.OpEdit, Number: task.Number, Title: &title}); err == nil {
+		t.Error("the CLI edited a quick task")
 	}
 }

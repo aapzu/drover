@@ -92,7 +92,7 @@ func (e *Engine) taskID(number int) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	t := e.state.ByNumber(number)
-	if t == nil || t.Quick {
+	if t == nil {
 		return "", fmt.Errorf("no card #%d", number)
 	}
 	return t.ID, nil

@@ -40,6 +40,12 @@ type dragState struct {
 
 const doubleClick = 400 * time.Millisecond
 
+// isDoubleClick reports whether this press on card id follows one on it a
+// moment ago.
+func (m Model) isDoubleClick(id string) bool {
+	return m.drag.clickFor == id && time.Since(m.drag.clickAt) < doubleClick
+}
+
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter && m.mode != modeAssistant && m.mode != modeQuick {
 		m.drag = dragState{}
@@ -76,7 +82,9 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.col = h.col
-		m.mode = modeBoard
+		if m.mode == modeQuick {
+			m.mode = modeBoard
+		}
 		key := tea.KeyMsg{Type: tea.KeyDown}
 		if msg.Button == tea.MouseButtonWheelUp {
 			key.Type = tea.KeyUp
@@ -92,7 +100,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeBoard
 			m.col = h.col
 			m.selected[m.columns()[h.col].ID] = h.task.ID
-			if m.drag.clickFor == h.task.ID && time.Since(m.drag.clickAt) < doubleClick {
+			if m.isDoubleClick(h.task.ID) {
 				m.drag = dragState{}
 				return m.updateBoard(tea.KeyMsg{Type: tea.KeyEnter})
 			}
@@ -107,7 +115,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				break
 			}
 			m.quickSel = h.task.ID
-			if m.drag.clickFor == h.task.ID && time.Since(m.drag.clickAt) < doubleClick {
+			if m.isDoubleClick(h.task.ID) {
 				m.drag = dragState{}
 				return m.updateQuick(tea.KeyMsg{Type: tea.KeyEnter})
 			}

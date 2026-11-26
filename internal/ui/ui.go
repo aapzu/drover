@@ -109,8 +109,8 @@ type Model struct {
 	startingReview bool
 	startingQuick  bool
 
-	// quickSel is the quick task selected in the quick-task panel.
-	quickSel string
+	quickSel  string
+	liveQuick bool
 
 	// busy holds the actions the board started and is waiting on, one per
 	// card, unlike snap.Busy, which holds the engine's own steps. The map is
@@ -546,9 +546,14 @@ func containsAllWords(text, words string) bool {
 }
 
 func (m Model) current() *store.Task {
-	if m.mode == modeQuick {
+	if m.mode == modeQuick || m.mode == modeLive && m.liveQuick {
 		return m.quickCurrent()
 	}
+	return m.boardCurrent()
+}
+
+// boardCurrent is the card selected in the board's current column.
+func (m Model) boardCurrent() *store.Task {
 	if m.col >= len(m.columns()) {
 		return nil
 	}
@@ -575,7 +580,7 @@ func (m Model) task(id string) *store.Task {
 }
 
 func (m Model) selectedIndex() int {
-	cur := m.current()
+	cur := m.boardCurrent()
 	for i, t := range m.tasksForColumn(m.col) {
 		if cur != nil && t.ID == cur.ID {
 			return i
@@ -625,6 +630,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		if m.assist.full && m.assistantFits() == 0 {
 			m.assist.full = false
+		}
+		if m.mode == modeQuick && m.quickWidth() == 0 {
+			m.mode = modeBoard
 		}
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
@@ -811,8 +819,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.mode == modeBoard {
 				m.openQuick()
 			}
+			m.setFlash("")
 			if cmd, ok := m.attach(msg.task.ID); ok {
-				m.setFlash("")
 				return m, cmd
 			}
 			return m, nil
@@ -1331,6 +1339,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := t.ID
 		m.mode = modeConfirm
 		m.confirmText = fmt.Sprintf("Delete #%d %q? Its agent is stopped and worktree removed; the branch is kept. (y/N)", t.Number, taskTitle(t))
+		if t.Quick {
+			m.confirmText = fmt.Sprintf("Delete quick task #%d %q? Its agent is stopped and its worktree removed with any uncommitted changes; the branch is kept. (y/N)", t.Number, taskTitle(t))
+			if m.snap.Board.QuickDir() == config.QuickRoot {
+				m.confirmText = fmt.Sprintf("Delete quick task #%d %q? Its agent is stopped; the main checkout is left as it is. (y/N)", t.Number, taskTitle(t))
+			}
+		}
 		if len(store.Members(m.snap.Tasks, store.Owner(m.snap.Tasks, t))) > 1 {
 			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, taskTitle(t))
 		}

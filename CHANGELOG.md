@@ -4,7 +4,7 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
-- Quick tasks: agent sessions with no card, column or PR that can still edit code and stay hidden from the assistant; `w` opens their panel and the new Quick tasks run in setting picks a worktree or the main checkout
+- Add quick tasks: agent sessions with no card, column or PR, opened with `w`; the Quick tasks run in setting picks a worktree or the main checkout
 - Fix the import view overflowing the screen when there are many sessions, issues or PRs; it now scrolls with the cursor
 
 ## [0.19.1](https://github.com/aapzu/drover/compare/v0.19.0...v0.19.1) - 2026-11-25

@@ -391,7 +391,6 @@ func (b *Board) Tracker() string {
 	return TrackerLinear
 }
 
-// Where quick tasks run: in a worktree of their own, or in the main checkout.
 const (
 	QuickWorktree = "worktree"
 	QuickRoot     = "root"
