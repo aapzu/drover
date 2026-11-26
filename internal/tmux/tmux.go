@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -149,14 +150,18 @@ func NewSession(name, dir string, argv []string, env map[string]string) error {
 	return err
 }
 
-// NewAgentSession is NewSession, except that when argv fails the session stays
-// until Died or Kill, so you can read why. Has and List report it as gone.
-// tmux older than 3.3 rejects the option, and the session then ends as usual.
+// NewAgentSession is NewSession, except that when argv exits non-zero or is
+// signalled the session stays until Kill or Stop, so Died can say why. Has and
+// List report it as gone.
 func NewAgentSession(name, dir string, argv []string, env map[string]string) error {
+	// Set in the same tmux invocation, so it applies before tmux can reap an
+	// argv that fails at once.
 	args := append(escapeSeparators(newSessionArgs(name, dir, argv, env)), ";",
 		"set-option", "-t", "="+name+":", "remain-on-exit", "failed")
 	_, err := output(rawCommand(context.Background(), args...), "new-session")
-	if err != nil && exists(name) {
+	// tmux older than 3.3 rejects the option after creating the session, which
+	// then ends as usual without a reason to read.
+	if err != nil && !strings.Contains(err.Error(), "duplicate session") && exists(name) {
 		return nil
 	}
 	return err
@@ -178,7 +183,8 @@ func DisableMouse(name string) error {
 	return err
 }
 
-// Has reports whether the session is running a process.
+// Has reports whether the session is running a process. A session kept after
+// its process died is not running, though it still exists.
 func Has(name string) bool {
 	out, err := run("list-panes", "-t", "="+name+":", "-F", "#{pane_dead}")
 	return err == nil && slices.Contains(strings.Fields(out), "0")
@@ -213,15 +219,20 @@ func Panes() (live, dead map[string]bool) {
 			}
 		}
 	}
+	for name := range live {
+		delete(dead, name)
+	}
 	return live, dead
 }
 
 // Exit is how a NewAgentSession process ended.
 type Exit struct {
+	// Status is the exit status, and 0 when a signal killed the process.
 	Status int
-	// Signal is the lowercase name of the signal that killed it, such as "kill".
+	// Signal is tmux's lowercase name for the signal that killed the process,
+	// such as "kill".
 	Signal string
-	// Output is the last lines the process printed.
+	// Output is up to the last three lines the process printed.
 	Output []string
 }
 
@@ -229,7 +240,11 @@ const exitOutputLines = 3
 
 func (x Exit) String() string {
 	how := fmt.Sprintf("exit status %d", x.Status)
-	if x.Signal != "" {
+	switch {
+	case x.Signal == "":
+	case unicode.IsDigit(rune(x.Signal[0])):
+		how = "killed by signal " + x.Signal
+	default:
 		how = "killed by SIG" + strings.ToUpper(x.Signal)
 	}
 	if len(x.Output) == 0 {
@@ -238,8 +253,25 @@ func (x Exit) String() string {
 	return how + ", last output: " + strings.Join(x.Output, " | ")
 }
 
+// linuxSignals names the signals a process is likely to die of, by their
+// number on Linux.
+var linuxSignals = map[int]string{1: "hup", 2: "int", 3: "quit", 4: "ill", 6: "abrt", 7: "bus", 8: "fpe", 9: "kill", 11: "segv", 13: "pipe", 14: "alrm", 15: "term"}
+
+// signalName is tmux's name for a signal as the lowercase name without the
+// "SIG" prefix. tmux only knows the names on systems with sys_signame, such as
+// macOS, and gives the number everywhere else.
+func signalName(sig string) string {
+	if n, err := strconv.Atoi(sig); err == nil {
+		if name, ok := linuxSignals[n]; ok {
+			return name
+		}
+	}
+	return sig
+}
+
 // Died reports how the session's process ended, if it did and the session was
-// started by NewAgentSession. The session stays until you Kill it.
+// started by NewAgentSession. The session stays until you Kill it. It can
+// block for half a second while tmux settles.
 func Died(name string) (Exit, bool) {
 	target := "=" + name + ":"
 	out, err := run("display-message", "-p", "-t", target, "#{pane_dead} #{pane_dead_status} #{pane_dead_signal}")
@@ -252,7 +284,7 @@ func Died(name string) (Exit, bool) {
 	}
 	var x Exit
 	x.Status, _ = strconv.Atoi(fields[1])
-	x.Signal = fields[2]
+	x.Signal = signalName(fields[2])
 	x.Output = deadOutput(target)
 	return x, true
 }

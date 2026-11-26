@@ -377,7 +377,8 @@ func (e *Engine) talkedTo(t *store.Task, key string) bool {
 }
 
 // reconcile marks sessions whose tmux session vanished while the TUI was
-// closed (reboot, manual kill) as exited, so they can be resumed.
+// closed (reboot, manual kill) as exited, so they can be resumed. It logs how
+// the ones that crashed ended and removes the dead sessions they left.
 func (e *Engine) reconcile() {
 	live, dead := tmux.Panes()
 	reasons := exitReasons(dead)
@@ -393,10 +394,10 @@ func (e *Engine) reconcile() {
 				}
 			}
 		}
+		for name := range dead {
+			tmux.Kill(name)
+		}
 	})
-	for name := range dead {
-		tmux.Kill(name)
-	}
 }
 
 func (e *Engine) CreateTask(title, prompt string) *store.Task {

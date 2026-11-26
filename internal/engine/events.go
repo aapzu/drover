@@ -61,9 +61,9 @@ func (e *Engine) Tick() {
 	live, dead := tmux.Panes()
 	reasons := exitReasons(dead)
 	var followUps []func()
-	var reaped []string
 
 	e.with(func() {
+		running := map[string]bool{}
 		for _, t := range e.state.Tasks {
 			if t.PRMovePending && !agentRunning(t) {
 				followUps = append(followUps, func() { e.shipTask(t) })
@@ -72,6 +72,7 @@ func (e *Engine) Tick() {
 				if s.Status != store.StatusRunning {
 					continue
 				}
+				running[s.Tmux] = true
 				followUps = append(followUps, e.consumeEvents(t, key, s)...)
 				if _, launching := e.launching.Load(s.Tmux); launching {
 					continue
@@ -82,8 +83,13 @@ func (e *Engine) Tick() {
 					reason := reasons[s.Tmux]
 					t.AddLog("Agent exited" + reason)
 					e.alert(t, alertExited, "agent exited"+reason)
-					reaped = append(reaped, s.Tmux)
+					tmux.Kill(s.Tmux)
 				}
+			}
+		}
+		for name := range dead {
+			if !running[name] {
+				tmux.Kill(name)
 			}
 		}
 		e.expireSchedules(time.Now())
@@ -101,9 +107,6 @@ func (e *Engine) Tick() {
 		}
 	})
 
-	for _, name := range reaped {
-		tmux.Kill(name)
-	}
 	for _, fn := range followUps {
 		e.work.Go(fn)
 	}

@@ -589,6 +589,32 @@ func TestAgentSessionKeepsTrailingSemicolons(t *testing.T) {
 	}
 }
 
+func TestAgentSessionFailsOnADuplicateName(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("twice", t.TempDir(), []string{"cat"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("twice", t.TempDir(), []string{"cat"}, nil); err == nil {
+		t.Error("a second session with the same name started")
+	}
+}
+
+func TestAgentSessionRestartsOverADeadOne(t *testing.T) {
+	useSocket(t)
+
+	if err := NewAgentSession("again", t.TempDir(), []string{"sh", "-c", "exit 1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitDead(t, "again")
+	if err := Kill("again"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewAgentSession("again", t.TempDir(), []string{"cat"}, nil); err != nil || !Has("again") {
+		t.Errorf("restart = %v, running: %v", err, Has("again"))
+	}
+}
+
 func TestPanesSplitsRunningFromDead(t *testing.T) {
 	useSocket(t)
 
@@ -616,6 +642,14 @@ func TestStopKillsADeadSession(t *testing.T) {
 	waitGone(t, "dead")
 }
 
+func TestSignalName(t *testing.T) {
+	for sig, want := range map[string]string{"9": "kill", "15": "term", "kill": "kill", "37": "37", "": ""} {
+		if got := signalName(sig); got != want {
+			t.Errorf("signalName(%q) = %q, want %q", sig, got, want)
+		}
+	}
+}
+
 func TestExitString(t *testing.T) {
 	for _, tc := range []struct {
 		exit Exit
@@ -623,6 +657,7 @@ func TestExitString(t *testing.T) {
 	}{
 		{Exit{Status: 1}, "exit status 1"},
 		{Exit{Signal: "kill"}, "killed by SIGKILL"},
+		{Exit{Signal: "37"}, "killed by signal 37"},
 		{Exit{Status: 2, Output: []string{"a", "b"}}, "exit status 2, last output: a | b"},
 	} {
 		if got := tc.exit.String(); got != tc.want {
