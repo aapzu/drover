@@ -31,6 +31,7 @@ type layout struct {
 	bodyY, bodyH       int
 	boardH             int
 	boardW, assistantW int
+	columnsW, quickW   int
 	assistantFull      bool
 	previewY, previewH int
 	laneY, laneH       int
@@ -43,6 +44,8 @@ func (m Model) bodyHeight() int { return max(0, m.height-headerHeight-footerHeig
 func (m Model) layout() layout {
 	l := layout{bodyY: headerHeight, bodyH: m.bodyHeight()}
 	l.assistantW, l.boardW = m.assistantWidth(), m.boardWidth()
+	l.quickW = m.quickWidth()
+	l.columnsW = m.columnsWidth()
 	l.assistantFull = m.assist.full && l.assistantW > 0
 	if !m.prefs.HidePreview && !l.assistantFull && l.bodyH >= minPreviewHeight+minBoardHeight {
 		h := m.prefs.PreviewHeight
@@ -111,7 +114,7 @@ func laneBounds(total int) (lo, hi int) {
 // around the selected one, and their widths. start is a position in idxs.
 // Resized columns keep their width; the rest share what is left.
 func (m Model) columnWindow(idxs []int) (start int, widths []int) {
-	cols, width := m.columns(), m.boardWidth()
+	cols, width := m.columns(), m.columnsWidth()
 	if len(idxs) == 0 || width <= 0 {
 		return 0, nil
 	}
@@ -176,6 +179,7 @@ const (
 	hitAssistant
 	hitAssistantEdge
 	hitAssistantTitle
+	hitQuick
 )
 
 type hit struct {
@@ -213,6 +217,17 @@ func (l layout) hitTest(m Model, x, y int) hit {
 	}
 	if y < l.bodyY || y >= l.bodyY+l.boardH {
 		return hit{}
+	}
+	if l.quickW > 0 && x >= l.columnsW {
+		h := hit{kind: hitQuick}
+		tasks := m.quickTasks()
+		rows := quickRows(l.boardH)
+		start := m.quickStart(rows)
+		row := (y - l.bodyY - 1) / quickRowHeight
+		if y > l.bodyY && row < rows && start+row < len(tasks) {
+			h.task = tasks[start+row]
+		}
+		return h
 	}
 	if l.laneH > 0 && y == l.bodyY+l.laneY {
 		return hit{kind: hitLaneEdge}

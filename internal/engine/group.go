@@ -22,6 +22,9 @@ func (e *Engine) owner(t *store.Task) *store.Task { return store.Owner(e.state.T
 // sessionColumn is the column whose settings the owner's session follows.
 // Called with mu held.
 func (e *Engine) sessionColumn(owner *store.Task) config.Column {
+	if owner.Quick {
+		return e.board.QuickColumn()
+	}
 	col, _, _ := e.board.Column(store.Driver(e.state.Tasks, owner).ColumnID)
 	return col
 }

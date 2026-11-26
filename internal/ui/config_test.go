@@ -271,6 +271,7 @@ func TestConfigOptionsMatchTheBoard(t *testing.T) {
 	board.WorktreesDir, board.ArchiveDoneAfter, board.InitScript = "wt", "7d", "setup"
 	board.MaxConcurrent, board.IdleTimeoutMinutes, board.LinkUntracked, board.DisableMouse = 4, 5, true, true
 	board.IssueTracker = config.TrackerGitHub
+	board.QuickWorkdir = config.QuickRoot
 	board.DisableUpdateCheck = true
 	board.TeamReviewRequests = true
 	data, err := json.Marshal(board)

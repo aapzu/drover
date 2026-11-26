@@ -123,7 +123,7 @@ func (e *Engine) prScans() []prScan {
 // prScansOf lists the transcripts of t's sessions, none for a split card or
 // one in Done. Called with mu held.
 func (e *Engine) prScansOf(t *store.Task) []prScan {
-	if col, _, _ := e.board.Column(t.ColumnID); t.GroupID != "" || col.IsDone() {
+	if col, _, _ := e.board.Column(t.ColumnID); t.Quick || t.GroupID != "" || col.IsDone() {
 		return nil
 	}
 	var scans []prScan

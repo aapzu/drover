@@ -38,6 +38,7 @@ type prefs struct {
 	CollapsedColumns map[string]bool `json:"collapsedColumns,omitempty"`
 	ShowHidden       bool            `json:"showHidden,omitempty"`
 	ShowSettings     bool            `json:"showSettings,omitempty"`
+	ShowQuick        bool            `json:"showQuick,omitempty"`
 
 	// ReviewLane is what R last set; nil shows the review lane while it holds cards.
 	ReviewLane *bool `json:"reviewLane,omitempty"`

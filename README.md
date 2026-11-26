@@ -61,14 +61,17 @@ Then bring in the Claude Code work you already have:
    switches to [Linear](#linear) or [GitHub](#github-issues) issues and
    [PRs to review](#importing-prs-to-review).
 2. Or press `n` to start a new card with an agent, or `ctrl+n` to start one
-   in the [review lane](#the-review-lane).
+   in the [review lane](#the-review-lane). For a throwaway session with no
+   card, column or PR, press `w` and then `n` to start a
+   [quick task](#quick-tasks).
 
 Press `?` for every shortcut, or `ctrl+k` to search cards (enter opens one full screen) or run a command.
 
 With the mouse on (`M` toggles it), drag a card onto another column to move it, double-click
 a card to attach, drag a column's right edge, the preview's top border or the review lane's
-divider to resize, click the preview to type into the agent, and click the assistant
-panel to type into it. Dragging over the preview or the assistant panel
+divider to resize, click the preview to type into the agent, click the assistant
+panel to type into it, and click a row of the quick tasks panel to select it
+(double-click attaches). Dragging over the preview or the assistant panel
 selects text and copies it, without the panes' borders; double click selects a
 word, triple click a line, and dragging after either extends the selection by
 words or lines. While you type into an agent that reads mouse reports
@@ -323,6 +326,9 @@ reloaded while the board runs.
 - **`issueTracker`** (`"linear"`, the default, or `"github"`) picks the issue
   tracker the import view lists. See [Linear](#linear) and
   [GitHub issues](#github-issues).
+- **`quickWorkdir`** (`"worktree"`, the default, or `"root"`) picks where
+  [quick tasks](#quick-tasks) run: in a worktree of their own, or in the main
+  checkout.
 - **`assistantPlugins`** and **`assistantTools`** (both empty by default) give
   the assistant MCP tools, such as Slack's, so you can ask it to read a source and
   turn what it finds into cards. `assistantPlugins` lists Claude Code plugin ids
@@ -632,6 +638,33 @@ again.
 `ctrl+n` starts a card with an agent straight in the lane, in its first
 agent column, and shows the lane if you had hidden it. `drover add --review`
 does the same from the [command line](#command-line).
+
+## Quick tasks
+
+A quick task is an agent session with no lifecycle: no card on the board, no
+column, no automations and no PR handling. It can still edit code. Use it for
+"try this", "explain that" or a scratch fix you don't want a card for.
+
+`w` shows the quick tasks panel beside the board and moves the keyboard to it
+(it stays hidden on a terminal too narrow for it). In the panel `w` hides it
+and `esc` returns to the board, leaving it showing; `w` on the board focuses it
+again. There `n` starts a quick task and attaches to it, `↑↓` select, `enter`
+attaches, `tab` types into it from the preview, `r` resumes, `S` suspends, `s`
+sends a message, `E` renames and `x` deletes one, as on cards; the last three
+and `x` return the keyboard to the board. The first message you type becomes its
+title, and leaving a new one without typing discards it.
+
+The assistant never sees quick tasks: `drover list` leaves them out and
+`drover move`, `edit` and `rm` refuse their numbers. Their agent is told not to
+open a pull request, and drover doesn't watch for one. They count against
+`maxConcurrent` and `idleTimeoutMinutes` like any agent, and use
+`defaultPermissionMode` and `defaultModel`.
+
+**`quickWorkdir`** (`"worktree"`, the default, or `"root"`) says where they run.
+`worktree` gives each its own worktree and branch, so its edits never touch your
+checkout; closing the task removes the worktree and keeps the branch, as
+deleting a card does. `root` runs them in the main checkout, which starts
+faster but shares your uncommitted changes.
 
 ## Importing Claude Code agents
 

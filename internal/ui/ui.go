@@ -45,6 +45,7 @@ const (
 	modeColumns
 	modeSchedules
 	modeReviewLevel
+	modeQuick
 )
 
 type tickMsg time.Time
@@ -94,6 +95,7 @@ type sessionStartedMsg struct {
 	err    error
 	snap   engine.Snapshot
 	review bool
+	quick  bool
 }
 
 type Model struct {
@@ -105,6 +107,10 @@ type Model struct {
 	snapBusy bool
 
 	startingReview bool
+	startingQuick  bool
+
+	quickSel  string
+	liveQuick bool
 
 	// busy holds the actions the board started and is waiting on, one per
 	// card, unlike snap.Busy, which holds the engine's own steps. The map is
@@ -457,7 +463,7 @@ func (m Model) columnCards(i int) ([]*store.Task, map[string]int) {
 	tasks := m.tasksIn(col.ID)
 	if i == 0 {
 		for _, t := range m.snap.Tasks {
-			if _, _, ok := m.snap.Board.Column(m.columnOf(t)); !ok {
+			if _, _, ok := m.snap.Board.Column(m.columnOf(t)); !ok && !t.Quick {
 				tasks = append(tasks, t)
 			}
 		}
@@ -540,6 +546,14 @@ func containsAllWords(text, words string) bool {
 }
 
 func (m Model) current() *store.Task {
+	if m.mode == modeQuick || m.mode == modeLive && m.liveQuick {
+		return m.quickCurrent()
+	}
+	return m.boardCurrent()
+}
+
+// boardCurrent is the card selected in the board's current column.
+func (m Model) boardCurrent() *store.Task {
 	if m.col >= len(m.columns()) {
 		return nil
 	}
@@ -566,7 +580,7 @@ func (m Model) task(id string) *store.Task {
 }
 
 func (m Model) selectedIndex() int {
-	cur := m.current()
+	cur := m.boardCurrent()
 	for i, t := range m.tasksForColumn(m.col) {
 		if cur != nil && t.ID == cur.ID {
 			return i
@@ -616,6 +630,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.Width, m.detail.Height = m.width-4, m.height-4
 		if m.assist.full && m.assistantFits() == 0 {
 			m.assist.full = false
+		}
+		if m.mode == modeQuick && m.quickWidth() == 0 {
+			m.mode = modeBoard
 		}
 		if m.mode == modeAssistant && m.assistantFits() == 0 {
 			m.mode = modeBoard
@@ -750,7 +767,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.done != "" {
 			m.setFlash(msg.done)
 		}
-		if msg.err == nil && msg.attach && m.mode == modeBoard {
+		if msg.err == nil && msg.attach && (m.mode == modeBoard || m.mode == modeQuick) {
 			if cmd, ok := m.attach(msg.id); ok {
 				return m, cmd
 			}
@@ -789,9 +806,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.review {
 			m.startingReview = false
 		}
+		if msg.quick {
+			m.startingQuick = false
+		}
 		m.applySnap(msg.snap)
 		if msg.err != nil {
 			m.setFlash("Error: " + msg.err.Error())
+			return m, nil
+		}
+		if msg.task.Quick {
+			m.quickSel = msg.task.ID
+			if m.mode == modeBoard {
+				m.openQuick()
+			}
+			m.setFlash("")
+			if cmd, ok := m.attach(msg.task.ID); ok {
+				return m, cmd
+			}
 			return m, nil
 		}
 		if col, _, ok := m.snap.Board.Column(m.columnOf(msg.task)); ok && col.InReviewLane() && !m.reviewLaneShown() {
@@ -863,6 +894,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePalette(msg)
 		case modeAssistant:
 			return m.updateAssistant(msg)
+		case modeQuick:
+			return m.updateQuick(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -1200,6 +1233,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = modeHelp
 	case paletteKey:
 		return m, m.openPalette()
+	case quickKey:
+		m.openQuick()
 	case askKey:
 		cmd := m.openAssistant(false)
 		return m, cmd
@@ -1304,6 +1339,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		id := t.ID
 		m.mode = modeConfirm
 		m.confirmText = fmt.Sprintf("Delete #%d %q? Its agent is stopped and worktree removed; the branch is kept. (y/N)", t.Number, taskTitle(t))
+		if t.Quick {
+			m.confirmText = fmt.Sprintf("Delete quick task #%d %q? Its agent is stopped and its worktree removed with any uncommitted changes; the branch is kept. (y/N)", t.Number, taskTitle(t))
+			if m.snap.Board.QuickDir() == config.QuickRoot {
+				m.confirmText = fmt.Sprintf("Delete quick task #%d %q? Its agent is stopped; the main checkout is left as it is. (y/N)", t.Number, taskTitle(t))
+			}
+		}
 		if len(store.Members(m.snap.Tasks, store.Owner(m.snap.Tasks, t))) > 1 {
 			m.confirmText = fmt.Sprintf("Delete #%d %q? Only this card goes; its agent keeps working for the other cards. (y/N)", t.Number, taskTitle(t))
 		}
@@ -1421,7 +1462,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if msg.String() == "<" {
 				step = -4
 			}
-			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.boardWidth())
+			m.prefs.ColumnWidths[cols[m.col].ID] = clamp(c.width+step, minResizedWidth, m.columnsWidth())
 			m.savePrefs()
 		}
 	case "0":

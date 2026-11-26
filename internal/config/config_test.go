@@ -751,6 +751,7 @@ func TestLoadRejectsAnInvalidBoard(t *testing.T) {
 		{"column without a name", `{"columns":[{"id":"first"}]}`, "needs an id and a name"},
 		{"duplicate column ids", `{"columns":[{"id":"a","name":"A"},{"id":"a","name":"B"}]}`, "duplicate column id a"},
 		{"bad archiveDoneAfter", `{"archiveDoneAfter":"0d","columns":[{"id":"a","name":"A"}]}`, "archiveDoneAfter"},
+		{"unknown quickWorkdir", `{"quickWorkdir":"tmp","columns":[{"id":"a","name":"A"}]}`, `quickWorkdir must be "worktree" or "root"`},
 		{"unknown issueTracker", `{"issueTracker":"jira","columns":[{"id":"a","name":"A"}]}`, `issueTracker must be "linear" or "github"`},
 		{"assistantTools outside mcp__", `{"assistantTools":["Edit"],"columns":[{"id":"a","name":"A"}]}`, `assistantTools entry "Edit"`},
 		{"reviewRepos without an owner", `{"reviewRepos":["widgets"],"columns":[{"id":"a","name":"A"}]}`, `reviewRepos entry "widgets"`},

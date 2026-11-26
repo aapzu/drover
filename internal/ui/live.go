@@ -234,6 +234,7 @@ func (m Model) startLive() (Model, tea.Cmd) {
 		m.setFlash("No running agent to type into. Press r to start or resume it.")
 		return m, nil
 	}
+	m.liveQuick = m.mode == modeQuick
 	m.mode = modeLive
 	m.liveGen++
 	if m.prefs.HidePreview {
@@ -254,8 +255,12 @@ func (m Model) leaveLiveCmd() tea.Cmd {
 func (m Model) updateLive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case liveExitKey, "esc":
+		cmd := m.leaveLiveCmd()
 		m.mode = modeBoard
-		return m, m.leaveLiveCmd()
+		if m.liveQuick {
+			m.mode = modeQuick
+		}
+		return m, cmd
 	case paletteKey:
 		return m, tea.Batch(m.leaveLiveCmd(), m.openPalette())
 	}

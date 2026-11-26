@@ -45,6 +45,7 @@ var paletteCommands = []paletteCommand{
 	{"Show only the review lane, or bring the main columns back", "X"},
 	{"Show or hide column settings", "t"},
 	{"Filter cards", "/"},
+	{"Show the quick tasks panel and select it", quickKey},
 	{"Open the assistant panel and type into it", askKey},
 	{"Show the assistant panel fullscreen", zoomKey},
 	{"Hide the assistant panel", liveExitKey},

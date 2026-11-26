@@ -171,6 +171,7 @@ func (m Model) renderFooter() string {
 		modePalette:     "↑↓ select  enter run  esc cancel",
 		modeLive:        "LIVE: ctrl+q or esc back to board  ctrl+k commands",
 		modeAssistant:   "ASSISTANT: ctrl+q or esc hide panel  ctrl+k commands",
+		modeQuick:       "QUICK TASKS: ↑↓ select  enter attach  n new  x close  w hide panel  esc back to board",
 		modeForm:        "tab switch field  ctrl+s save  esc cancel",
 		modeMove:        "↑↓ select  enter move  1-9 jump  any other key cancels",
 		modeConfirm:     "y confirm  any other key cancels",
@@ -230,6 +231,9 @@ func (m Model) renderMain(l layout) string {
 		return m.renderAssistant(l.assistantW, l.bodyH)
 	}
 	main := m.renderBoard(l)
+	if l.quickW > 0 {
+		main = lipgloss.JoinHorizontal(lipgloss.Top, main, m.renderQuick(l.quickW, l.boardH))
+	}
 	if l.previewH > 0 {
 		main = lipgloss.JoinVertical(lipgloss.Left, main, m.renderPreview(l.previewH))
 	}
@@ -244,14 +248,14 @@ func (m Model) renderBoard(l layout) string {
 	var rows []string
 	for k, boxes := range l.rows {
 		if k > 0 && l.laneH > 0 {
-			rows = append(rows, m.renderLaneDivider(l.boardW))
+			rows = append(rows, m.renderLaneDivider(l.columnsW))
 		}
 		var cols []string
 		for _, c := range boxes {
 			cols = append(cols, m.renderColumn(c, c.height, c.index == drop))
 		}
 		row := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-		rows = append(rows, lipgloss.PlaceHorizontal(l.boardW, lipgloss.Left, row))
+		rows = append(rows, lipgloss.PlaceHorizontal(l.columnsW, lipgloss.Left, row))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
@@ -799,6 +803,7 @@ var helpKeys = [][2]string{
 	{"r", "start or resume the agent in place"},
 	{"S", "suspend the agent (resume later with r)"},
 	{"c", "open a shell in the card's worktree (Ctrl-q returns)"},
+	{quickKey, "show the quick tasks panel and select it; there n starts a quick task, enter attaches, x closes it, w hides the panel"},
 	{":", "open and type into the assistant panel (Ctrl-q or esc returns to the board and hides it)"},
 	{"N", "start a new assistant conversation"},
 	{"Z", "show the assistant panel fullscreen (Ctrl-q, esc or a click on its top border leaves it)"},
@@ -907,6 +912,9 @@ func (m Model) renderDetail(t *store.Task) string {
 		}
 	}
 	field("Column", col.Name)
+	if t.Quick {
+		field("Kind", "quick task")
+	}
 	if t.Issue != nil {
 		field("Issue", fmt.Sprintf("%s  %s  %s", t.Issue.Key, t.Issue.State, t.Issue.URL))
 	}

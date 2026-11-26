@@ -235,12 +235,15 @@ func cmdList(root string, args []string) error {
 	return w.Flush()
 }
 
-// buildCards lists the cards in board order. A card split off a session that
-// opened several PRs reports the branch, worktree and agent of the card that
-// owns them.
+// buildCards lists the cards in board order, leaving out quick tasks, which the
+// assistant must not see. A card split off a session that opened several PRs
+// reports the branch, worktree and agent of the card that owns them.
 func buildCards(board *config.Board, tasks []*store.Task) []card {
 	cards := make([]card, 0, len(tasks))
 	for _, t := range tasks {
+		if t.Quick {
+			continue
+		}
 		col, idx, ok := board.Column(t.ColumnID)
 		if !ok {
 			col, idx = config.Column{ID: t.ColumnID, Name: t.ColumnID}, len(board.Columns)

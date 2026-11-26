@@ -239,7 +239,10 @@ func TestDirFallsBackToTheHomeStateDir(t *testing.T) {
 
 func TestByNumber(t *testing.T) {
 	two := &Task{Number: 2}
-	s := &State{Tasks: []*Task{{Number: 1}, two}}
+	s := &State{Tasks: []*Task{{Number: 1}, two, {Number: 3, Quick: true}}}
+	if got := s.ByNumber(3); got != nil {
+		t.Errorf("ByNumber(3) = %+v, want nil for a quick task", got)
+	}
 	if got := s.ByNumber(2); got != two {
 		t.Errorf("ByNumber(2) = %+v", got)
 	}

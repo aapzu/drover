@@ -54,7 +54,7 @@ func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	root := filepath.Join(t.TempDir(), "repo")
 	os.MkdirAll(root, 0o755)
-	state := &store.State{NextNumber: 2, Tasks: []*store.Task{{ID: "a", Number: 1, ColumnID: "planning"}}}
+	state := &store.State{NextNumber: 3, Tasks: []*store.Task{{ID: "a", Number: 1, ColumnID: "planning"}, {ID: "q", Number: 2, Quick: true}}}
 	if err := state.Save(root); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,7 @@ func TestValidateRejectsWhatCouldNeverApply(t *testing.T) {
 		"unknown column": {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "nowhere"}, `unknown column "nowhere"; columns are planning, executing`},
 		"bad linear":     {inbox.Request{Op: inbox.OpAdd, Linear: "banana"}, "not a Linear issue key"},
 		"fine move":      {inbox.Request{Op: inbox.OpMove, Number: 1, Column: "In review"}, ""},
+		"quick task":     {inbox.Request{Op: inbox.OpMove, Number: 2, Column: "In review"}, "no card #2"},
 		"fine add":       {inbox.Request{Op: inbox.OpAdd, Title: &title, Column: "planning"}, ""},
 		"fine linear":    {inbox.Request{Op: inbox.OpAdd, Linear: "DX-1"}, ""},
 	} {
@@ -108,6 +109,17 @@ func TestAgentState(t *testing.T) {
 		if got := agentState(tc.task, tc.col); got != tc.want {
 			t.Errorf("%s: agentState = %q, want %q", name, got, tc.want)
 		}
+	}
+}
+
+func TestQuickTasksAreHiddenFromTheAssistant(t *testing.T) {
+	board := &config.Board{Columns: []config.Column{{ID: "inbox", Name: "Inbox"}}}
+	cards := buildCards(board, []*store.Task{
+		{ID: "a", Number: 1, ColumnID: "inbox"},
+		{ID: "q", Number: 2, Quick: true},
+	})
+	if len(cards) != 1 || cards[0].Number != 1 {
+		t.Errorf("cards = %+v, want only #1", cards)
 	}
 }
 
