@@ -112,6 +112,28 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	}
 }
 
+func TestUpdateDoneOutsideTheBoardDoesNotQuit(t *testing.T) {
+	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+	m.mode = modeForm
+	next, cmd := m.Update(updateDoneMsg{tag: "v1.1.0"})
+	m = next.(Model)
+	if cmd != nil || m.RestartRequested() || m.mode != modeForm {
+		t.Errorf("quit while a form was open: cmd %v, restart %v, mode %v", cmd != nil, m.RestartRequested(), m.mode)
+	}
+	if !strings.Contains(m.flash, "Updated drover to v1.1.0") {
+		t.Errorf("flash = %q", m.flash)
+	}
+}
+
+func TestUpdateDoneWhileACardOperationRunsDoesNotQuit(t *testing.T) {
+	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+	m.busy = map[string]op{"x": {}}
+	next, cmd := m.Update(updateDoneMsg{tag: "v1.1.0"})
+	if got := next.(Model); cmd != nil || got.RestartRequested() {
+		t.Errorf("quit with an operation running: cmd %v, restart %v", cmd != nil, got.RestartRequested())
+	}
+}
+
 func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
 	_, installs := fakeUpdates(t)
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")

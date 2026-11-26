@@ -105,6 +105,7 @@ func run(dir string) error {
 	if err != nil {
 		return err
 	}
+	exe, exeErr := update.Executable()
 	eng, err := engine.New(root)
 	if err != nil {
 		return err
@@ -141,15 +142,16 @@ func run(dir string) error {
 		}
 	}
 	if err == nil && ok && m.RestartRequested() && !m.SuspendAllRequested() {
-		err = restartSelf()
+		err = restartSelf(exe, exeErr)
 	}
 	return err
 }
 
 // restartSelf replaces this process with the installed binary, so the board
 // reopens in the same terminal after an update. It returns only if that fails.
-func restartSelf() error {
-	exe, err := update.Executable()
+// exe is resolved at startup: once the update has replaced the file, Linux
+// reports the running binary's path as deleted.
+func restartSelf(exe string, err error) error {
 	if err != nil {
 		return fmt.Errorf("updated, but can't restart; start drover again to use it: %w", err)
 	}

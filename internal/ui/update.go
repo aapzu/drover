@@ -81,6 +81,10 @@ func (m Model) updateFinished(msg updateDoneMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.updateTag = ""
+	if m.mode != modeBoard || len(m.busy) > 0 {
+		m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
+		return m, nil
+	}
 	m.restart = true
 	return m, tea.Quit
 }
