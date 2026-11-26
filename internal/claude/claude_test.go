@@ -35,6 +35,7 @@ func TestWriteSettings(t *testing.T) {
 		Permissions struct {
 			Allow []string `json:"allow"`
 		} `json:"permissions"`
+		DisableAgentView bool `json:"disableAgentView"`
 	}
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
@@ -77,6 +78,9 @@ func TestWriteSettings(t *testing.T) {
 
 	if !slices.Contains(got.Permissions.Allow, "EnterWorktree") {
 		t.Errorf("allow = %v, want EnterWorktree", got.Permissions.Allow)
+	}
+	if !got.DisableAgentView {
+		t.Error("disableAgentView is off: ← on an empty prompt would leave the card's session for agent view")
 	}
 }
 
