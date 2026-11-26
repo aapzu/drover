@@ -115,8 +115,9 @@ func WriteSettings(settingsPath, exe, eventsPath string) error {
 		hooks[name] = entries
 	}
 	settings := map[string]any{
-		"hooks":       hooks,
-		"permissions": map[string]any{"allow": []string{"EnterWorktree"}},
+		"hooks":            hooks,
+		"permissions":      map[string]any{"allow": []string{"EnterWorktree"}},
+		"disableAgentView": true,
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

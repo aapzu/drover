@@ -348,7 +348,8 @@ func argv(exe, root, id string, resume bool, prompt string, board *config.Board)
 // settings returns the --settings JSON.
 func settings(root string, plugins []string) string {
 	s := map[string]any{
-		"env": map[string]string{"GIT_OPTIONAL_LOCKS": "0"},
+		"env":              map[string]string{"GIT_OPTIONAL_LOCKS": "0"},
+		"disableAgentView": true,
 		"sandbox": map[string]any{
 			"filesystem": map[string][]string{
 				"denyWrite":  {root},
