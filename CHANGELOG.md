@@ -6,6 +6,10 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 - `drover add -c` creates the card directly in that column instead of moving it out of the first one
 
+## [0.20.1](https://github.com/aapzu/drover/compare/v0.20.0...v0.20.1) - 2026-11-26
+
+- Turn off Claude Code's agent view in drover agents, so ← on an empty prompt no longer leaves the card's session
+
 ## [0.20.0](https://github.com/aapzu/drover/compare/v0.19.2...v0.20.0) - 2026-11-26
 
 - Add quick tasks: agent sessions with no card, column or PR, opened with `w`; the Quick tasks run in setting picks a worktree or the main checkout

@@ -121,6 +121,16 @@ func panelArgv(t *testing.T, root string) []string {
 	return p.calls[0]
 }
 
+func TestAssistantDisablesAgentView(t *testing.T) {
+	var settings struct {
+		DisableAgentView bool `json:"disableAgentView"`
+	}
+	args := panelArgv(t, newRoot(t))
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil || !settings.DisableAgentView {
+		t.Errorf("--settings does not disable agent view: %v %s", err, flagValue(args, "--settings"))
+	}
+}
+
 func TestAskStartsThenResumesOneConversation(t *testing.T) {
 	root := newRoot(t)
 	calls := fakeClaude(t, " #2 is in Planning\n", nil)
