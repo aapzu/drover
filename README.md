@@ -39,7 +39,7 @@ activity, so don't run it with `go run`.
 
 When the board opens it checks GitHub for a newer release, at most once a day,
 and says so in the footer. Press `U` to download it, verify its checksum and
-replace the binary, then restart the board to use it. `drover update` does the
+replace the binary, then offers to restart the board on it. `drover update` does the
 same from the shell, and `drover update --check` only reports.
 
 Local builds and `go install` of a commit never check; `go install ...@latest` does, and `U` replaces that binary too. Turn the check off with

@@ -99,40 +99,51 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	if len(*installs) != 1 || (*installs)[0] != "v1.1.0" {
 		t.Fatalf("installs = %v", *installs)
 	}
-	next, quit := m.Update(done)
-	m = next.(Model)
-	if m.updateTag != "" || !m.RestartRequested() {
-		t.Errorf("after the install: tag %q, restart %v", m.updateTag, m.RestartRequested())
+	m = send(m, done)
+	if m.updateTag != "" || m.mode != modeConfirm || !strings.Contains(m.confirmText, "Restart the board now?") {
+		t.Fatalf("after the install: tag %q, mode %v, confirm %q", m.updateTag, m.mode, m.confirmText)
+	}
+	if m.RestartRequested() {
+		t.Fatal("restarted without asking")
+	}
+
+	declined, cmd := m.updateConfirm(keyPress("n"))
+	if cmd != nil || declined.(Model).RestartRequested() {
+		t.Error("declining the restart did something")
+	}
+	if !strings.Contains(declined.(Model).flash, "Restart the board to use it") {
+		t.Errorf("flash after declining = %q", declined.(Model).flash)
+	}
+
+	_, cmd = m.updateConfirm(keyPress("y"))
+	if cmd == nil {
+		t.Fatal("y returned no command")
+	}
+	msg := cmd()
+	if _, ok := msg.(restartMsg); !ok {
+		t.Fatalf("y returned %T, want restartMsg", msg)
+	}
+	next, quit := m.Update(msg)
+	if !next.(Model).RestartRequested() {
+		t.Error("restartMsg didn't request a restart")
 	}
 	if quit == nil {
-		t.Fatal("the board didn't quit after the install")
+		t.Fatal("restartMsg didn't quit the board")
 	}
-	if got := quit(); got == nil {
-		t.Fatal("command returned no message")
-	} else if _, ok := got.(tea.QuitMsg); !ok {
-		t.Errorf("command returned %T, want tea.QuitMsg", got)
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Errorf("restartMsg returned %T, want tea.QuitMsg", quit())
 	}
 }
 
-func TestUpdateDoneOutsideTheBoardDoesNotQuit(t *testing.T) {
+func TestUpdateDoneOutsideTheBoardDoesNotAsk(t *testing.T) {
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
 	m.mode = modeForm
-	next, cmd := m.Update(updateDoneMsg{tag: "v1.1.0"})
-	m = next.(Model)
-	if cmd != nil || m.RestartRequested() || m.mode != modeForm {
-		t.Errorf("quit while a form was open: cmd %v, restart %v, mode %v", cmd != nil, m.RestartRequested(), m.mode)
+	m = send(m, updateDoneMsg{tag: "v1.1.0"})
+	if m.mode != modeForm || m.RestartRequested() {
+		t.Errorf("took over a form: mode %v, restart %v", m.mode, m.RestartRequested())
 	}
 	if !strings.Contains(m.flash, "Updated drover to v1.1.0") {
 		t.Errorf("flash = %q", m.flash)
-	}
-}
-
-func TestUpdateDoneWhileACardOperationRunsDoesNotQuit(t *testing.T) {
-	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
-	m.busy = map[string]op{"x": {}}
-	next, cmd := m.Update(updateDoneMsg{tag: "v1.1.0"})
-	if got := next.(Model); cmd != nil || got.RestartRequested() {
-		t.Errorf("quit with an operation running: cmd %v, restart %v", cmd != nil, got.RestartRequested())
 	}
 }
 
@@ -147,10 +158,9 @@ func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
 		t.Error("declining changed something")
 	}
 
-	next, quit := m.Update(updateDoneMsg{tag: "v1.1.0", err: errors.New("disk full")})
-	m = next.(Model)
-	if quit != nil || m.RestartRequested() {
-		t.Error("a failed install quit the board")
+	m = send(m, updateDoneMsg{tag: "v1.1.0", err: errors.New("disk full")})
+	if m.mode != modeBoard || m.RestartRequested() {
+		t.Error("a failed install asked to restart")
 	}
 	if m.updateTag != "v1.1.0" || !strings.Contains(m.flash, "Update failed: disk full") {
 		t.Errorf("after a failed install: tag %q, flash %q", m.updateTag, m.flash)

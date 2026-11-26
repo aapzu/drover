@@ -794,6 +794,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case suspendAllMsg:
 		m.suspendAll = true
 		return m, tea.Quit
+	case restartMsg:
+		m.restart = true
+		return m, tea.Quit
 	case updateAvailableMsg:
 		m.updateTag = string(msg)
 		return m, nil
@@ -802,7 +805,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.flash = ""
 		return m, nil
 	case updateDoneMsg:
-		return m.updateFinished(msg)
+		return m.updateFinished(msg), nil
 	case sessionStartedMsg:
 		if msg.review {
 			m.startingReview = false

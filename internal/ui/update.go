@@ -25,6 +25,7 @@ var (
 
 type updateAvailableMsg string
 type updatingMsg struct{}
+type restartMsg struct{}
 type updateDoneMsg struct {
 	tag string
 	err error
@@ -63,7 +64,7 @@ func (m *Model) confirmUpdate() {
 	}
 	tag := m.updateTag
 	m.mode = modeConfirm
-	m.confirmText = fmt.Sprintf("Update drover from %s to %s and restart the board? (y/N)", m.version, tag)
+	m.confirmText = fmt.Sprintf("Update drover from %s to %s? (y/N)", m.version, tag)
 	m.confirmAction = func() tea.Cmd {
 		install := func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -74,17 +75,18 @@ func (m *Model) confirmUpdate() {
 	}
 }
 
-func (m Model) updateFinished(msg updateDoneMsg) (Model, tea.Cmd) {
+func (m Model) updateFinished(msg updateDoneMsg) Model {
 	m.updating = false
 	if msg.err != nil {
 		m.setFlash("Update failed: " + msg.err.Error())
-		return m, nil
+		return m
 	}
 	m.updateTag = ""
-	if m.mode != modeBoard || len(m.busy) > 0 {
-		m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
-		return m, nil
+	m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
+	if m.mode == modeBoard {
+		m.mode = modeConfirm
+		m.confirmText = fmt.Sprintf("Updated drover to %s. Restart the board now? (y/N)", msg.tag)
+		m.confirmAction = func() tea.Cmd { return func() tea.Msg { return restartMsg{} } }
 	}
-	m.restart = true
-	return m, tea.Quit
+	return m
 }
