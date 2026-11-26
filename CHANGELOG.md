@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+## [0.20.1](https://github.com/aapzu/drover/compare/v0.20.0...v0.20.1) - 2026-11-26
+
 - Turn off Claude Code's agent view in drover agents, so ← on an empty prompt no longer leaves the card's session
 
 ## [0.20.0](https://github.com/aapzu/drover/compare/v0.19.2...v0.20.0) - 2026-11-26
