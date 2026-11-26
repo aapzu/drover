@@ -41,7 +41,7 @@ type dragState struct {
 const doubleClick = 400 * time.Millisecond
 
 func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter && m.mode != modeAssistant {
+	if m.mode != modeBoard && m.mode != modeLive && m.mode != modeFilter && m.mode != modeAssistant && m.mode != modeQuick {
 		m.drag = dragState{}
 		return m, nil
 	}
@@ -76,6 +76,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.col = h.col
+		m.mode = modeBoard
 		key := tea.KeyMsg{Type: tea.KeyDown}
 		if msg.Button == tea.MouseButtonWheelUp {
 			key.Type = tea.KeyUp
@@ -100,6 +101,17 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitColumn:
 			m.mode = modeBoard
 			m.col = h.col
+		case hitQuick:
+			m.mode = modeQuick
+			if h.task == nil {
+				break
+			}
+			m.quickSel = h.task.ID
+			if m.drag.clickFor == h.task.ID && time.Since(m.drag.clickAt) < doubleClick {
+				m.drag = dragState{}
+				return m.updateQuick(tea.KeyMsg{Type: tea.KeyEnter})
+			}
+			m.drag = dragState{clickAt: time.Now(), clickFor: h.task.ID}
 		case hitColumnEdge:
 			m.drag = dragState{kind: dragColumn, col: h.col, colX: h.box.x}
 		case hitPreviewEdge:
@@ -137,7 +149,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.drag.x, m.drag.y = msg.X, msg.Y
 		case dragColumn:
 			id := m.columns()[m.drag.col].ID
-			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.boardWidth())
+			m.prefs.ColumnWidths[id] = clamp(msg.X-m.drag.colX+2, minResizedWidth, m.columnsWidth())
 		case dragPreview:
 			m.prefs.PreviewHeight = clamp(l.bodyY+l.bodyH-msg.Y, minPreviewHeight, l.bodyH-minBoardHeight)
 		case dragLane:

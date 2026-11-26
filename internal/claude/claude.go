@@ -69,6 +69,11 @@ func BoardPrompt(exe string) string {
 		"`" + cmd + " list` shows every card and its column. Move a card only when asked, or when the board's own instructions say so."
 }
 
+// QuickPrompt is BoardPrompt for a quick task, which has no card to move and
+// no pull request to open.
+const QuickPrompt = "You are running as a quick task in drover: a session with no kanban card, no columns and no lifecycle. " +
+	"Don't open a pull request and don't run `drover move`; the user decides what happens to your changes."
+
 var hookEvents = []string{
 	"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
 	"Notification", "PermissionRequest", "Stop", "StopFailure",

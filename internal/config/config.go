@@ -3,6 +3,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,7 @@ type Board struct {
 	SplitByPR             bool          `json:"splitByPR"`
 	DisableMouse          bool          `json:"disableMouse,omitempty"`
 	IssueTracker          string        `json:"issueTracker,omitempty"`
+	QuickWorkdir          string        `json:"quickWorkdir,omitempty"`
 	DisableUpdateCheck    bool          `json:"disableUpdateCheck,omitempty"`
 	TeamReviewRequests    bool          `json:"teamReviewRequests,omitempty"`
 	ReviewRepos           []string      `json:"reviewRepos,omitempty"`
@@ -389,6 +391,27 @@ func (b *Board) Tracker() string {
 	return TrackerLinear
 }
 
+// Where quick tasks run: in a worktree of their own, or in the main checkout.
+const (
+	QuickWorktree = "worktree"
+	QuickRoot     = "root"
+)
+
+// QuickDir is where quick tasks run: a worktree of their own unless the board
+// asks for the main checkout.
+func (b *Board) QuickDir() string {
+	if b != nil && b.QuickWorkdir == QuickRoot {
+		return QuickRoot
+	}
+	return QuickWorktree
+}
+
+// QuickColumn is the column a quick task's agent runs under. It is not on the
+// board and has no automations; it only carries the agent's settings.
+func (b *Board) QuickColumn() Column {
+	return Column{Name: "Quick", AutoSpawn: true, NoWorktree: b.QuickDir() == QuickRoot, ModelOverride: cmp.Or(b.DefaultModel, DefaultAgentModel)}
+}
+
 // Limit is how many agents may run at once.
 func (b *Board) Limit() int {
 	if b.MaxConcurrent > 0 {
@@ -468,6 +491,9 @@ func (b *Board) validate() error {
 	}
 	if t := b.IssueTracker; t != "" && t != TrackerLinear && t != TrackerGitHub {
 		return fmt.Errorf("config: issueTracker must be %q or %q, not %q", TrackerLinear, TrackerGitHub, t)
+	}
+	if d := b.QuickWorkdir; d != "" && d != QuickWorktree && d != QuickRoot {
+		return fmt.Errorf("config: quickWorkdir must be %q or %q, not %q", QuickWorktree, QuickRoot, d)
 	}
 	if f := b.PRFlow; f != nil {
 		if err := b.checkColumns("prFlow", f.Requested, f.Opened, f.ChangesRequested, f.Merged, f.Released); err != nil {

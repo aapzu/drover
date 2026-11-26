@@ -148,13 +148,15 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 					out = append(out, func() { e.autoName(taskID, prompt, placeholder) })
 				}
 			}
-			if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
-				out = append(out, func() { e.prRequested(taskID, visit) })
-			}
-			if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
-				e.addPRs(t, urls, true)
-			} else if firstTurn && claude.IsReviewCommand(ev.Prompt) {
-				out = append(out, func() { e.reviewRequested(taskID, visit) })
+			if !t.Quick {
+				if f := e.board.PRFlow; f != nil && f.Requested != "" && claude.AsksForPR(ev.Prompt) {
+					out = append(out, func() { e.prRequested(taskID, visit) })
+				}
+				if urls := claude.ReviewedPRs(ev.Prompt); len(urls) > 0 {
+					e.addPRs(t, urls, true)
+				} else if firstTurn && claude.IsReviewCommand(ev.Prompt) {
+					out = append(out, func() { e.reviewRequested(taskID, visit) })
+				}
 			}
 		case "PreToolUse":
 			s.HookStops = 0
@@ -170,7 +172,7 @@ func (e *Engine) consumeEvents(t *store.Task, key string, s *store.Session) []fu
 			if ev.ToolName == "ExitPlanMode" {
 				out = append(out, func() { e.planExit(taskID, visit) })
 			}
-			if urls := ev.CreatedPRs(); len(urls) > 0 {
+			if urls := ev.CreatedPRs(); len(urls) > 0 && !t.Quick {
 				e.addPRs(t, urls, false)
 			}
 		case "PermissionRequest":

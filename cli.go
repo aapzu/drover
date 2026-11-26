@@ -129,7 +129,7 @@ func validate(root string, req inbox.Request) error {
 	if err != nil {
 		return err
 	}
-	if state.ByNumber(req.Number) == nil {
+	if t := state.ByNumber(req.Number); t == nil || t.Quick {
 		return fmt.Errorf("no card #%d", req.Number)
 	}
 	return nil
@@ -235,12 +235,15 @@ func cmdList(root string, args []string) error {
 	return w.Flush()
 }
 
-// buildCards lists the cards in board order. A card split off a session that
-// opened several PRs reports the branch, worktree and agent of the card that
-// owns them.
+// buildCards lists the cards in board order, leaving out quick tasks, which the
+// assistant must not see. A card split off a session that opened several PRs
+// reports the branch, worktree and agent of the card that owns them.
 func buildCards(board *config.Board, tasks []*store.Task) []card {
 	cards := make([]card, 0, len(tasks))
 	for _, t := range tasks {
+		if t.Quick {
+			continue
+		}
 		col, idx, ok := board.Column(t.ColumnID)
 		if !ok {
 			col, idx = config.Column{ID: t.ColumnID, Name: t.ColumnID}, len(board.Columns)

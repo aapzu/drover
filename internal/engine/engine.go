@@ -399,26 +399,25 @@ func (e *Engine) CreateTask(title, prompt string) *store.Task {
 // createTask adds a card in the column with the given id, or the first column
 // when it is empty.
 func (e *Engine) createTask(title, prompt, columnID string) *store.Task {
-	var task *store.Task
+	return e.addTask(&store.Task{Title: title, Prompt: prompt, ColumnID: columnID})
+}
+
+// addTask gives t its id, number and timestamps and adds it to the board. A t
+// with no column and no Quick flag lands in the first column.
+func (e *Engine) addTask(t *store.Task) *store.Task {
 	e.with(func() {
 		now := time.Now()
-		if columnID == "" {
-			columnID = e.board.FirstColumn().ID
+		if t.ColumnID == "" && !t.Quick {
+			t.ColumnID = e.board.FirstColumn().ID
 		}
-		task = &store.Task{
-			ID:        uuid.NewString(),
-			Number:    e.state.NextNumber,
-			Title:     title,
-			Prompt:    prompt,
-			ColumnID:  columnID,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
+		t.ID = uuid.NewString()
+		t.Number = e.state.NextNumber
+		t.CreatedAt, t.UpdatedAt = now, now
 		e.state.NextNumber++
-		task.AddLog("Created")
-		e.state.Tasks = append(e.state.Tasks, task)
+		t.AddLog("Created")
+		e.state.Tasks = append(e.state.Tasks, t)
 	})
-	return task
+	return t
 }
 
 // NewSession adds a card in the first column and starts its agent right away.
@@ -443,6 +442,21 @@ func (e *Engine) NewReviewSession() (*store.Task, error) {
 		return nil, fmt.Errorf("%s, where reviews start, runs no agent; make it an agent column in your config to start reviews with ctrl+n", col.Name)
 	}
 	return e.startSession(col)
+}
+
+// NewQuick adds a quick task and starts its agent in a worktree of its own, or
+// in the main checkout when quickWorkdir says so.
+func (e *Engine) NewQuick() (*store.Task, error) {
+	e.mu.Lock()
+	col := e.board.QuickColumn()
+	e.mu.Unlock()
+	task := e.addTask(&store.Task{Quick: true})
+	_, owner, unlock := e.lockGroup(task.ID)
+	defer unlock()
+	if err := e.activate(task, col, col, "", false, true); err != nil {
+		return task, errors.Join(fmt.Errorf("starting quick task: %w", err), e.discardCard(task, owner))
+	}
+	return task, nil
 }
 
 // startSession adds a card in col and starts its agent.
@@ -503,7 +517,7 @@ func (e *Engine) DiscardSilent(id string) error {
 	e.mu.Lock()
 	s := t.Sessions[store.MainSession]
 	entry, _ := e.board.ReviewEntry()
-	atStart := t.ColumnID == e.board.FirstColumn().ID || t.ColumnID == entry.ID
+	atStart := t.Quick || t.ColumnID == e.board.FirstColumn().ID || t.ColumnID == entry.ID
 	silent := s != nil && t.Title == "" && t.Prompt == "" && t.Issue == nil && atStart && !e.talkedTo(t, store.MainSession)
 	path := t.WorktreePath
 	e.mu.Unlock()
@@ -755,6 +769,9 @@ func (e *Engine) moveLocked(id, targetID string, opts MoveOptions) error {
 	if t == nil {
 		return errors.New("task not found")
 	}
+	if t.Quick {
+		return fmt.Errorf("#%d is a quick task and has no columns", t.Number)
+	}
 	target, _, ok := board.Column(targetID)
 	if !ok {
 		return fmt.Errorf("unknown column %s", targetID)
@@ -912,6 +929,9 @@ func (e *Engine) externalLive(t *store.Task) (claude.Live, bool) {
 func (e *Engine) startColumn(t *store.Task) (config.Column, error) {
 	e.mu.Lock()
 	col, _, _ := e.board.Column(t.ColumnID)
+	if t.Quick {
+		col = e.board.QuickColumn()
+	}
 	e.mu.Unlock()
 	if col.IsDone() {
 		return col, fmt.Errorf("move the task out of %s to start an agent", col.Name)
@@ -1744,6 +1764,9 @@ func (e *Engine) startTmux(t *store.Task, key, worktree string, launch claude.La
 	disableMouse := e.board.DisableMouse
 	e.mu.Unlock()
 	launch.SystemPrompt = claude.BoardPrompt(e.exe)
+	if t.Quick {
+		launch.SystemPrompt = claude.QuickPrompt
+	}
 	tmux.Kill(name)
 	if err := tmux.NewSession(name, worktree, launch.Argv(), env); err != nil {
 		e.with(func() {

@@ -50,8 +50,11 @@ type Task struct {
 	Title    string `json:"title"`
 	Prompt   string `json:"prompt"`
 	ColumnID string `json:"columnId"`
-	Issue    *Issue `json:"issue,omitempty"`
-	PR       *PR    `json:"pr,omitempty"`
+	// Quick marks a session with no column, no PR handling and no place on the
+	// board: it lives in the quick-task panel and the assistant never sees it.
+	Quick bool   `json:"quick,omitempty"`
+	Issue *Issue `json:"issue,omitempty"`
+	PR    *PR    `json:"pr,omitempty"`
 	// GroupID is set on cards split off when one session opens several PRs.
 	// It names the owner task, which holds the sessions and the worktree
 	// that every card in the group shares.
