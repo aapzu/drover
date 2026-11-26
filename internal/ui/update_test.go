@@ -99,9 +99,16 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 	if len(*installs) != 1 || (*installs)[0] != "v1.1.0" {
 		t.Fatalf("installs = %v", *installs)
 	}
-	m = send(m, done)
-	if m.updateTag != "" || !strings.Contains(m.flash, "Updated drover to v1.1.0") {
-		t.Errorf("after the install: tag %q, flash %q", m.updateTag, m.flash)
+	next, quit := m.Update(done)
+	m = next.(Model)
+	if m.updateTag != "" || !m.RestartRequested() {
+		t.Errorf("after the install: tag %q, restart %v", m.updateTag, m.RestartRequested())
+	}
+	if quit == nil {
+		t.Fatal("the board didn't quit after the install")
+	}
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Errorf("command returned %T, want tea.QuitMsg", quit())
 	}
 }
 
@@ -116,7 +123,11 @@ func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
 		t.Error("declining changed something")
 	}
 
-	m = send(m, updateDoneMsg{tag: "v1.1.0", err: errors.New("disk full")})
+	next, quit := m.Update(updateDoneMsg{tag: "v1.1.0", err: errors.New("disk full")})
+	m = next.(Model)
+	if quit != nil || m.RestartRequested() {
+		t.Error("a failed install quit the board")
+	}
 	if m.updateTag != "v1.1.0" || !strings.Contains(m.flash, "Update failed: disk full") {
 		t.Errorf("after a failed install: tag %q, flash %q", m.updateTag, m.flash)
 	}

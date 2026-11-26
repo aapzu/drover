@@ -63,7 +63,7 @@ func (m *Model) confirmUpdate() {
 	}
 	tag := m.updateTag
 	m.mode = modeConfirm
-	m.confirmText = fmt.Sprintf("Update drover from %s to %s? Restart the board afterwards to use it. (y/N)", m.version, tag)
+	m.confirmText = fmt.Sprintf("Update drover from %s to %s and restart the board? (y/N)", m.version, tag)
 	m.confirmAction = func() tea.Cmd {
 		install := func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -74,13 +74,13 @@ func (m *Model) confirmUpdate() {
 	}
 }
 
-func (m Model) updateFinished(msg updateDoneMsg) Model {
+func (m Model) updateFinished(msg updateDoneMsg) (Model, tea.Cmd) {
 	m.updating = false
 	if msg.err != nil {
 		m.setFlash("Update failed: " + msg.err.Error())
-		return m
+		return m, nil
 	}
 	m.updateTag = ""
-	m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
-	return m
+	m.restart = true
+	return m, tea.Quit
 }

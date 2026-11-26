@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- Installing an update with `U` now restarts the board on the new version
+
 ## [0.20.0](https://github.com/aapzu/drover/compare/v0.19.2...v0.20.0) - 2026-11-26
 
 - Add quick tasks: agent sessions with no card, column or PR, opened with `w`; the Quick tasks run in setting picks a worktree or the main checkout

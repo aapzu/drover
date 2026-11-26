@@ -20,6 +20,7 @@ import (
 	"github.com/aapzu/drover/internal/gitx"
 	"github.com/aapzu/drover/internal/tmux"
 	"github.com/aapzu/drover/internal/ui"
+	"github.com/aapzu/drover/internal/update"
 )
 
 const usage = `drover: a kanban board for AI coding agents, in your terminal.
@@ -139,7 +140,24 @@ func run(dir string) error {
 			fmt.Printf("#%d %s\n  cd %s && claude --resume %s\n", h.Number, h.Title, claude.ShellQuote(h.Dir), h.SessionID)
 		}
 	}
+	if err == nil && ok && m.RestartRequested() && !m.SuspendAllRequested() {
+		err = restartSelf()
+	}
 	return err
+}
+
+// restartSelf replaces this process with the installed binary, so the board
+// reopens in the same terminal after an update. It returns only if that fails.
+func restartSelf() error {
+	exe, err := update.Executable()
+	if err != nil {
+		return fmt.Errorf("updated, but can't restart; start drover again to use it: %w", err)
+	}
+	fmt.Print(ui.ExtendedKeysOff)
+	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+		return fmt.Errorf("updated, but can't restart; start drover again to use it: %w", err)
+	}
+	return nil
 }
 
 // migrateConfig imports a repo's old drover.json files before a command reads
