@@ -147,6 +147,7 @@ type Model struct {
 	flashAt time.Time
 
 	version, updateTag string
+	installedTag       string
 	updating           bool
 
 	// form
@@ -190,6 +191,7 @@ type Model struct {
 	level reviewLevelState
 
 	suspendAll bool
+	restart    bool
 
 	detail viewport.Model
 
@@ -793,9 +795,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case suspendAllMsg:
 		m.suspendAll = true
 		return m, tea.Quit
+	case restartMsg:
+		m.restart = true
+		return m, tea.Quit
 	case updateAvailableMsg:
 		m.updateTag = string(msg)
 		return m, nil
+	case latestReleaseMsg:
+		return m.latestReleaseFound(msg), nil
 	case updatingMsg:
 		m.updating = true
 		m.flash = ""
@@ -1580,7 +1587,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "O":
 		return m.openColumns(), nil
 	case "U":
-		m.confirmUpdate()
+		cmd := m.lookUpLatest(true)
+		return m, cmd
+	case "V":
+		cmd := m.lookUpLatest(false)
+		return m, cmd
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())
@@ -1796,6 +1807,10 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // SuspendAllRequested reports whether the board quit with Q, asking main to
 // suspend every agent.
 func (m Model) SuspendAllRequested() bool { return m.suspendAll }
+
+// RestartRequested reports whether the board quit after installing an update,
+// asking main to start the new binary in its place.
+func (m Model) RestartRequested() bool { return m.restart }
 
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeBoard

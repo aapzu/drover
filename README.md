@@ -38,9 +38,11 @@ activity, so don't run it with `go run`.
 ### Updating
 
 When the board opens it checks GitHub for a newer release, at most once a day,
-and says so in the footer. Press `U` to download it, verify its checksum and
-replace the binary, then restart the board to use it. `drover update` does the
-same from the shell, and `drover update --check` only reports.
+and says so in the footer. That startup check is the only one that is cached.
+Press `V` to check for updates right now, or `U` to look up the newest release
+and install it: both always ask GitHub. Installing verifies the checksum and
+replaces the binary, then offers to restart the board on it. `drover update`
+does the same from the shell, and `drover update --check` only reports.
 
 Local builds and `go install` of a commit never check; `go install ...@latest` does, and `U` replaces that binary too. Turn the check off with
 `disableUpdateCheck` or `DROVER_NO_UPDATE_CHECK=1`.
@@ -745,9 +747,11 @@ drover ask "which cards are waiting on review?"
   write the `#`). Columns are ids or names. A prompt of `-` is read from stdin.
 - Without `--force`, `rm` fails when the card's worktree has uncommitted
   changes. `--force` discards them. The branch is kept.
-- `add` puts the card in the first column and starts no agent. `add -c` into
-  another agent column starts the agent, like a move. If that fails the card
-  stays in the first column and the command says why. `add --review` is `-c`
+- `add` puts the card in the first column and starts no agent. `add -c` creates
+  the card in that column instead, and an agent column starts the agent. If
+  that fails no card is left and the command says why. `add --linear -c` still
+  imports into the first column and moves the card, which stays there if the
+  move fails. `add --review` is `-c`
   with the review lane's entry column; it can't be combined with `-c`.
 - `add --linear` imports the issue, so the board needs `LINEAR_API_KEY`. The
   title and prompt come from the issue, and one already on the board is refused.

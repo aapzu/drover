@@ -109,37 +109,57 @@ func (e *Engine) findColumn(ref string) (config.Column, error) {
 }
 
 func (e *Engine) inboxAdd(r inbox.Request) (inbox.Result, error) {
-	var col config.Column
+	first := e.firstColumn()
+	col := first
 	if r.Column != "" {
 		var err error
 		if col, err = e.findColumn(r.Column); err != nil {
 			return inbox.Result{}, err
 		}
 	}
-	var task *store.Task
 	if r.Linear != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		issue, err := e.LinearIssue(ctx, r.Linear)
-		if err != nil {
+		return e.inboxImport(r.Linear, first, col)
+	}
+	title := strings.TrimSpace(deref(r.Title))
+	if title == "" {
+		return inbox.Result{}, errors.New("a card needs a title")
+	}
+	task := e.createTask(title, deref(r.Prompt), col.ID)
+	res := inbox.Result{Number: task.Number, Title: task.Title, Column: col.Name}
+	switch {
+	case col.ID == first.ID:
+	case col.IsAgent():
+		if _, err := e.startCard(task, col, true, "card"); err != nil {
+			if _, left := e.taskID(task.Number); left == nil {
+				err = fmt.Errorf("#%d is still on the board in %s: %w", task.Number, col.Name, err)
+			}
 			return inbox.Result{}, err
 		}
-		added := e.ImportIssues([]Issue{issue})
-		if len(added) == 0 {
-			return inbox.Result{}, fmt.Errorf("%s is already on the board", issue.Key)
-		}
-		task = added[0]
-	} else {
-		title := strings.TrimSpace(deref(r.Title))
-		if title == "" {
-			return inbox.Result{}, errors.New("a card needs a title")
-		}
-		task = e.CreateTask(title, deref(r.Prompt))
+	case !col.IsDone():
+		_, _, unlock := e.lockGroup(task.ID)
+		defer unlock()
+		e.runEnterGroup(task, e.withoutAgent(task, col.Automations.OnEnter), groupContext{from: col, to: col})
 	}
-	res := inbox.Result{Number: task.Number, Title: task.Title}
-	first := e.firstColumn()
-	res.Column = first.Name
-	if col.ID == "" || col.ID == first.ID {
+	return res, nil
+}
+
+// inboxImport imports the Linear issue into the first column and moves it to
+// col. The card stays in the first column when the move fails, because a card
+// that holds an issue is never discarded.
+func (e *Engine) inboxImport(ref string, first, col config.Column) (inbox.Result, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	issue, err := e.LinearIssue(ctx, ref)
+	if err != nil {
+		return inbox.Result{}, err
+	}
+	added := e.ImportIssues([]Issue{issue})
+	if len(added) == 0 {
+		return inbox.Result{}, fmt.Errorf("%s is already on the board", issue.Key)
+	}
+	task := added[0]
+	res := inbox.Result{Number: task.Number, Title: task.Title, Column: first.Name}
+	if col.ID == first.ID {
 		return res, nil
 	}
 	if err := e.Move(task.ID, col.ID, MoveOptions{}); err != nil {
