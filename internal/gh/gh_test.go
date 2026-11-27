@@ -183,6 +183,35 @@ func TestRunWithoutGhInstalled(t *testing.T) {
 	}
 }
 
+func TestForBranchFindsTheOpenPRWithThatHead(t *testing.T) {
+	dir := t.TempDir()
+	args := filepath.Join(dir, "args")
+	t.Setenv("FAKE_ARGS", args)
+	fakeGh(t, `echo "$@" > "$FAKE_ARGS"
+echo '[{"number":11,"title":"From a fork","url":"https://github.com/o/r/pull/11","author":{"login":"them"},"isCrossRepository":true},{"number":12,"title":"Fix it","url":"https://github.com/o/r/pull/12","author":{"login":"me"},"isCrossRepository":false}]'`)
+	found, ok, err := ForBranch(dir, "me/fix-it")
+	if err != nil || !ok || found.Number != 12 || found.Author.Login != "me" {
+		t.Fatalf("ForBranch = %+v, %v, %v", found, ok, err)
+	}
+	argv, _ := os.ReadFile(args)
+	if want := "pr list --head me/fix-it --state open --limit 10 --json number,title,url,author,isCrossRepository\n"; string(argv) != want {
+		t.Errorf("gh was run with %q, want %q", argv, want)
+	}
+
+	fakeGh(t, `echo '[{"number":11,"url":"u","isCrossRepository":true}]'`)
+	if _, ok, err := ForBranch(dir, "me/fix-it"); ok || err != nil {
+		t.Errorf("only a fork PR: ok %v, err %v", ok, err)
+	}
+	fakeGh(t, "echo '[]'")
+	if _, ok, err := ForBranch(dir, "me/fix-it"); ok || err != nil {
+		t.Errorf("no PR: ok %v, err %v", ok, err)
+	}
+	fakeGh(t, "echo 'no repo' >&2; exit 1")
+	if _, _, err := ForBranch(dir, "me/fix-it"); err == nil || !strings.Contains(err.Error(), "gh pr list: no repo") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestSearchScopesToTheReposAndParses(t *testing.T) {
 	dir := t.TempDir()
 	args := filepath.Join(dir, "args")

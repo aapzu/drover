@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- Cards pick up a PR that is already open on their branch, so you can search for it by number
+
 ## [0.20.1](https://github.com/aapzu/drover/compare/v0.20.0...v0.20.1) - 2026-11-26
 
 - Turn off Claude Code's agent view in drover agents, so ← on an empty prompt no longer leaves the card's session
