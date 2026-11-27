@@ -147,6 +147,7 @@ type Model struct {
 	flashAt time.Time
 
 	version, updateTag string
+	installedTag       string
 	updating           bool
 
 	// form
@@ -800,6 +801,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case updateAvailableMsg:
 		m.updateTag = string(msg)
 		return m, nil
+	case latestReleaseMsg:
+		return m.latestReleaseFound(msg), nil
 	case updatingMsg:
 		m.updating = true
 		m.flash = ""
@@ -1584,7 +1587,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "O":
 		return m.openColumns(), nil
 	case "U":
-		m.confirmUpdate()
+		cmd := m.lookUpLatest(true)
+		return m, cmd
+	case "V":
+		cmd := m.lookUpLatest(false)
+		return m, cmd
 	case "W":
 		if err := m.eng.WriteDefaultBoard(); err != nil {
 			m.setFlash("Error: " + err.Error())

@@ -233,3 +233,19 @@ func TestCheckIgnoresACacheFromTheFuture(t *testing.T) {
 		t.Errorf("Check = %q, %t, want the fresh v1.2.3", tag, ok)
 	}
 }
+
+func TestLatestIgnoresAndLeavesTheDailyCache(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv(EnvDisable, "")
+	c := serve(t, &release{tag: "v1.2.3"})
+	fresh, _ := json.Marshal(cache{CheckedAt: time.Now(), Latest: "v1.0.1"})
+	os.MkdirAll(filepath.Dir(cachePath()), 0o755)
+	os.WriteFile(cachePath(), fresh, 0o644)
+
+	if tag, err := c.Latest(context.Background()); err != nil || tag != "v1.2.3" {
+		t.Fatalf("Latest = %q, %v, want v1.2.3", tag, err)
+	}
+	if got, _ := os.ReadFile(cachePath()); !bytes.Equal(got, fresh) {
+		t.Errorf("Latest rewrote the cache: %s", got)
+	}
+}
