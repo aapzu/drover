@@ -30,6 +30,7 @@ var (
 
 type updateAvailableMsg string
 type updatingMsg struct{}
+type restartMsg struct{}
 type updateDoneMsg struct {
 	tag string
 	err error
@@ -111,7 +112,7 @@ func (m Model) latestReleaseFound(msg latestReleaseMsg) Model {
 
 func (m *Model) confirmUpdate(tag string) {
 	m.mode = modeConfirm
-	m.confirmText = fmt.Sprintf("Update drover from %s to %s? Restart the board afterwards to use it. (y/N)", m.version, tag)
+	m.confirmText = fmt.Sprintf("Update drover from %s to %s? (y/N)", m.version, tag)
 	m.confirmAction = func() tea.Cmd {
 		install := func() tea.Msg {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -131,5 +132,10 @@ func (m Model) updateFinished(msg updateDoneMsg) Model {
 	m.updateTag = ""
 	m.installedTag = msg.tag
 	m.setFlash(fmt.Sprintf("Updated drover to %s. Restart the board to use it.", msg.tag))
+	if m.mode == modeBoard {
+		m.mode = modeConfirm
+		m.confirmText = fmt.Sprintf("Updated drover to %s. Restart the board now? (y/N)", msg.tag)
+		m.confirmAction = func() tea.Cmd { return func() tea.Msg { return restartMsg{} } }
+	}
 	return m
 }

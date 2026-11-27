@@ -110,8 +110,50 @@ func TestUpdateNoticeAndInstall(t *testing.T) {
 		t.Fatalf("installs = %v", f.installs)
 	}
 	m = send(m, done)
-	if m.updateTag != "" || !strings.Contains(m.flash, "Updated drover to v1.1.0") {
-		t.Errorf("after the install: tag %q, flash %q", m.updateTag, m.flash)
+	if m.updateTag != "" || m.mode != modeConfirm || !strings.Contains(m.confirmText, "Restart the board now?") {
+		t.Fatalf("after the install: tag %q, mode %v, confirm %q", m.updateTag, m.mode, m.confirmText)
+	}
+	if m.RestartRequested() {
+		t.Fatal("restarted without asking")
+	}
+
+	declined, cmd := m.updateConfirm(keyPress("n"))
+	if cmd != nil || declined.(Model).RestartRequested() {
+		t.Error("declining the restart did something")
+	}
+	if !strings.Contains(declined.(Model).flash, "Restart the board to use it") {
+		t.Errorf("flash after declining = %q", declined.(Model).flash)
+	}
+
+	_, cmd = m.updateConfirm(keyPress("y"))
+	if cmd == nil {
+		t.Fatal("y returned no command")
+	}
+	msg := cmd()
+	if _, ok := msg.(restartMsg); !ok {
+		t.Fatalf("y returned %T, want restartMsg", msg)
+	}
+	next, quit := m.Update(msg)
+	if !next.(Model).RestartRequested() {
+		t.Error("restartMsg didn't request a restart")
+	}
+	if quit == nil {
+		t.Fatal("restartMsg didn't quit the board")
+	}
+	if _, ok := quit().(tea.QuitMsg); !ok {
+		t.Errorf("restartMsg returned %T, want tea.QuitMsg", quit())
+	}
+}
+
+func TestUpdateDoneOutsideTheBoardDoesNotAsk(t *testing.T) {
+	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
+	m.mode = modeForm
+	m = send(m, updateDoneMsg{tag: "v1.1.0"})
+	if m.mode != modeForm || m.RestartRequested() {
+		t.Errorf("took over a form: mode %v, restart %v", m.mode, m.RestartRequested())
+	}
+	if !strings.Contains(m.flash, "Updated drover to v1.1.0") {
+		t.Errorf("flash = %q", m.flash)
 	}
 }
 
@@ -126,6 +168,9 @@ func TestUpdateConfirmCanBeDeclinedAndFailuresAreShown(t *testing.T) {
 	}
 
 	m = send(m, updateDoneMsg{tag: "v1.1.0", err: errors.New("disk full")})
+	if m.mode != modeBoard || m.RestartRequested() {
+		t.Error("a failed install asked to restart")
+	}
 	if m.updateTag != "v1.1.0" || !strings.Contains(m.flash, "Update failed: disk full") {
 		t.Errorf("after a failed install: tag %q, flash %q", m.updateTag, m.flash)
 	}
@@ -228,6 +273,7 @@ func TestLookupAfterInstallSaysItIsAlreadyInstalled(t *testing.T) {
 	fakeUpdates(t)
 	m := testModel(120, 40, 1, 0).WithVersion("v1.0.0")
 	m = send(m, updateDoneMsg{tag: "v1.1.0"})
+	m.mode = modeBoard
 
 	for _, key := range []string{"U", "V"} {
 		got := pressAndResolve(t, m, key)
