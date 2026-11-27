@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+## [0.22.0](https://github.com/aapzu/drover/compare/v0.21.1...v0.22.0) - 2026-11-27
+
 - Cards pick up a PR that is already open on their branch, so you can search for it by number
 
 ## [0.21.1](https://github.com/aapzu/drover/compare/v0.21.0...v0.21.1) - 2026-11-27
