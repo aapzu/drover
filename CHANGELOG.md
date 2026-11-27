@@ -5,6 +5,7 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 ## Unreleased
 
 - `drover add -c` creates the card directly in that column instead of moving it out of the first one
+- Installing an update with `U` now offers to restart the board on the new version
 
 ## [0.20.1](https://github.com/aapzu/drover/compare/v0.20.0...v0.20.1) - 2026-11-26
 

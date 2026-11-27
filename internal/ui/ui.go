@@ -190,6 +190,7 @@ type Model struct {
 	level reviewLevelState
 
 	suspendAll bool
+	restart    bool
 
 	detail viewport.Model
 
@@ -792,6 +793,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case suspendAllMsg:
 		m.suspendAll = true
+		return m, tea.Quit
+	case restartMsg:
+		m.restart = true
 		return m, tea.Quit
 	case updateAvailableMsg:
 		m.updateTag = string(msg)
@@ -1796,6 +1800,10 @@ func (m Model) updateMove(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // SuspendAllRequested reports whether the board quit with Q, asking main to
 // suspend every agent.
 func (m Model) SuspendAllRequested() bool { return m.suspendAll }
+
+// RestartRequested reports whether the board quit after installing an update,
+// asking main to start the new binary in its place.
+func (m Model) RestartRequested() bool { return m.restart }
 
 func (m Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.mode = modeBoard
