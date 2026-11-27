@@ -4,6 +4,8 @@ Add a bullet under Unreleased in every pull request that isn't labelled no-relea
 
 ## Unreleased
 
+- `drover add -c` creates the card directly in that column instead of moving it out of the first one
+
 ## [0.21.0](https://github.com/aapzu/drover/compare/v0.20.2...v0.21.0) - 2026-11-27
 
 - Separate Check for updates and Install update commands ([#193](https://github.com/aapzu/drover/pull/193))

@@ -99,8 +99,74 @@ func TestCLIAddIntoAColumnStartsTheCard(t *testing.T) {
 		t.Fatalf("add = %+v", res)
 	}
 	waitNotBusy(t, e)
-	if c := cardNumbered(e, 1); c.ColumnID != "exec" || c.Sessions[store.MainSession] == nil {
+	c := cardNumbered(e, 1)
+	if c.ColumnID != "exec" || c.Sessions[store.MainSession] == nil {
 		t.Errorf("card was not started: %+v", c)
+	}
+	for _, entry := range c.Log {
+		if strings.Contains(entry.Text, "Moved") {
+			t.Errorf("card passed through another column: %q", entry.Text)
+		}
+	}
+}
+
+func TestCLIAddIntoAColumnWithoutAnAgent(t *testing.T) {
+	root, _ := setupProject(t)
+	writeBoard(root, []byte(`{"columns": [
+		{"id":"planning","name":"Planning","autoSpawn":true},
+		{"id":"backlog","name":"Backlog"},
+		{"id":"done","name":"Done","role":"done"}]}`))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	for _, column := range []string{"backlog", "done"} {
+		res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr(column), Column: column})
+		if res.Error != "" {
+			t.Fatalf("add -c %s = %+v", column, res)
+		}
+		if c := cardNumbered(e, res.Number); res.Column != strings.ToUpper(column[:1])+column[1:] || c.ColumnID != column || len(c.Sessions) != 0 || c.WorktreePath != "" {
+			t.Errorf("card in %s = %+v", column, c)
+		}
+	}
+}
+
+func TestCLIAddIntoAColumnWithoutAnAgentRunsItsEnterGroup(t *testing.T) {
+	root, _ := setupProject(t)
+	writeBoard(root, []byte(`{"columns": [
+		{"id":"planning","name":"Planning","autoSpawn":true},
+		{"id":"backlog","name":"Backlog","automations":{"onEnter":[
+			{"name":"Break","type":"run_script","script":"exit 3"},
+			{"name":"Tell","type":"send_message","message":"hi"}]}}]}`))
+	e, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runEngine(t, e)
+
+	if res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr("Park"), Column: "backlog"}); res.Error != "" || res.Column != "Backlog" {
+		t.Fatalf("add = %+v", res)
+	}
+	waitFor(t, e, "the enter group to run", func(c *store.Task) bool {
+		return hasLog(c, `Automation "Break" failed`) && hasLog(c, `Automation "Tell" skipped: no agent runs in this column`)
+	})
+}
+
+func TestCLIAddThatCannotStartLeavesNoCard(t *testing.T) {
+	e, root := running(t)
+	gitIn(t, root, "branch", "-m", "main", "elsewhere")
+
+	res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Title: ptr("Doomed"), Column: "exec"})
+	if !strings.Contains(res.Error, "starting card") {
+		t.Fatalf("add = %+v", res)
+	}
+	if tasks := e.Snapshot().Tasks; len(tasks) != 0 {
+		t.Errorf("failed start left cards behind: %+v", tasks)
+	}
+	if got := gitIn(t, root, "branch", "--format=%(refname:short)"); got != "elsewhere" {
+		t.Errorf("branches after the failed start = %q", got)
 	}
 }
 
@@ -257,6 +323,19 @@ func TestCLIAddLinearImportsTheIssueOnce(t *testing.T) {
 	}
 	if n := len(e.Snapshot().Tasks); n != 1 {
 		t.Errorf("%d cards after importing the same issue twice", n)
+	}
+}
+
+func TestCLIAddLinearIntoAColumn(t *testing.T) {
+	e, root := running(t)
+	e.linear = fakeLinearIssue(t)
+
+	res := ask(t, root, inbox.Request{Op: inbox.OpAdd, Linear: "DX-1", Column: "done"})
+	if res.Error != "" || res.Column != "Done" {
+		t.Fatalf("add --linear -c done = %+v", res)
+	}
+	if c := cardNumbered(e, 1); c.ColumnID != "done" || c.Issue == nil {
+		t.Errorf("imported card = %+v", c)
 	}
 }
 
