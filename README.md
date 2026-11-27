@@ -459,6 +459,8 @@ more in that column), so a pile of merged PRs doesn't fill Done.
   from the first column gets no card at all. Existing split cards stay.
 - `{{prUrl}}`, `{{prNumber}}`, `{{prTitle}}` and `{{prBranch}}` work in
   automations. `{{branchName}}` is the PR's branch when known.
+- A card with a branch and no PR picks up the open PR on that branch (one you
+  opened by hand, say) without moving. It is looked up once a minute.
 - `gh pr view` refreshes every open PR's card once a minute. Cards
   show `✓ approved`, `✗ changes`, `⇉ queued` (in the merge queue), `merged`
   and `released`.

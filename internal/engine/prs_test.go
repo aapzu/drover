@@ -2,6 +2,7 @@ package engine
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,6 +133,129 @@ func TestPollPRsFollowsOnlyCardsThatCanStillChange(t *testing.T) {
 			card := prCard(e)
 			card.ColumnID, card.PR.State, card.PR.MergeMovePending = tc.column, tc.state, tc.pending
 
+			var followUps []func()
+			e.with(func() { followUps = e.pollPRs() })
+			if got := len(followUps) > 0; got != tc.want {
+				t.Errorf("polled = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// branchCard is a card in the executing column whose branch has no PR yet.
+func branchCard(e *Engine) *store.Task {
+	card := &store.Task{ID: "a", Number: 1, ColumnID: "exec", Branch: "me/feature", BaseBranch: "main"}
+	e.state.Tasks = []*store.Task{card}
+	return card
+}
+
+// pathGh puts a gh on PATH that runs script.
+func pathGh(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func fakeBranchGh(t *testing.T, list string) {
+	t.Helper()
+	pathGh(t, "case \"$1 $2\" in\n\"pr list\") echo '"+list+"';;\nesac")
+}
+
+func TestAttachBranchPRShowsAPRTheAgentDidNotCreate(t *testing.T) {
+	const url = "https://github.com/o/r/pull/9"
+	fakeBranchGh(t, `[{"number":9,"title":"Feature","url":"`+url+`","author":{"login":"me"}}]`)
+	e := boardEngine(t, prFlowBoard)
+	card := branchCard(e)
+
+	if !e.attachBranchPR(card.ID, card.Branch) {
+		t.Fatal("the open PR on the card's branch was not attached")
+	}
+	if card.PR == nil || card.PR.URL != url || card.PR.Number != 9 || card.PR.Review || card.PRMovePending || card.ColumnID != "exec" {
+		t.Errorf("PR %+v, move pending %v, column %q; want PR #9 attached and the card left in exec", card.PR, card.PRMovePending, card.ColumnID)
+	}
+	if !hasLog(card, "Found PR #9 on branch me/feature") {
+		t.Errorf("log = %v", card.Log)
+	}
+
+	other := &store.Task{ID: "b", Number: 2, ColumnID: "exec", Branch: "me/feature"}
+	e.state.Tasks = append(e.state.Tasks, other)
+	if e.attachBranchPR(other.ID, other.Branch) || other.PR != nil {
+		t.Error("a PR another card already holds was attached again")
+	}
+}
+
+func TestAttachBranchPRLeavesCardsWithoutAPR(t *testing.T) {
+	fakeBranchGh(t, `[]`)
+	e := boardEngine(t, prFlowBoard)
+	card := branchCard(e)
+	if e.attachBranchPR(card.ID, card.Branch) || card.PR != nil {
+		t.Errorf("PR %+v attached with none open", card.PR)
+	}
+}
+
+func TestAttachBranchPRLogsALookupFailureOncePerError(t *testing.T) {
+	pathGh(t, "echo 'not logged in' >&2\nexit 1")
+	e := boardEngine(t, prFlowBoard)
+	card := branchCard(e)
+
+	e.attachBranchPR(card.ID, card.Branch)
+	e.attachBranchPR(card.ID, card.Branch)
+	if got := strings.Count(logText(card), "Looking for a PR on branch me/feature failed: gh pr list: not logged in"); got != 1 || card.PR != nil {
+		t.Errorf("failure logged %d times, PR %+v; want once and no PR", got, card.PR)
+	}
+
+	fakeBranchGh(t, `[]`)
+	e.attachBranchPR(card.ID, card.Branch)
+	if len(e.branchPRErrs) != 0 {
+		t.Errorf("a successful lookup left %v remembered", e.branchPRErrs)
+	}
+}
+
+func TestPollPRsRefreshesTheCardItAttachedAPRTo(t *testing.T) {
+	pathGh(t, `case "$1 $2" in
+"pr list") echo '[{"number":9,"title":"Feature","url":"https://github.com/o/r/pull/9","author":{"login":"me"}}]';;
+"pr view") echo '{"title":"Feature","headRefName":"me/feature","state":"OPEN","author":{"login":"me"}}';;
+esac`)
+	e := boardEngine(t, prFlowBoard)
+	e.isRepo = true
+	card := branchCard(e)
+
+	var followUps []func()
+	e.with(func() { followUps = e.pollPRs() })
+	for _, f := range followUps {
+		f()
+	}
+	if card.PR == nil || card.PR.State != "OPEN" || card.PR.Branch != "me/feature" || card.PR.Error != "" || card.ColumnID != "exec" {
+		t.Errorf("PR %+v, column %q; want PR #9 attached, refreshed and left in exec", card.PR, card.ColumnID)
+	}
+}
+
+func TestPollPRsLooksUpTheBranchOfCardsWithoutAPR(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*store.Task)
+		want   bool
+	}{
+		"a card on a branch":      {want: true},
+		"a card with a PR":        {change: func(c *store.Task) { c.PR = &store.PR{Number: 7, State: "MERGED"} }},
+		"a card without a branch": {change: func(c *store.Task) { c.Branch = "" }},
+		"a card on the base":      {change: func(c *store.Task) { c.Branch = "main" }},
+		"a card in done":          {change: func(c *store.Task) { c.ColumnID = "done" }},
+		"a quick task":            {change: func(c *store.Task) { c.Quick = true }},
+		"a split card":            {change: func(c *store.Task) { c.GroupID = "owner" }},
+		"a card mid-turn": {change: func(c *store.Task) {
+			c.Sessions = map[string]*store.Session{store.MainSession: {Status: store.StatusRunning, Activity: store.ActivityThinking}}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := boardEngine(t, prFlowBoard)
+			e.isRepo = true
+			card := branchCard(e)
+			if tc.change != nil {
+				tc.change(card)
+			}
 			var followUps []func()
 			e.with(func() { followUps = e.pollPRs() })
 			if got := len(followUps) > 0; got != tc.want {

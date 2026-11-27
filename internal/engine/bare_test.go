@@ -25,7 +25,7 @@ func bareEngine(t *testing.T) *Engine {
 	stopping, stop := context.WithCancel(context.Background())
 	t.Cleanup(stop)
 	return &Engine{Root: t.TempDir(), state: &store.State{NextNumber: 1}, board: config.Default(), notices: make(chan string, 8),
-		alerted: map[string]time.Time{}, stopping: stopping, stop: stop}
+		alerted: map[string]time.Time{}, branchPRErrs: map[string]string{}, stopping: stopping, stop: stop}
 }
 
 // boardEngine is a bareEngine on the board given as project config text.

@@ -145,6 +145,29 @@ func Search(dir string, repos []string, filter ...string) ([]Found, error) {
 	return found, err
 }
 
+// ForBranch is the open pull request from branch in the repository itself, if
+// there is one. gh matches --head by branch name alone, so pull requests from
+// forks that share the name are skipped.
+func ForBranch(dir, branch string) (Found, bool, error) {
+	out, err := run(dir, "gh pr list", "pr", "list", "--head", branch, "--state", "open", "--limit", "10", "--json", "number,title,url,author,isCrossRepository")
+	if err != nil {
+		return Found{}, false, err
+	}
+	var found []struct {
+		Found
+		CrossRepository bool `json:"isCrossRepository"`
+	}
+	if err := json.Unmarshal(out, &found); err != nil {
+		return Found{}, false, err
+	}
+	for _, f := range found {
+		if !f.CrossRepository {
+			return f.Found, true, nil
+		}
+	}
+	return Found{}, false, nil
+}
+
 // Repo is the owner/name of the GitHub repository dir belongs to.
 func Repo(dir string) (string, error) {
 	out, err := run(dir, "gh repo view", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")

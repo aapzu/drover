@@ -27,8 +27,12 @@ func (e *Engine) pollPRs() []func() {
 	e.lastPRPoll = time.Now()
 	flow := e.board.PRFlow
 	var open, merged []string
+	unlinked := map[string]string{}
 	for _, t := range e.state.Tasks {
 		col, _, _ := e.board.Column(t.ColumnID)
+		if t.PR == nil && e.isRepo && !col.IsDone() && t.GroupID == "" && !t.Quick && t.Branch != "" && t.Branch != t.BaseBranch && agentIdle(t) {
+			unlinked[t.ID] = t.Branch
+		}
 		if t.PR == nil || col.IsDone() && !reviewedOpen(t) {
 			continue
 		}
@@ -54,7 +58,7 @@ func (e *Engine) pollPRs() []func() {
 		e.lastReleaseFetch = time.Now()
 	}
 	scans := e.prScans()
-	if len(open) == 0 && len(merged) == 0 && len(scans) == 0 {
+	if len(open) == 0 && len(merged) == 0 && len(scans) == 0 && len(unlinked) == 0 {
 		return nil
 	}
 	branch := ""
@@ -67,6 +71,15 @@ func (e *Engine) pollPRs() []func() {
 		e.scanTranscripts(scans)
 		var wg sync.WaitGroup
 		slots := make(chan struct{}, prLookups)
+		for id, branch := range unlinked {
+			slots <- struct{}{}
+			wg.Go(func() {
+				defer func() { <-slots }()
+				if e.attachBranchPR(id, branch) {
+					e.refreshPR(id)
+				}
+			})
+		}
 		for _, id := range open {
 			slots <- struct{}{}
 			wg.Go(func() {
@@ -88,6 +101,52 @@ func (e *Engine) pollPRs() []func() {
 			e.checkRelease(id, ref)
 		}
 	}}
+}
+
+// attachBranchPR gives the card the open PR on its branch, one drover never
+// saw the agent create, such as one opened by hand.
+// It reports whether it attached one.
+func (e *Engine) attachBranchPR(id, branch string) bool {
+	found, ok, err := gh.ForBranch(e.Root, branch)
+	e.noteBranchPRLookup(id, branch, err)
+	if err != nil || !ok {
+		return false
+	}
+
+	card, _, unlock := e.lockGroup(id)
+	defer unlock()
+	attached := false
+	e.with(func() {
+		if card == nil || card.PR != nil || card.Branch != branch || !agentIdle(card) ||
+			slices.ContainsFunc(e.state.Tasks, func(o *store.Task) bool { return o.PR != nil && o.PR.URL == found.URL }) {
+			return
+		}
+		card.PR = &store.PR{URL: found.URL, Number: found.Number, Title: found.Title, Author: found.Author.Login}
+		card.AddLog(fmt.Sprintf("Found PR #%d on branch %s", found.Number, branch))
+		attached = true
+	})
+	return attached
+}
+
+// noteBranchPRLookup logs a failed branch lookup on the card once per distinct
+// error, and forgets the error when a lookup succeeds. A lookup that changes
+// nothing doesn't save the state.
+func (e *Engine) noteBranchPRLookup(id, branch string, err error) {
+	e.mu.Lock()
+	if err == nil {
+		delete(e.branchPRErrs, id)
+	}
+	changed := err != nil && e.branchPRErrs[id] != err.Error()
+	e.mu.Unlock()
+	if !changed {
+		return
+	}
+	e.with(func() {
+		if card := e.find(id); card != nil {
+			e.branchPRErrs[id] = err.Error()
+			card.AddLog(fmt.Sprintf("Looking for a PR on branch %s failed: %v", branch, err))
+		}
+	})
 }
 
 // reviewedOpen reports whether t is a review you submitted on a PR that is

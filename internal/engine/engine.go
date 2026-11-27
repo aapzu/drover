@@ -51,6 +51,7 @@ type Engine struct {
 	lastReleaseFetch time.Time
 	prPolling        atomic.Bool
 	prScanErrs       map[string]string
+	branchPRErrs     map[string]string
 	meMu             sync.Mutex
 	me               string
 	meErr            error
@@ -118,6 +119,7 @@ func New(root string) (*Engine, error) {
 		boardFound:           found,
 		notices:              make(chan string, 64),
 		prScanErrs:           map[string]string{},
+		branchPRErrs:         map[string]string{},
 		alerted:              map[string]time.Time{},
 	}
 	e.stopping, e.stop = context.WithCancel(context.Background())
